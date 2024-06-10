@@ -1,0 +1,57 @@
+1. Introduction
+
+    - Linearized gravity and gauge transformations
+    - Production of Gravitational Waves
+    - Quadrupolar radiation
+    - Post-Newtonian expansion
+        - Higher order expansion of metric --> templates (matched filtering)
+    
+    - Energy loss due to Gravitational Radiation
+    - Detection of Gravitational Waves
+        - detection sources
+        
+    - why do we use surrogate models?
+    - accuracy/precision
+    
+2. Eccentric BBH systems
+    - Binary black hole mergers
+    - From inspiral to coalescence
+    - Defining eccentricity
+    - Why do we look at eccentric cases?
+    - Waveforms in terms of Sperical Harmonics
+    - Eccentric Newtonian/Post-Newtonian waveforms
+
+3. Fast prediction of gravitational waveforms using surrogate models
+
+    - 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+2. SimInspiralTD
+    - How does it generate h_+ and h_x
+    - What are the limitations?
+    - high eccentricity --> f_ISCO is really different
+    - low eccentricity --> doesn't generate 0 eccentricity
+    - What are the specifics of the waveform? 2,2 mode, time-domain
+
+3. Different modes?
