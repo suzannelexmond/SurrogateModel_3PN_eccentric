@@ -17,7 +17,7 @@ class Simulate_Inspiral:
     """ Simulates Inspiral phase of a binary blackhole merger. 
     Optional: Simulate either mass dependent or mass independent. ; Simulate the frequency and phase of the waveform """
     
-    def __init__(self, eccmin, total_mass=10, mass_ratio=1, freqmin=5, waveform_size=None):
+    def __init__(self, eccmin, total_mass=50, mass_ratio=1, freqmin=20, waveform_size=None):
         
         self.total_mass = total_mass # Total mass of the BBH system [Solar Mass]
         self.mass_ratio = mass_ratio # Mass ratio 0 < q < 1, so M_1 > M_2
@@ -36,8 +36,6 @@ class Simulate_Inspiral:
         self.hc_TS_M = None
         self.TS_M = None
 
-
-        
 
     def sim_inspiral(self, eccmin=None):
         if eccmin is None:
@@ -61,14 +59,13 @@ class Simulate_Inspiral:
         hc_TS = types.timeseries.TimeSeries(hc.data.data, delta_t=hc.deltaT)  # cross polarisation timeseries
         TS = -hp_TS.sample_times[::-1] # Timeseries 
         
-        print('time : SimInspiral_M_independent ecc = {}'.format(eccmin), (timer()-start)/60, ' minutes')
-        
+        print('time : SimInspiral_M_independent ecc = {}, M = {}, q={}, freqmin={}'.format(eccmin, self.total_mass, self.mass_ratio, self.freqmin), (timer()-start)/60, ' minutes')
+
         return hp_TS, hc_TS, TS
         
     # @jit(target_backend='cuda')
     def sim_inspiral_mass_indp(self, eccmin=None):
 
-        self.freqmin = 50/(self.total_mass)
         hp_TS, hc_TS, TS = self.sim_inspiral(eccmin)
 
         hp_TS_M = hp_TS / self.total_mass 
@@ -76,40 +73,57 @@ class Simulate_Inspiral:
 
         TS_M = TS / (lal.MTSUN_SI * self.total_mass) 
 
-        return hp_TS_M, hc_TS_M, TS_M
+        return hp_TS, hc_TS, TS_M
         
-    def plot_sim_inspiral_mass_indp(self):
+    def plot_sim_inspiral_mass_indp(self, polarisation = 'plus', eccmin=None):
 
-        hp_TS_M, hc_TS_M, TS_M = self.sim_inspiral_mass_indp()
+        if eccmin is None:
+            eccmin = self.eccmin
+
+        hp_TS_M, hc_TS_M, TS_M = self.sim_inspiral_mass_indp(eccmin)
 
         if self.waveform_size is None:
             self.waveform_size = len(TS_M)
-                                
+        
         length_diff = len(TS_M) - self.waveform_size
 
-        plt.plot(TS_M[length_diff:], hp_TS_M[length_diff:], label = 'Real: M = {} $(M_\odot)$, q = {}, e = {}'.format(self.total_mass, self.mass_ratio, self.eccmin), linewidth=0.6)
-        # plt.plot(TS_M[length_diff:], hc_TS_M[length_diff:], label = 'Imag: M = {} $(M_\odot)$, q = {}, e = {}'.format(total_mass, ratio, eccentricity), linewidth=0.6)
+        if polarisation == 'plus':
+            h = hp_TS_M[length_diff:]
+        elif polarisation == 'cross':
+            h = hc_TS_M[length_diff:]
+        else:
+            print('Choose polarisation = "plus" or cross"')
+
+        # print(hp_TS_M.shape, hc_TS_M.shape, type(hp_TS_M))
+        # h = np.array(hp_TS_M)[length_diff:] + 1j*np.array(hc_TS_M)[length_diff:]
+        # print(h.shape, type(h))
+
+        plt.plot(TS_M[length_diff:], h, label = 'Real: M = {} $(M_\odot)$, q = {}, e = {}'.format(self.total_mass, self.mass_ratio, eccmin), linewidth=0.6)
+        # plt.plot(TS_M[length_diff:], np.imag(h), label = 'Imag: M = {} $(M_\odot)$, q = {}, e = {}'.format(self.total_mass, self.mass_ratio, self.eccmin), linewidth=0.6)
         # plt.xlim([-50e3, 5e2])
         # plt.ylim(-2e-23, 2e-23)
         plt.legend(loc = 'upper left')
         plt.xlabel('t/M')
-        plt.ylabel('h$_{+}$/M')
+        plt.ylabel('h$_{+}$')
         # plt.title('Waveform in units of mass')
         plt.grid()
 
         print('M_total = {}; q = {}; eccmin = {}; Strain is calculated'.format(self.total_mass, self.mass_ratio, self.eccmin))
         
-        plt.show()
+        # plt.show()
 
         figname = 'total mass = {}, mass ratio = {}, ecc = {}.png'.format(self.total_mass, self.mass_ratio, self.eccmin)
         # fig_plot_wf.savefig('Images/' + figname)
         # print('fig is saved')
+
+        return h
 
     def plot_sim_inspiral_mass_indp_multiple(self, M_total, mass_ratio, eccmin, waveform_size):
         """ Input: M_total: A list of total masses in solar mass, 
         mass_ratio: A list of mass ratio's for 0 <= q <= 1, 
         eccmin: A list of eccentricities for 0 <= e <= 1
         """
+
         fig_plot_multiple = plt.figure(figsize=(8,4))
 
 
@@ -129,13 +143,14 @@ class Simulate_Inspiral:
                         waveform_size = len(TS_M)
                                             
                     length_diff = len(TS_M) - waveform_size
+
                     # plt.plot(TS_M[length_diff:], hp_TS_M[length_diff:], label = 'Real: M = {} $(M_\odot)$, q = {}, e = {}'.format(total_mass, ratio, eccentricity), linewidth=0.6)
                     plt.plot(TS_M[length_diff:], hc_TS_M[length_diff:], label = 'Imag: M = {} $(M_\odot)$, q = {}, e = {}'.format(total_mass, ratio, eccentricity), linewidth=0.6)
-                    plt.xlim([-5e3, 5e2])
+                    plt.xlim([-10e3, 5e2])
                     # plt.ylim(-2e-23, 2e-23)
                     plt.legend(loc = 'upper left')
                     plt.xlabel('t/M')
-                    plt.ylabel('h$_{+}$/M')
+                    plt.ylabel('h$_{+}$')
                     # plt.title('Waveform in units of mass')
                     plt.grid()
 
@@ -146,6 +161,7 @@ class Simulate_Inspiral:
         figname = 'total mass = {}, mass ratio = {}, ecc = {}.png'.format(M_total, mass_ratio, eccmin)
         # fig_plot_multiple.savefig('Images/' + figname)
         # print('fig is saved')
+
 
     # def phase_amplitude_diff(self, total_mass, mass_ratio, eccmin, freqmin):
     #     hp_TS_over_M, hc_TS_over_M = self.sim_inspiral_mass_independent(total_mass, mass_ratio, eccmin, freqmin)
@@ -197,7 +213,7 @@ class Simulate_Inspiral:
 
 class Waveform_properties(Simulate_Inspiral):
 
-    def __init__(self, eccmin, total_mass=10, mass_ratio=1, freqmin=5, waveform_size=None):
+    def __init__(self, eccmin, total_mass=50, mass_ratio=1, freqmin=5, waveform_size=None):
         self.freq = None
         self.amp = None
         self.phase = None
@@ -209,7 +225,7 @@ class Waveform_properties(Simulate_Inspiral):
         Simulate_Inspiral.__init__(self, eccmin, total_mass=total_mass, mass_ratio=mass_ratio, freqmin=freqmin, waveform_size=waveform_size)
         
     def circulair_wf(self):
-        self.hp_TS_circ, self.hc_TS_circ, self.TS_M_circ = self.sim_inspiral_mass_independent(eccmin=1e-5)
+        self.hp_TS_circ, self.hc_TS_circ, self.TS_M_circ = self.sim_inspiral_mass_indp(eccmin=1e-5)
 
     def residual_amp(self, eccmin=None):
 
@@ -217,7 +233,7 @@ class Waveform_properties(Simulate_Inspiral):
             self.circulair_wf()
 
         if self.hp_TS_M is None or eccmin != None:
-            self.hp_TS_M, self.hc_TS_M, self.TS_M = self.sim_inspiral_mass_independent(eccmin)
+            self.hp_TS_M, self.hc_TS_M, self.TS_M = self.sim_inspiral_mass_indp(eccmin)
 
         amp_circ = np.array(waveform.utils.amplitude_from_polarizations(self.hp_TS_circ, self.hc_TS_circ))
         amp = np.array(waveform.utils.amplitude_from_polarizations(self.hp_TS_M, self.hc_TS_M))
@@ -231,7 +247,7 @@ class Waveform_properties(Simulate_Inspiral):
             self.circulair_wf()
 
         if self.hp_TS_M is None:
-            self.hp_TS_M, self.hc_TS_M, self.TS_M = self.sim_inspiral_mass_independent(eccmin)
+            self.hp_TS_M, self.hc_TS_M, self.TS_M = self.sim_inspiral_mass_indp(eccmin)
         
         freq_circ = waveform.utils.frequency_from_polarizations(self.hp_TS_circ, self.hc_TS_circ)
         freq = waveform.utils.frequency_from_polarizations(self.hp_TS_M, self.hc_TS_M)
@@ -250,7 +266,7 @@ class Waveform_properties(Simulate_Inspiral):
             self.circulair_wf()
 
         if self.hp_TS_M is None or eccmin != None:
-            self.hp_TS_M, self.hc_TS_M, self.TS_M = self.sim_inspiral_mass_independent(eccmin)
+            self.hp_TS_M, self.hc_TS_M, self.TS_M = self.sim_inspiral_mass_indp(eccmin)
         
         phase_circ = np.array(waveform.utils.phase_from_polarizations(self.hp_TS_circ, self.hc_TS_circ))
         phase = np.array(waveform.utils.phase_from_polarizations(self.hp_TS_M, self.hc_TS_M))
@@ -280,11 +296,30 @@ class Waveform_properties(Simulate_Inspiral):
         plt.plot(TS_M_circ, prop_circ, label='Adjusted circular ' + property)
         plt.plot(TS_M, res_prop, label='Residual ' + property)
         # plt.xlim(-12000, 0)
+        plt.ylim(-30, 30)
         plt.xlabel('t [M]')
         plt.ylabel(property + ' ' + units)
         plt.legend()
         plt.grid(True)
         # plt.show()
+
+
+    def plot_constructed_waveform(self, waveform_size):
+
+        amp, amp_circ, res_amp, TS_M, TS_M_circ = self.residual_amp()
+        phase, phase_circ, res_phase, TS_M, TS_M_circ = self.residual_phase()
+
+        waveform = amp * np.exp(-1j * phase)
+        print('con', waveform.shape, type(waveform))
+
+        # plt.figure(figsize=(8, 5))
+        # plt.title('constructed waveform')
+        plt.plot(TS_M[-waveform_size:], np.imag(waveform[-waveform_size:]), linewidth = 0.6, label='constructed imag')
+        plt.plot(TS_M[-waveform_size:], np.real(waveform[-waveform_size:]), linewidth = 0.6, label='constructed real')
+        plt.legend()
+        plt.grid(True)
+
+        
 
 
 
@@ -303,7 +338,7 @@ class Dataset(Waveform_properties, Simulate_Inspiral):
     #     print('DS: ', waveform_size)
     #     print(f"DS: Initialized Dataset with waveform_size={self.waveform_size}")
 
-    def __init__(self, eccmin_list, waveform_size=None, total_mass=10, mass_ratio=1, freqmin=5):
+    def __init__(self, eccmin_list, waveform_size=None, total_mass=50, mass_ratio=1, freqmin=20):
         self.eccmin_list = eccmin_list
         self.waveform_size = waveform_size
 
@@ -472,13 +507,12 @@ class Dataset(Waveform_properties, Simulate_Inspiral):
         if eccmin_list is None:
             eccmin_list = self.eccmin_list
 
-        hp_dataset = np.zeros((len(self.eccmin_list), self.waveform_size))
-        hc_dataset = np.zeros((len(self.eccmin_list), self.waveform_size))
+        hp_dataset = np.zeros((len(eccmin_list), self.waveform_size))
+        hc_dataset = np.zeros((len(eccmin_list), self.waveform_size))
 
         for i, eccentricity in enumerate(eccmin_list):
-            hp_TS, hc_TS, self.TS_M = self.sim_inspiral_mass_independent(eccentricity)
+            hp_TS, hc_TS, self.TS_M = self.sim_inspiral_mass_indp(eccentricity)
             
-
 
             if self.waveform_size is None:
                 waveform_size = len(self.TS_M)

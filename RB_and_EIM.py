@@ -4,12 +4,12 @@ import random
 plt.switch_backend('WebAgg')
 
 class Reduced_basis(Dataset):
-    def __init__(self, eccmin_list, waveform_size = None, total_mass=10, mass_ratio=1, freqmin=5):
+    def __init__(self, eccmin_list, waveform_size = None, total_mass=50, mass_ratio=1, freqmin=20):
         
         self.res_amp = None
         self.res_phase = None
         self.val_vecs = None
-        
+
         Simulate_Inspiral.__init__(self, eccmin=None, total_mass=total_mass, mass_ratio=mass_ratio, freqmin=freqmin)
         Waveform_properties.__init__(self, eccmin=None, total_mass=total_mass, mass_ratio=mass_ratio, freqmin=freqmin)
         Dataset.__init__(self, eccmin_list=eccmin_list, waveform_size=waveform_size, total_mass=total_mass, mass_ratio=mass_ratio, freqmin=freqmin)
@@ -18,24 +18,21 @@ class Reduced_basis(Dataset):
         try:
             hp_DS = np.loadtxt(f'Straindata/Hp_{min(self.eccmin_list)}_{max(self.eccmin_list)}.txt', skiprows=1)
             hc_DS = np.loadtxt(f'Straindata/Hc_{min(self.eccmin_list)}_{max(self.eccmin_list)}.txt', skiprows=1)
-            self.TS_M = np.loadtxt(f'Straindata/TS_{min(self.eccmin_list)}_{max(self.eccmin_list)}.txt', skiprows=1)
+            self.TS_M = np.loadtxt(f'Straindata/TS_{min(self.eccmin_list)}_{max(self.eccmin_list)}.txt', skiprows=1)[-self.waveform_size:]
         
             print('Dataset imported.')
         except:
             print('Dataset is not available. Generating new dataset...')
             hp_DS, hc_DS, self.TS_M = self.generate_dataset_polarisations(save_dataset, eccmin_list)
-        
-        # hp_DS = hp_DS[:, -self.waveform_size:]
-        # hc_DS = hc_DS[:, -self.waveform_size:]
-        # self.TS_M = self.TS_M[-self.waveform_size:]
 
-        return hp_DS, hc_DS, self.TS_M
+
+        return hp_DS[:, -self.waveform_size:], hc_DS[:, -self.waveform_size:], self.TS_M
     
     def import_waveform_property(self, property='Phase', save_dataset=False, eccmin_list=None):
         try:
             if property == 'Amplitude' or property == 'Phase':
                 residual_dataset = np.loadtxt(f'Straindata/Res_{property}_{min(self.eccmin_list)}_{max(self.eccmin_list)}.txt', skiprows=1)
-                self.TS_M = np.loadtxt(f'Straindata/TS_{min(self.eccmin_list)}_{max(self.eccmin_list)}.txt', skiprows=1)
+                self.TS_M = np.loadtxt(f'Straindata/TS_{min(self.eccmin_list)}_{max(self.eccmin_list)}.txt', skiprows=1)[-self.waveform_size:]
                 
                 print('Dataset {} imported.'.format(property))
         except: 
@@ -46,9 +43,9 @@ class Reduced_basis(Dataset):
 
         # length_diff = residual_dataset.shape[1] - self.waveform_size
         # residual_dataset = residual_dataset[:, length_diff:]
-        # self.TS_M = self.TS_M[length_diff:]
+        self.TS_M = self.TS_M[-self.waveform_size:]
 
-        return residual_dataset, self.TS_M
+        return residual_dataset[:, -self.waveform_size:], self.TS_M
     
     def reduced_basis(self, basis):
         num_vectors = basis.shape[0]
@@ -224,33 +221,33 @@ class Reduced_basis(Dataset):
 
         plt.show()
 
-        def plot_dataset_polarisations(self, save_dataset=False):
-            hp_DS, hc_DS, TS = self.import_polarisations(save_dataset)
+    def plot_dataset_polarisations(self, save_dataset=False):
+        hp_DS, hc_DS, TS = self.import_polarisations(save_dataset)
 
-            fig_dataset_hphc, axs = plt.subplots(2, figsize=(12, 8))
-            plt.subplots_adjust(hspace=0.4)
-                                                    
-            for i in range(len(hp_DS)):
-                axs[0].plot(TS, hp_DS[i], label = 'e = {}'.format(self.eccmin_list[i]), linewidth=0.6)
-                axs[0].set_xlabel('t [M]')
-                axs[0].set_ylabel('$h_+$')
-                axs[0].grid()
-                # axs[0].set_xlim(-20000, 0)
-                # axs[0].set_ylim(0, 0.00075)
-                axs[0].legend(loc = 'lower left', fontsize=8)
-                
-                axs[1].plot(TS, hc_DS[i], label = 'e = {}'.format(self.eccmin_list[i]), linewidth=0.6)
-                axs[1].set_ylabel('$h_x$')
-                # axs[1].set_xlim(-20000, 0)
-                # axs[1].set_ylim(-0.025, 0.025)
-                axs[1].set_xlabel('t [M]')
-                axs[1].grid()
-                axs[1].legend(loc = 'lower left', fontsize=8)
-                
-                # figname = 'hp_hc_e={}_{}'.format(self.eccmin_list.min, self.eccmin_list.max)
-                # fig_dataset_hphc.savefig('Images/' + figname)
+        fig_dataset_hphc, axs = plt.subplots(2, figsize=(12, 8))
+        plt.subplots_adjust(hspace=0.4)
+                                                
+        for i in range(16, 20):
+            axs[0].plot(TS, hp_DS[i], label = 'e = {}'.format(self.eccmin_list[i]), linewidth=0.6)
+            axs[0].set_xlabel('t [M]')
+            axs[0].set_ylabel('$h_+$')
+            axs[0].grid()
+            # axs[0].set_xlim(-20000, 0)
+            # axs[0].set_ylim(0, 0.00075)
+            axs[0].legend(loc = 'lower left', fontsize=8)
+            
+            axs[1].plot(TS, hc_DS[i], label = 'e = {}'.format(self.eccmin_list[i]), linewidth=0.6)
+            axs[1].set_ylabel('$h_x$')
+            # axs[1].set_xlim(-20000, 0)
+            # axs[1].set_ylim(-0.025, 0.025)
+            axs[1].set_xlabel('t [M]')
+            axs[1].grid()
+            axs[1].legend(loc = 'lower left', fontsize=8)
+            
+            # figname = 'hp_hc_e={}_{}'.format(self.eccmin_list.min, self.eccmin_list.max)
+            # fig_dataset_hphc.savefig('Images/' + figname)
 
-            plt.show()
+        plt.show()
 
     def plot_dataset_properties(self, property='Phase', save_dataset=False):
         if property == 'Frequency':
@@ -287,7 +284,7 @@ class Reduced_basis(Dataset):
 
 class Empirical_Interpolation_Method(Reduced_basis, Dataset):
 
-    def __init__(self, eccmin_list, waveform_size = None, total_mass=10, mass_ratio=1, freqmin=5):
+    def __init__(self, eccmin_list, waveform_size = None, total_mass=50, mass_ratio=1, freqmin=5):
         Simulate_Inspiral.__init__(self, eccmin=None, total_mass=total_mass, mass_ratio=mass_ratio, freqmin=freqmin)
         Waveform_properties.__init__(self, eccmin=None, total_mass=total_mass, mass_ratio=mass_ratio, freqmin=freqmin)
         Dataset.__init__(self, eccmin_list, waveform_size, total_mass, mass_ratio, freqmin)
@@ -349,7 +346,7 @@ class Empirical_Interpolation_Method(Reduced_basis, Dataset):
             y_label = 'x'
         else:
             print('Choose polarisation = "plus" or "cross"')
-        print(self.waveform_size)
+
         emp_nodes_idx = self.calc_empirical_nodes(reduced_basis, self.TS_M)
 
         nodes_time = []
