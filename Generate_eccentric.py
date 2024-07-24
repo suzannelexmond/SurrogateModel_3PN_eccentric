@@ -17,7 +17,7 @@ class Simulate_Inspiral:
     """ Simulates Inspiral phase of a binary blackhole merger. 
     Optional: Simulate either mass dependent or mass independent. ; Simulate the frequency and phase of the waveform """
     
-    def __init__(self, eccmin, total_mass=50, mass_ratio=1, freqmin=20, waveform_size=None):
+    def __init__(self, eccmin, total_mass=50, mass_ratio=1, freqmin=18, waveform_size=None):
         
         self.total_mass = total_mass # Total mass of the BBH system [Solar Mass]
         self.mass_ratio = mass_ratio # Mass ratio 0 < q < 1, so M_1 > M_2
@@ -73,6 +73,20 @@ class Simulate_Inspiral:
 
         TS_M = TS / (lal.MTSUN_SI * self.total_mass) 
 
+        # amp = np.array(waveform.utils.amplitude_from_polarizations(hp_TS_M, hc_TS_M))
+        # phase = np.array(waveform.utils.phase_from_polarizations(hp_TS_M, hc_TS_M))
+
+        # test_fig, axs = plt.subplots(2, figsize=(10, 6))
+        # axs[0].plot(TS_M, amp, label=str(eccmin) + 'amp')
+        # axs[1].plot(TS_M, phase, label=str(eccmin) + 'phase')
+
+        # print('first plot')
+
+        # axs[0].legend()
+        # axs[1].legend()
+        # plt.title('amp and phase')
+        # plt.show()
+
         return hp_TS, hc_TS, TS_M
         
     def plot_sim_inspiral_mass_indp(self, polarisation = 'plus', eccmin=None):
@@ -93,10 +107,12 @@ class Simulate_Inspiral:
             h = hc_TS_M[length_diff:]
         else:
             print('Choose polarisation = "plus" or cross"')
+            sys.exit(1)
 
         # print(hp_TS_M.shape, hc_TS_M.shape, type(hp_TS_M))
         # h = np.array(hp_TS_M)[length_diff:] + 1j*np.array(hc_TS_M)[length_diff:]
         # print(h.shape, type(h))
+        fig_sim_inspiral = plt.figure()
 
         plt.plot(TS_M[length_diff:], h, label = 'Real: M = {} $(M_\odot)$, q = {}, e = {}'.format(self.total_mass, self.mass_ratio, eccmin), linewidth=0.6)
         # plt.plot(TS_M[length_diff:], np.imag(h), label = 'Imag: M = {} $(M_\odot)$, q = {}, e = {}'.format(self.total_mass, self.mass_ratio, self.eccmin), linewidth=0.6)
@@ -113,7 +129,7 @@ class Simulate_Inspiral:
         # plt.show()
 
         figname = 'total mass = {}, mass ratio = {}, ecc = {}.png'.format(self.total_mass, self.mass_ratio, self.eccmin)
-        # fig_plot_wf.savefig('Images/' + figname)
+        # fig_sim_inspiral.savefig('Images/' + figname)
         # print('fig is saved')
 
         return h
@@ -237,7 +253,7 @@ class Waveform_properties(Simulate_Inspiral):
 
         amp_circ = np.array(waveform.utils.amplitude_from_polarizations(self.hp_TS_circ, self.hc_TS_circ))
         amp = np.array(waveform.utils.amplitude_from_polarizations(self.hp_TS_M, self.hc_TS_M))
-
+        
         res_amp = amp - amp_circ[len(amp_circ) - len(amp):]
         return amp, amp_circ, res_amp, self.TS_M, self.TS_M_circ
 
@@ -279,29 +295,40 @@ class Waveform_properties(Simulate_Inspiral):
         return phase, phase_circ, res_phase, self.TS_M, self.TS_M_circ
 
     def plot_residuals(self, property='Frequency'):
-
-        if property == 'Frequency':
-            prop, prop_circ, res_prop, TS_M, TS_M_circ = self.residual_freq()
-            units = '[Hz]'
+        
+        if property == 'Phase':
+            params = [0.0111, 0.0797, 0.098, 0.0119, 0.1844, 0.1707, 0.0595, 0.1943, 0.2, 0.1634, 0.1421, 0.1273, 0.1779, 0.1101, 0.1505, 0.157, 0.1897, 0.0408, 0.1345, 0.1181, 0.0896, 0.0702, 0.1973, 0.1741]
         elif property == 'Amplitude':
-            prop, prop_circ, res_prop, TS_M, TS_M_circ = self.residual_amp()
-            units = ''
-        elif property == 'Phase':
-            prop, prop_circ, res_prop, TS_M, TS_M_circ = self.residual_phase()
-            units = '[radians]'
-
-
+            params = [0.0268, 0.1657, 0.192, 0.2, 0.1802, 0.0652, 0.173, 0.1558, 0.1478, 0.1863, 0.1063, 0.1322, 0.1966, 0.1166, 0.1402, 0.1608, 0.1242, 0.0115, 0.0949, 0.1768, 0.0839, 0.1893, 0.1516, 0.0507, 0.1692]
+        
         plt.figure(figsize=(8, 5))
-        plt.plot(TS_M, prop, label= property)
-        plt.plot(TS_M_circ, prop_circ, label='Adjusted circular ' + property)
-        plt.plot(TS_M, res_prop, label='Residual ' + property)
-        # plt.xlim(-12000, 0)
-        plt.ylim(-30, 30)
+
+        for eccmin in params[:12]:
+            if property == 'Frequency':
+                prop, prop_circ, res_prop, TS_M, TS_M_circ = self.residual_freq(eccmin)
+                units = '[Hz]'
+            elif property == 'Amplitude':
+                prop, prop_circ, res_prop, TS_M, TS_M_circ = self.residual_amp(eccmin)
+                units = ''
+            elif property == 'Phase':
+                prop, prop_circ, res_prop, TS_M, TS_M_circ = self.residual_phase(eccmin)
+                units = '[radians]'
+            else:
+                print('Choose property = "Frequency", "Amplitude" or "Phase"')
+                sys.exit(1)
+
+            plt.plot(TS_M[-3500:], prop[-3500:], label= property, linewidth=0.6)
+            plt.plot(TS_M_circ[-3500:], prop_circ[-3500:], label='Adjusted circular ' + property, linewidth=0.6)
+            plt.plot(TS_M[-3500:], res_prop[-3500:], label='Residual ' + property, linewidth=0.6)
+            # plt.xlim(-12000, 0)
+            # plt.ylim(-30, 30)
         plt.xlabel('t [M]')
         plt.ylabel(property + ' ' + units)
-        plt.legend()
+        # plt.legend()
+        plt.title('residuals')
         plt.grid(True)
-        # plt.show()
+        
+        plt.show()
 
 
     def plot_constructed_waveform(self, waveform_size):
@@ -338,32 +365,81 @@ class Dataset(Waveform_properties, Simulate_Inspiral):
     #     print('DS: ', waveform_size)
     #     print(f"DS: Initialized Dataset with waveform_size={self.waveform_size}")
 
-    def __init__(self, eccmin_list, waveform_size=None, total_mass=50, mass_ratio=1, freqmin=20):
+    def __init__(self, eccmin_list, waveform_size=None, total_mass=50, mass_ratio=1, freqmin=18):
         self.eccmin_list = eccmin_list
         self.waveform_size = waveform_size
 
         Simulate_Inspiral.__init__(self, eccmin=None, total_mass=total_mass, mass_ratio=mass_ratio, freqmin=freqmin, waveform_size=waveform_size)
         Waveform_properties.__init__(self, eccmin=None, total_mass=total_mass, mass_ratio=mass_ratio, freqmin=freqmin, waveform_size=waveform_size)
-        
-
-    def generate_dataset_property(self, property = 'Frequency', save_dataset=False, eccmin_list=None, val_vecs=False):
-        
+    
+    
+    def generate_dataset_polarisations(self, save_dataset=False, eccmin_list=None, training_set=False):
+        # For original waveform size set waveform_size = None
         if eccmin_list is None:
             eccmin_list = self.eccmin_list
 
-        if val_vecs is True:
-            # Always generate new dataset for validation vectors
-            val_vecs = np.loadtxt(f'Straindata/Valvecs_Res_{property}_{min(self.eccmin_list)}_{max(self.eccmin_list)}.txt', skiprows=1)
-            return val_vecs
 
+        hp_dataset = np.zeros((len(eccmin_list), self.waveform_size))
+        hc_dataset = np.zeros((len(eccmin_list), self.waveform_size))
+
+        for i, eccentricity in enumerate(eccmin_list):
+            hp_TS, hc_TS, self.TS_M = self.sim_inspiral_mass_indp(eccentricity)
+            
+
+            if self.waveform_size is None:
+                waveform_size = len(self.TS_M)
+            else:
+                waveform_size = self.waveform_size
+
+            length_diff = len(self.TS_M) - waveform_size
+            hp_dataset[i] = hp_TS[length_diff:]
+            hc_dataset[i] = hc_TS[length_diff:]
+            self.TS_M = self.TS_M[length_diff:]
+
+        if save_dataset is True:
+
+            header = str(self.eccmin_list)
+
+            if training_set is True:
+                np.savez(f'Straindata/Training_Hp_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz', hp_dataset=hp_dataset, eccentricities=eccmin_list)
+                np.savez(f'Straindata/Training_Hc_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz', hc_dataset=hc_dataset, eccentricities=eccmin_list)
+                np.savez(f'Straindata/Training_TS_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz', time=self.TS_M, eccentricities=eccmin_list)
+
+            else:
+                np.savez(f'Straindata/Hp_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz', hp_dataset=hp_dataset, eccentricities=eccmin_list)
+                np.savez(f'Straindata/Hc_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz', hc_dataset=hc_dataset, eccentricities=eccmin_list)
+                np.savez(f'Straindata/TS_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz', time=self.TS_M, eccentricities=eccmin_list)
+
+            print('Polarisations saved')
+
+        return hp_dataset, hc_dataset, self.TS_M   
+
+    def generate_dataset_property(self, property = 'Frequency', save_dataset=False, eccmin_list=None, training_set=False, val_vecs=False):
+
+        if eccmin_list is None:
+            eccmin_list = self.eccmin_list
+        else:
+            eccmin_list = eccmin_list
+
+           
         Residual_dataset = np.zeros((len(eccmin_list), self.waveform_size))
 
         try:
 
-            hp_DS = np.loadtxt(f'Straindata/Hp_{min(self.eccmin_list)}_{max(self.eccmin_list)}.txt', skiprows=1)
-            hc_DS = np.loadtxt(f'Straindata/Hc_{min(self.eccmin_list)}_{max(self.eccmin_list)}.txt', skiprows=1)
-            self.TS_M = np.loadtxt(f'Straindata/TS_{min(self.eccmin_list)}_{max(self.eccmin_list)}.txt', skiprows=1)
-            print('Hp and hc imported.')
+            if training_set is True:
+                hp_DS = np.load(f'Straindata/Training_Hp_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz')['hp_dataset']
+                hc_DS = np.load(f'Straindata/Training_Hc_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz')['hc_dataset']
+                self.TS_M = np.load(f'Straindata/Training_TS_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz')['time']
+                print('Hp and hc validation vectors imported.')
+            
+            elif val_vecs is True:
+                hp_DS, hc_DS, self.TS_M = hp, hc, TS_M = self.generate_dataset_polarisations(save_dataset, eccmin_list, save_dataset=False)
+            
+            else:
+                hp_DS = np.load(f'Straindata/Hp_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz')['hp_dataset']
+                hc_DS = np.load(f'Straindata/Hc_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz')['hc_dataset']
+                self.TS_M = np.load(f'Straindata/TS_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz')['time']
+                print('Hp and hc imported.')
             
 
             for i, eccentricity in enumerate(eccmin_list):
@@ -383,6 +459,7 @@ class Dataset(Waveform_properties, Simulate_Inspiral):
 
                 else:
                     print('Choose property = "Amplitude" or "Phase"')
+                    sys.exit(1)
 
                 if self.waveform_size is None:
                     waveform_size = len(residual)
@@ -396,143 +473,40 @@ class Dataset(Waveform_properties, Simulate_Inspiral):
             self.hp_T, self.hc_TS = None, None
 
             print('Residual {} calculated.'.format(property))
-
-            if save_dataset == True:
+            
+            if save_dataset is True:
                 header = str(eccmin_list)
-                np.savetxt(f'Straindata/Res_{property}_{min(eccmin_list)}_{max(eccmin_list)}.txt', Residual_dataset, header=header)
-                np.savetxt(f'Straindata/TS_{min(eccmin_list)}_{max(eccmin_list)}.txt', self.TS_M, header=header)
+
+                if training_set is True:
+                    np.savez(f'Straindata/Training_Res_{property}_{min(eccmin_list)}_{max(eccmin_list)}.npz', Residual_dataset=Residual_dataset, eccentricities=eccmin_list)
+                    np.savez(f'Straindata/Training_TS_{min(eccmin_list)}_{max(eccmin_list)}.npz', time=self.TS_M, eccentricities=eccmin_list)
+                    print('Dataset training vectors saved')
+                
+                np.savez(f'Straindata/Res_{property}_{min(eccmin_list)}_{max(eccmin_list)}.npz', Residual_dataset=Residual_dataset, eccentricities=eccmin_list)
+                np.savez(f'Straindata/TS_{min(eccmin_list)}_{max(eccmin_list)}.npz', time=self.TS_M, eccentricities=eccmin_list)
                 print('Dataset saved')
 
             return Residual_dataset
         
+
         except:
             print('Dataset hp/hc is not available. Generating new dataset...')
 
             if property == 'Amplitude':
-                self.generate_dataset_polarisations(save_dataset, eccmin_list)
-                return self.generate_dataset_property('Amplitude', save_dataset, eccmin_list)
+                
+                self.generate_dataset_polarisations(save_dataset=True, eccmin_list=eccmin_list, training_set=training_set)
+                return self.generate_dataset_property('Amplitude', save_dataset, eccmin_list, training_set)
             
             elif property == 'Phase':
-                self.generate_dataset_polarisations(save_dataset, eccmin_list)
-                return self.generate_dataset_property('Phase', save_dataset, eccmin_list)
+
+                self.generate_dataset_polarisations(save_dataset=True, eccmin_list=eccmin_list, training_set=training_set)
+                return self.generate_dataset_property('Phase', save_dataset, eccmin_list, training_set)
 
             else:
                 print('Choose property = "Amplitude" or "Phase"')
                 sys.exit(1)
 
-    
-    # def generate_dataset_property(self, property = 'Frequency', save_dataset=False, eccmin_list=None, val_vecs=False):
-        
-    #     if eccmin_list is None:
-    #         eccmin_list = self.eccmin_list
 
-    #     Residual_dataset = np.zeros((len(eccmin_list), self.waveform_size))
-
-    #     try:
-    #         if val_vecs is True:
-    #             error = 1/0
-    #             print('vals error')
-
-    #         hp_DS = np.loadtxt(f'Straindata/Hp_{min(self.eccmin_list)}_{max(self.eccmin_list)}.txt', skiprows=1)
-    #         hc_DS = np.loadtxt(f'Straindata/Hc_{min(self.eccmin_list)}_{max(self.eccmin_list)}.txt', skiprows=1)
-    #         self.TS_M = np.loadtxt(f'Straindata/TS_{min(self.eccmin_list)}_{max(self.eccmin_list)}.txt', skiprows=1)
-    #         print('Hp and hc imported.')
-            
-
-    #         for i, eccentricity in enumerate(eccmin_list):
-    #             if property == 'Amplitude':
-    #                 self.hp_TS_M = types.TimeSeries(hp_DS[i], delta_t=self.DeltaT)
-    #                 self.hc_TS_M = types.TimeSeries(hc_DS[i], delta_t=self.DeltaT)
-
-    #                 residual = self.residual_amp(eccentricity)[2]
-    #                 print(np.linalg.norm(residual))
-    #             elif property == 'Phase':
-    #                 self.hp_TS_M = types.TimeSeries(hp_DS[i], delta_t=self.DeltaT)
-    #                 self.hc_TS_M = types.TimeSeries(hc_DS[i], delta_t=self.DeltaT)
-
-    #                 residual = self.residual_phase(eccentricity)[2]
-    #                 print(np.linalg.norm(residual))
-    #             else:
-    #                 print('Choose property = "Amplitude" or "Phase"')
-
-    #             if self.waveform_size is None:
-    #                 waveform_size = len(residual)
-    #             else:
-    #                 waveform_size = self.waveform_size
-
-    #             length_diff = len(residual) - waveform_size
-    #             Residual_dataset[i] = residual[length_diff:]
-
-    #         self.TS_M = self.TS_M[len(self.TS_M) - self.waveform_size:]
-    #         self.hp_T, self.hc_TS = None, None
-
-    #         print('Residual {} calculated.'.format(property))
-            
-    #         return Residual_dataset
-        
-    #     except:
-    #         print('Dataset hp/hc is not available. Generating new dataset...')
-        
-
-    #     for i, eccentricity in enumerate(eccmin_list):
-    #         if property == 'Amplitude':
-    #             self.generate_dataset_polarisations(save_dataset, eccmin_list)
-    #             self.generate_dataset_property('Amplitude', save_dataset, eccmin_list)
-            
-    #         elif property == 'Phase':
-    #             self.generate_dataset_polarisations(save_dataset, eccmin_list)
-    #             self.generate_dataset_property('Phase', save_dataset, eccmin_list)
-    #         else:
-    #             print('Choose property = "Amplitude" or "Phase"')
-
-    #         if self.waveform_size is None:
-    #             waveform_size = len(residual)
-    #         else:
-    #             waveform_size = self.waveform_size
-
-            
-    #         length_diff = len(residual) - waveform_size
-    #         Residual_dataset[i] = residual[length_diff:]
-    #         self.TS_M = self.TS_M[len(self.TS_M) - self.waveform_size:]
-
-    #     if save_dataset == True:
-    #         header = str(eccmin_list)
-    #         np.savetxt(f'Straindata/Res_{property}_{min(eccmin_list)}_{max(eccmin_list)}.txt', Residual_dataset, header=header)
-    #         np.savetxt(f'Straindata/TS_{min(eccmin_list)}_{max(eccmin_list)}.txt', self.TS_M, header=header)
-
-    #     return Residual_dataset
-    
-    def generate_dataset_polarisations(self, save_dataset=False, eccmin_list=None):
-        # For original waveform size set waveform_size = None
-        if eccmin_list is None:
-            eccmin_list = self.eccmin_list
-
-        hp_dataset = np.zeros((len(eccmin_list), self.waveform_size))
-        hc_dataset = np.zeros((len(eccmin_list), self.waveform_size))
-
-        for i, eccentricity in enumerate(eccmin_list):
-            hp_TS, hc_TS, self.TS_M = self.sim_inspiral_mass_indp(eccentricity)
-            
-
-            if self.waveform_size is None:
-                waveform_size = len(self.TS_M)
-            else:
-                waveform_size = self.waveform_size
-
-            length_diff = len(self.TS_M) - waveform_size
-            hp_dataset[i] = hp_TS[length_diff:]
-            hc_dataset[i] = hc_TS[length_diff:]
-            self.TS_M = self.TS_M[length_diff:]
-
-        if save_dataset == True:
-            header = str(self.eccmin_list)
-            
-            np.savetxt(f'Straindata/Hp_{min(self.eccmin_list)}_{max(self.eccmin_list)}.txt', hp_dataset, header=header)
-            np.savetxt(f'Straindata/Hc_{min(self.eccmin_list)}_{max(self.eccmin_list)}.txt', hc_dataset, header=header)
-            np.savetxt(f'Straindata/TS_{min(self.eccmin_list)}_{max(self.eccmin_list)}.txt', self.TS_M, header=header)
-            print('Polarisations saved')
-
-        return hp_dataset, hc_dataset, self.TS_M
     
 
     # def plot_dataset_properties(self, property='Frequency', save_dataset=False):
