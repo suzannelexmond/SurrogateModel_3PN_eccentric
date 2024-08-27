@@ -38,6 +38,7 @@ class Simulate_Inspiral:
 
 
     def sim_inspiral(self, eccmin=None):
+        print(self.total_mass, self.mass_ratio, self.freqmin, self.DeltaT, self.eccmin)
         if eccmin is None:
             eccmin = self.eccmin
 
@@ -67,11 +68,15 @@ class Simulate_Inspiral:
     def sim_inspiral_mass_indp(self, eccmin=None):
 
         hp_TS, hc_TS, TS = self.sim_inspiral(eccmin)
+        # length_diff = len(hp_TS) - self.waveform_size
+        # hp_TS_M = hp_TS / self.total_mass 
+        # hc_TS_M = hc_TS / self.total_mass
 
-        hp_TS_M = hp_TS / self.total_mass 
-        hc_TS_M = hc_TS / self.total_mass
+        hp_TS_M = hp_TS 
+        hc_TS_M = hc_TS 
 
         TS_M = TS / (lal.MTSUN_SI * self.total_mass) 
+        print(lal.MTSUN_SI)
 
         # amp = np.array(waveform.utils.amplitude_from_polarizations(hp_TS_M, hc_TS_M))
         # phase = np.array(waveform.utils.phase_from_polarizations(hp_TS_M, hc_TS_M))
