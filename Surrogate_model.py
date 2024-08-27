@@ -56,7 +56,7 @@ class Training_set(Empirical_Interpolation_Method, Reduced_basis, Dataset):
             loaded_tr = np.load(f'Straindata/Greedy_Res_Training_{property}_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz')
             loaded_GB = np.load(f'Straindata/Greedy_Res_{property}_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz')
 
-            loaded_h = np.load(f'Straindata/Greedy_h_wfs_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz')
+            loaded_h = np.load(f'Straindata/Greedy_h_wfs_{property}_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz')
 
             greedy_parameters = loaded_tr['eccentricity']
             greedy_parameters_idx = loaded_tr['eccentricities_idx']
@@ -68,6 +68,7 @@ class Training_set(Empirical_Interpolation_Method, Reduced_basis, Dataset):
             empirical_nodes = loaded_h['empirical_nodes']
             
             self.TS_M = np.load(f'Straindata/Training_TS_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz')['time'][-self.waveform_size:]
+
 
         except:
             print('No greedy set available')
@@ -87,7 +88,8 @@ class Training_set(Empirical_Interpolation_Method, Reduced_basis, Dataset):
             np.savez(f'Straindata/Greedy_Res_{property}_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz', eccentricity=greedy_parameters, greedy_basis=greedy_basis)
             # np.savez(f'Straindata/Greedy_h_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz', eccentricity=greedy_parameters, reduced_basis_h=reduced_basis_h)
 
-            empirical_nodes = self.calc_empirical_nodes(reduced_basis_h, self.TS_M)
+            empirical_nodes = self.calc_empirical_nodes(greedy_basis, self.TS_M)
+            # empirical_nodes = self.calc_empirical_nodes(reduced_basis_h, self.TS_M)
             
             residual_training = np.zeros((greedy_basis.shape[0], len(empirical_nodes)))
             # time_training = np.zeros((residual.shape[0], len(empirical_nodes)))
@@ -99,7 +101,7 @@ class Training_set(Empirical_Interpolation_Method, Reduced_basis, Dataset):
             print('greedy parameters:', greedy_parameters, property)
 
             np.savez(f'Straindata/Greedy_Res_Training_{property}_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz', eccentricity=greedy_parameters, eccentricities_idx=greedy_parameters_idx, greedy_training=residual_training)
-            np.savez(f'Straindata/Greedy_h_wfs_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz', eccentricity=greedy_parameters, reduced_basis_h=reduced_basis_h, empirical_nodes=empirical_nodes)
+            np.savez(f'Straindata/Greedy_h_wfs_{property}_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz', eccentricity=greedy_parameters, reduced_basis_h=reduced_basis_h, empirical_nodes=empirical_nodes)
 
         # if property == 'Phase':
         #     self.Dphase_training = residual_training
@@ -130,14 +132,14 @@ class Training_set(Empirical_Interpolation_Method, Reduced_basis, Dataset):
         # plt.legend()
         # plt.title('residual training')
         # plt.show()
-
-        return residual_training, empirical_nodes, greedy_parameters, greedy_parameters_idx, reduced_basis_h
+        print('RT:', residual_training, empirical_nodes, greedy_parameters)
+        return greedy_basis, residual_training, empirical_nodes, greedy_parameters, greedy_parameters_idx, reduced_basis_h
     
     
     def plot_training_set_at_node(self, time_node_idx, min_greedy_err_phase, min_greedy_err_amp, save_dataset=False):
 
-        self.Damp_training, emp_nodes_amp, params_amp, params_amp_idx, reduced_basis_amp = self.generate_training_set(min_greedy_error=min_greedy_err_amp, property='Amplitude', save_dataset=save_dataset)
-        self.Dphase_training, emp_nodes_phase, params_phase, params_phase_idx, reduced_basis_phase = self.generate_training_set(min_greedy_error=min_greedy_err_phase, property='Phase', save_dataset=save_dataset)
+        GB_amp, self.Damp_training, emp_nodes_amp, params_amp, params_amp_idx, reduced_basis_amp = self.generate_training_set(min_greedy_error=min_greedy_err_amp, property='Amplitude', save_dataset=save_dataset)
+        GB_phase, self.Dphase_training, emp_nodes_phase, params_phase, params_phase_idx, reduced_basis_phase = self.generate_training_set(min_greedy_error=min_greedy_err_phase, property='Phase', save_dataset=save_dataset)
         
         def sort_arrays(parameters, residual_training):
             parameters = np.array(parameters).flatten()
@@ -201,8 +203,8 @@ class Training_set(Empirical_Interpolation_Method, Reduced_basis, Dataset):
         validation_params = np.random.choice(parameter_space, size=validation_num, replace=False)
         
         # Set min_greedy_error to very low value so it doesn't stop generating vecs for low error
-        validation_set_amp, emp_nodes_amp, params_amp, params_amp_idx, reduced_basis_amp = self.generate_training_set(min_greedy_error=1e-20, property='Amplitude', save_dataset=True, eccmin_list=validation_params)[0]
-        validation_set_phase, emp_nodes_phase, params_phase, params_phase_idx, reduced_basis_phase = self.generate_training_set(min_greedy_error=1e-20, property='Phase', save_dataset=True, eccmin_list=validation_params)[0]
+        GB_amp, validation_set_amp, emp_nodes_amp, params_amp, params_amp_idx, reduced_basis_amp = self.generate_training_set(min_greedy_error=1e-20, property='Amplitude', save_dataset=True, eccmin_list=validation_params)[0]
+        GB_phase, validation_set_phase, emp_nodes_phase, params_phase, params_phase_idx, reduced_basis_phase = self.generate_training_set(min_greedy_error=1e-20, property='Phase', save_dataset=True, eccmin_list=validation_params)[0]
 
         amp_error, phase_error = [], []
 
@@ -231,7 +233,7 @@ class Training_set(Empirical_Interpolation_Method, Reduced_basis, Dataset):
         def GPR(time_node_idx, training_set, greedy_parameters, property='Phase'):
             
             X = self.parameter_space[:, np.newaxis]
-            
+
             X_train = np.array(greedy_parameters).reshape(-1, 1)
             y_train = np.squeeze(training_set.T[time_node_idx])
             
@@ -245,14 +247,14 @@ class Training_set(Empirical_Interpolation_Method, Reduced_basis, Dataset):
             kernels = [
                 # C(1.0, (1e-4, 1e1)) * RBF(length_scale=1.0, length_scale_bounds=(1e-2, 1e2)),
                 C(1.0, (1e-4, 1e1)) * Matern(length_scale=5.0, length_scale_bounds=(1e-2, 1e3), nu=1.5),
-                C(1.0, (1e-4, 1e1)) * Product(periodic_kernel, rbf_kernel) + WhiteKernel(noise_level=1)
+                # C(1.0, (1e-4, 1e1)) * Product(periodic_kernel, rbf_kernel) + WhiteKernel(noise_level=1)
                 # C(1.0, (1e-4, 1e1)) * RationalQuadratic(length_scale=1.0, alpha=0.1),
                 # C(1.0, (1e-4, 1e1)) * ExpSineSquared(length_scale=1.0, periodicity=3.0, length_scale_bounds=(1e-2, 1e2), periodicity_bounds=(1e-2, 1e1)),
                 # C(1.0, (1e-4, 1e1)) * ExpSineSquared(length_scale=1.0, periodicity=1.0) + WhiteKernel(noise_level=1),
                 # C(1.0, (1e-4, 1e1)) * ExpSineSquared(length_scale=1.0, periodicity=1.0) + WhiteKernel(noise_level=1)
             ]
 
-            fig_GPR = plt.figure()
+            # fig_GPR = plt.figure()
 
             for kernel in kernels:
             # kernel = C(1.0, (1e-4, 1e1)) * RationalQuadratic(length_scale=1.0, alpha=0.1)
@@ -265,27 +267,27 @@ class Training_set(Empirical_Interpolation_Method, Reduced_basis, Dataset):
                 mean_prediction = scaler.inverse_transform(mean_prediction_scaled.reshape(-1, 1)).flatten()
                 std_prediction = std_prediction_scaled * scaler.scale_[0]
 
-                # plt.scatter(X_train, y_train, color='red', label="Observations", s=10)
-                # plt.plot(X, mean_prediction, label="Mean prediction", linewidth=0.8)
-                plt.scatter(X_train, y_train, color='red', s=10)
-                plt.plot(X, mean_prediction, label="Mean prediction", linewidth=0.8)
-                plt.fill_between(
-                    X.ravel(),
-                (mean_prediction - 1.96 * std_prediction), 
-                (mean_prediction + 1.96 * std_prediction),
-                    alpha=0.5,
-                    # label=r"95% confidence interval",
-                )
-            plt.legend(loc = 'upper right')
-            plt.xlabel("$e$")
-            plt.ylabel("$f(e)$")
-            plt.title(f"GPR {property} on T_{time_node_idx} first")
+            #     # plt.scatter(X_train, y_train, color='red', label="Observations", s=10)
+            #     # plt.plot(X, mean_prediction, label="Mean prediction", linewidth=0.8)
+            #     plt.scatter(X_train, y_train, color='red', s=10)
+            #     plt.plot(X, mean_prediction, label="Mean prediction", linewidth=0.8)
+            #     plt.fill_between(
+            #         X.ravel(),
+            #     (mean_prediction - 1.96 * std_prediction), 
+            #     (mean_prediction + 1.96 * std_prediction),
+            #         alpha=0.5,
+            #         # label=r"95% confidence interval",
+            #     )
+            # plt.legend(loc = 'upper right')
+            # plt.xlabel("$e$")
+            # plt.ylabel("$f(e)$")
+            # plt.title(f"GPR {property} on T_{time_node_idx} first")
             
 
             return mean_prediction, [(mean_prediction - 1.96 * std_prediction), (mean_prediction + 1.96 * std_prediction)]
 
         
-        residual_training, emp_nodes, greedy_params, greedy_params_idx, reduced_basis = self.generate_training_set(min_greedy_error, property, save_dataset)
+        GB, residual_training, emp_nodes, greedy_params, greedy_params_idx, reduced_basis = self.generate_training_set(min_greedy_error, property, save_dataset)
         property_fit = np.zeros((len(emp_nodes), len(self.parameter_space)))
         property_uncertainty_region = []
 
@@ -326,8 +328,8 @@ class Training_set(Empirical_Interpolation_Method, Reduced_basis, Dataset):
     def generate_surrogate_waveform(self, min_greedy_error_amp, min_greedy_error_phase, save_dataset=False):
 
         # Generate training set for amplitude and phase
-        res_amp_training, emp_nodes_idx_amp, greedy_params_amp, greedy_params_amp_idx, reduced_basis_amp = self.generate_training_set(min_greedy_error_amp, 'Amplitude', save_dataset)
-        res_phase_training, emp_nodes_idx_phase, greedy_params_phase, greedy_params_phase_idx, reduced_basis_phase = self.generate_training_set(min_greedy_error_phase, 'Phase', save_dataset)
+        GB_amp, res_amp_training, emp_nodes_idx_amp, greedy_params_amp, greedy_params_amp_idx, reduced_basis_amp = self.generate_training_set(min_greedy_error_amp, 'Amplitude', save_dataset)
+        GB_phase, res_phase_training, emp_nodes_idx_phase, greedy_params_phase, greedy_params_phase_idx, reduced_basis_phase = self.generate_training_set(min_greedy_error_phase, 'Phase', save_dataset)
         # print('res shapes', res_phase_training.shape, res_amp_training.shape)
         
         amp_fit = self.gaussian_process_regression_fit(min_greedy_error=min_greedy_error_amp, property='Amplitude')[0]
@@ -381,7 +383,9 @@ class Training_set(Empirical_Interpolation_Method, Reduced_basis, Dataset):
                 for i in range(m):
                     # B_j += reduced_basis[i].conj().T * V_inv[i][j]  # Use conjugate transpose for complex numbers
                     B_j_vec[t, i] = np.dot(reduced_basis[:, t], V_inv[:, i])
+                    # print('fix?', reduced_basis[:, t], V_inv[:, i], B_j_vec[t, i])
                 # B_j_vec[:, j] = B_j
+            
 
             return B_j_vec
 
@@ -390,7 +394,7 @@ class Training_set(Empirical_Interpolation_Method, Reduced_basis, Dataset):
             # Switch back from residuals to actual amplitude and phase
             # Run circulair waveform properties
             B = B_vec(reduced_basis, emp_nodes_idx)
-
+            print('RB', reduced_basis)
             self.circulair_wf()
 
             if property == 'Phase':
@@ -470,13 +474,14 @@ class Training_set(Empirical_Interpolation_Method, Reduced_basis, Dataset):
 
         #     return surrogate
         # print('RB amp', reduced_basis_amp[10], 'RB phase', reduced_basis_phase[10])
-        surrogate_phase = calculate_surrogate_datapiece(reduced_basis_phase, phase_fit, emp_nodes_idx_phase, greedy_params_phase_idx, property='Phase')
-        surrogate_amp = calculate_surrogate_datapiece(reduced_basis_amp, amp_fit, emp_nodes_idx_amp, greedy_params_amp_idx, property='Amplitude')
+        print('empies', emp_nodes_idx_amp, emp_nodes_idx_phase)
+        surrogate_phase = calculate_surrogate_datapiece(GB_phase, phase_fit, emp_nodes_idx_phase, greedy_params_phase_idx, property='Phase')
+        surrogate_amp = calculate_surrogate_datapiece(GB_amp, amp_fit, emp_nodes_idx_amp, greedy_params_amp_idx, property='Amplitude')
         print('shapes', surrogate_phase.shape, surrogate_amp.shape)
         # print('amp:', surrogate_amp, '\n phase:', surrogate_phase)
         self.surrogate = surrogate_amp * np.exp(-1j * surrogate_phase)
         print('after amp')
-        print('surro', np.real(self.surrogate))
+        print('surro', surrogate_phase, surrogate_amp, np.real(self.surrogate))
 
         # fig_surrogate_datapieces, axs = plt.subplots(2, figsize=(10, 10))
         # plt.subplots_adjust(hspace=0.4)
@@ -720,8 +725,8 @@ TS = Training_set(eccmin_list=np.linspace(0.01, 0.2, num=20).round(3), freqmin=1
 # TS.plot_training_set_at_node(time_node_idx=15, min_greedy_err_phase=1e-3, min_greedy_err_amp=1e-2)
 # TS.plot_training_set_at_node(time_node_idx=20, min_greedy_err_phase=1e-3, min_greedy_err_amp=1e-2)
 print('gaussian')
-TS.gaussian_process_regression_fit(min_greedy_error=1e-3, property='Phase', save_dataset=True, plot_time_node_idx=2)
-TS.gaussian_process_regression_fit(min_greedy_error=1e-2, property='Amplitude', save_dataset=True, plot_time_node_idx=2)
+# TS.gaussian_process_regression_fit(min_greedy_error=1e-3, property='Phase', save_dataset=True, plot_time_node_idx=2)
+# TS.gaussian_process_regression_fit(min_greedy_error=1e-2, property='Amplitude', save_dataset=True, plot_time_node_idx=2)
 # TS.gaussian_process_regression_fit(time_node_idx=8, min_greedy_error=1e-3, property='Phase', save_dataset=True, plot_GPR=True)
 # TS.gaussian_process_regression_fit(time_node_idx=8, min_greedy_error=1e-2, property='Amplitude', save_dataset=True, plot_GPR=True)
 # TS.gaussian_process_regression_fit(time_node_idx=15, min_greedy_error=1e-3, property='Phase', save_dataset=True, plot_GPR=True)
@@ -730,9 +735,9 @@ TS.gaussian_process_regression_fit(min_greedy_error=1e-2, property='Amplitude', 
 # TS.plot_gaussian_process_regression_fit(time_node_idx=20, min_greedy_error=1e-2, property='Amplitude', save_dataset=True)
 
 
-# TS.generate_surrogate_waveform(min_greedy_error_amp=1e-2, min_greedy_error_phase=1e-3)
+TS.generate_surrogate_waveform(min_greedy_error_amp=1e-2, min_greedy_error_phase=1e-3)
 # print('surrogate')
-# TS.plot_surrogate(25, 1e-2, 1e-3, save_dataset=True)
+TS.plot_surrogate(25, 1e-2, 1e-3, save_dataset=True)
 # TS.plot_surrogate(1000, 'plus')
 # TS.plot_surrogate(2000, 'plus')
 # TS.plot_surrogate(2800, 'plus')
@@ -742,3 +747,8 @@ plt.show()
 
 # Example usage
 # training_set = Training_set([0.1, 0.2, 0.3], waveform_size=1000, total_mass=10, mass_ratio=1, freqmin=5)
+
+
+"""
+It should be greedy basis instead of training set!
+"""
