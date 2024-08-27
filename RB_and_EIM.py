@@ -85,7 +85,7 @@ class Reduced_basis(Dataset):
             projection = np.zeros_like(vector)
             for j in range(i):
                 # vdot for complex vector
-                projection += np.vdot(basis[i], ortho_basis[j]) * ortho_basis[j]
+                projection += np.dot(basis[i], ortho_basis[j]) * ortho_basis[j]
             ortho_vector = vector - projection
             ortho_basis[i] = ortho_vector / np.linalg.norm(ortho_vector)
         
@@ -523,17 +523,14 @@ class Empirical_Interpolation_Method(Reduced_basis, Dataset):
     def plot_empirical_nodes(self, min_greedy_error, property='Phase', save_dataset = False, plot_greedy_error=False):
          
         try:
-            print('try 00')
             loaded_residual = np.load(f'Straindata/Greedy_Res_{property}_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz')
-            print('try 01')
+
             loaded_h = np.load(f'Straindata/Greedy_h_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz')
-            print('try 11')
             greedy_parameters = loaded_residual['eccentricity']
-            print('try 12')
+
             training_set = loaded_residual['residual']
-            print('try 22')
             h = loaded_h['greedy_basis']
-            print('try 23')
+
             self.TS_M = np.load(f'Straindata/Training_TS_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz')['time'][-self.waveform_size:]
             
             print('Loaded greedy dataset')
@@ -558,7 +555,7 @@ class Empirical_Interpolation_Method(Reduced_basis, Dataset):
         np.savez(f'Straindata/Greedy_h_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz', eccentricity=greedy_parameters, greedy_basis=reduced_basis)
 
         print('greedy parameters: ', greedy_parameters)
-        emp_nodes_idx = self.calc_empirical_nodes(reduced_basis, self.TS_M)
+        emp_nodes_idx = self.calc_empirical_nodes(greedy_basis, self.TS_M)
 
         nodes_time = []
         nodes_polarisation = []
