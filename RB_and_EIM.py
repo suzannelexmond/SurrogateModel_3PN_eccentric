@@ -21,7 +21,6 @@ class Reduced_basis(Dataset):
 
     def import_polarisations(self, save_dataset=False, eccmin_list=None, training_set=False, val_vecs=False):
         try:
-
             if training_set is True:
                 eccmin_list = self.parameter_space
 
@@ -59,7 +58,7 @@ class Reduced_basis(Dataset):
                     
                     print('Dataset {} imported.'.format(property))
 
-                return residual_dataset[:, -self.waveform_size:], self.TS_M 
+                return residual_dataset, self.TS_M 
             
             else:
                 print('Choose property = "Phase" or "amplitude"')
@@ -71,10 +70,17 @@ class Reduced_basis(Dataset):
                 residual_dataset = self.generate_dataset_property(property, save_dataset, eccmin_list, training_set, val_vecs)
             else:
                 print('Choose property = "Phase" or "Amplitude"')
-
-        self.TS_M = self.TS_M[-self.waveform_size:]
-
-        return residual_dataset[:, -self.waveform_size:], self.TS_M
+            
+            fig_GB = plt.figure()
+            
+            for i in range(len(residual_dataset)):
+                # print(Res_DS_phase[self.parameter_space[greedy_parameters_idx[i]])
+                real_wf = Waveform_properties(eccmin_list[i])
+                real_wf.plot_residuals('Phase')
+                plt.plot(self.TS_M, residual_dataset[i], label='RD')
+            plt.title('RD') 
+            plt.show()
+        return residual_dataset, self.TS_M
     
     def reduced_basis(self, basis):
         num_vectors = basis.shape[0]
@@ -242,7 +248,7 @@ class Reduced_basis(Dataset):
             plt.ylabel('error')
             plt.yscale('log')
             plt.legend()
-            plt.show()
+            # plt.show()
             
             if (polarisation is not None) and (property is None):
                 figname = f'Greedy_error_{polarisation}_{min(self.eccmin_list)}_{max(self.eccmin_list)}_{len(training_set)}_wfs.png'
@@ -305,7 +311,7 @@ class Reduced_basis(Dataset):
         plt.ylabel('error')
         plt.yscale('log')
         plt.legend()
-        plt.show()
+        # plt.show()
 
         if polarisation is not None:
             figname = f'Greedy_error_efficiency_{polarisation}_{min(self.eccmin_list)}_{max(self.eccmin_list)}.png'
@@ -350,7 +356,7 @@ class Reduced_basis(Dataset):
             for text in legend.get_texts():
                 text.set_fontsize(8)
 
-        plt.show()
+        # plt.show()
 
     def plot_dataset_polarisations(self, save_dataset=False):
         hp_DS, hc_DS, TS = self.import_polarisations(save_dataset)
@@ -378,7 +384,7 @@ class Reduced_basis(Dataset):
             # figname = 'hp_hc_e={}_{}'.format(self.eccmin_list.min, self.eccmin_list.max)
             # fig_dataset_hphc.savefig('Images/' + figname)
 
-        plt.show()
+        # plt.show()
 
     def plot_dataset_properties(self, property='Phase', save_dataset=False):
         if property == 'Frequency':
@@ -461,8 +467,9 @@ class Empirical_Interpolation_Method(Reduced_basis, Dataset):
         for j in range(m):
             for i in range(m):
                 V[j][i] = reduced_basis[i][emp_nodes_idx[j]]
-
-        V_inv = np.linalg.inv(V)
+        # print(reduced_basis[:10])
+        # print('V: ', V, np.linalg.det(V))
+        V_inv = np.linalg.pinv(V)
 
         for t in range(reduced_basis.shape[1]):
             B_j = 0
@@ -521,16 +528,21 @@ class Empirical_Interpolation_Method(Reduced_basis, Dataset):
         return emp_nodes_idx
 
     def plot_empirical_nodes(self, min_greedy_error, property='Phase', save_dataset = False, plot_greedy_error=False):
-         
+        # loaded_residual = np.load(f'Straindata/Greedy_Res_{property}_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz')
+        # print(loaded_residual.keys())
+        # greedy_basis = loaded_residual['residual']
         try:
+            print(1)
             loaded_residual = np.load(f'Straindata/Greedy_Res_{property}_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz')
-
+            print(2)
             loaded_h = np.load(f'Straindata/Greedy_h_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz')
+            print(3)
             greedy_parameters = loaded_residual['eccentricity']
-
-            training_set = loaded_residual['residual']
+            print(4)
+            greedy_basis = loaded_residual['residual']
+            print('TS shape', training_set.shape)
             h = loaded_h['greedy_basis']
-
+            print(5)
             self.TS_M = np.load(f'Straindata/Training_TS_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz')['time'][-self.waveform_size:]
             
             print('Loaded greedy dataset')
@@ -541,7 +553,8 @@ class Empirical_Interpolation_Method(Reduced_basis, Dataset):
             training_set, self.TS_M = self.import_waveform_property(property=property, save_dataset=save_dataset, training_set=True)
             greedy_basis, greedy_errors, greedy_parameters, greedy_parameters_idx = self.plot_greedy_error(min_greedy_error=min_greedy_error, training_set=training_set, property=property, plot_greedy_error=plot_greedy_error)
 
-            np.savez(f'Straindata/Greedy_Res_{property}_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz', eccentricity=greedy_parameters, residual=greedy_basis)
+            if property == 'Phase':
+                np.savez(f'Straindata/Greedy_Res_{property}_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz', eccentricity=greedy_parameters, residual=greedy_basis)
 
 
         def compute_waveform(h_plus, h_cross):
@@ -549,7 +562,8 @@ class Empirical_Interpolation_Method(Reduced_basis, Dataset):
         
         hp, hc, self.TS_M = self.generate_dataset_polarisations(save_dataset=False, eccmin_list=greedy_parameters)
         # Complex waveform
-        h = compute_waveform(hp, hc)
+        h = compute_waveform(hp, hc)[-self.waveform_size:]
+        print('h', h.shape)
 
         reduced_basis = self.reduced_basis(h)
         np.savez(f'Straindata/Greedy_h_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz', eccentricity=greedy_parameters, greedy_basis=reduced_basis)
@@ -578,5 +592,5 @@ class Empirical_Interpolation_Method(Reduced_basis, Dataset):
         fig_EIM.savefig('Images/Empirical_nodes/' + figname)
         print('fig is saved')
 
-        plt.show()
+        # plt.show()
 

@@ -1,142 +1,170 @@
+import lalsimulation as lalsim
+import lal
+import matplotlib.pyplot as plt
+from numba import jit, cuda
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.optimize import curve_fit
-from scipy.signal import find_peaks
+from timeit import default_timer as timer
+from scipy.integrate import simps
+from pycbc import types
+from pycbc.types import timeseries
+import sys
+import os
+import math
+from pycbc.types import TimeSeries, FrequencySeries, Array, float32, float64, complex_same_precision_as, real_same_precision_as
+
+def phase_from_polarizations(h_plus, h_cross, TS, ecc, remove_start_phase=True):
+    """Return gravitational wave phase
+
+    Return the gravitation-wave phase from the h_plus and h_cross
+    polarizations of the waveform. The returned phase is always
+    positive and increasing with an initial phase of 0.
+
+    Parameters
+    ----------
+    h_plus : TimeSeries
+        An PyCBC TmeSeries vector that contains the plus polarization of the
+        gravitational waveform.
+    h_cross : TimeSeries
+        A PyCBC TmeSeries vector that contains the cross polarization of the
+        gravitational waveform.
+
+    Returns
+    -------
+    GWPhase : TimeSeries
+        A TimeSeries containing the gravitational wave phase.
+
+    Examples
+    --------s
+    >>> from pycbc.waveform import get_td_waveform, phase_from_polarizations
+    >>> hp, hc = get_td_waveform(approximant="TaylorT4", mass1=10, mass2=10,
+                         f_lower=30, delta_t=1.0/4096)
+    >>> phase = phase_from_polarizations(hp, hc)
+
+    """
+
+    p = np.unwrap(np.arctan2(h_cross.data, h_plus.data)).astype(
+        real_same_precision_as(h_plus))
+    
+
+    
+    axs[0].plot(TS[:4], h_cross.data[:4], label=f'{ecc} x', linewidth=0.6)
+    axs[0].plot(TS[:4], h_plus.data[:4], label='+', linewidth=0.6)
+    axs[5].plot(TS[:4], np.arctan2(h_cross.data, h_plus.data)[:4]/np.pi, label= 'arctan2', linewidth=0.6)
+
+
+    if remove_start_phase:
+        # print(p[0])
+        p += -p[0]
+
+    return TimeSeries(p, delta_t=h_plus.delta_t, epoch=h_plus.start_time,
+        copy=False)
+
+def frequency_from_polarizations(h_plus, h_cross, TS, ecc):
+    """Return gravitational wave frequency
+
+    Return the gravitation-wave frequency as a function of time
+    from the h_plus and h_cross polarizations of the waveform.
+    It is 1 bin shorter than the input vectors and the sample times
+    are advanced half a bin.
+
+    Parameters
+    ----------
+    h_plus : TimeSeries
+        A PyCBC TimeSeries vector that contains the plus polarization of the
+        gravitational waveform.
+    h_cross : TimeSeries
+        A PyCBC TimeSeries vector that contains the cross polarization of the
+        gravitational waveform.
+
+    Returns
+    -------
+    GWFrequency : TimeSeries
+        A TimeSeries containing the gravitational wave frequency as a function
+        of time.
+
+    Examples
+    --------
+    >>> from pycbc.waveform import get_td_waveform, phase_from_polarizations
+    >>> hp, hc = get_td_waveform(approximant="TaylorT4", mass1=10, mass2=10,
+                         f_lower=30, delta_t=1.0/4096)
+    >>> freq = frequency_from_polarizations(hp, hc)
+
+    """
+    phase = phase_from_polarizations(h_plus, h_cross, TS, ecc)
+    freq = np.diff(phase) / ( 2 * lal.PI * phase.delta_t )
+    start_time = phase.start_time + phase.delta_t / 2
+
+    return TimeSeries(freq.astype(real_same_precision_as(h_plus)),
+        delta_t=phase.delta_t, epoch=start_time)
+
 
 plt.switch_backend('WebAgg')
 
-# Load the data
-data = np.load('Frequency.npz')
-t = data['t']  # Time array
-omega_22 = data['property']  # Frequency array
 
-# Define the fitting model with an epsilon to avoid divide-by-zero issues
-epsilon = 1e-10
 
-def fitting_model(t, A, n, t_merg):
-    return A * np.sign(t_merg - t) * (abs(t_merg - t) + epsilon)**n
+ecc_list = np.linspace(0.13, 0.135, num=15).round(4)
 
-def fit(peak_choice='Pericenters', convergence_value=1e-2):
-    # Step 1: Identify all pericenters by finding peaks in the frequency data
+total_mass = 50
+mass_ratio = 1
+freqmin = 18
+DeltaT = 1./2048. # 
+lalDict = lal.CreateDict() # 
 
-    # Initial parameters
-    tL = t[0]
-    N_orbits = 10  # Initial number of orbits to consider
-    tolerance = 1e-1
-    converged = False
 
-    # Store fitted parameters and points for each interval
-    fitted_params = []
-    fitted_intervals = []
+start = timer()
 
-    # Perform the initial fit for the first guess. Fit to omega_22
-    params, _ = curve_fit(fitting_model, t, omega_22, p0=[0.1, -0.25, 0], maxfev=2000)
-    A_fit, n_fit, t_merg_fit = params
-    fitted_params.append(params)
+mass1 = total_mass / (1 + mass_ratio)
+mass2 = total_mass - mass1
 
-    if peak_choice == 'Pericenters':
-        peaks, _ = find_peaks(omega_22)
-    elif peak_choice == 'Apocenters':
-        peaks, _ = find_peaks(-omega_22)
+phases=[]
 
-    # Step 2: Iterate through the waveform, adjusting the interval dynamically
-    count_iteration = 0
+# fig, axs = plt.subplots(4, sharex=True)
+fig__, axs = plt.subplots(6, figsize=(8, 10))
+for eccmin in ecc_list[3:6]:
+    hp, hc = lalsim.SimInspiralTD(
+        m1=lal.MSUN_SI*mass1, m2=lal.MSUN_SI*mass2,
+        S1x=0., S1y=0., S1z=0., S2x=0., S2y=0., S2z=0.,
+        distance=400.*1e6*lal.PC_SI, inclination=0.,
+        phiRef=0., longAscNodes=0, eccentricity=eccmin, meanPerAno=0.,
+        deltaT=DeltaT, f_min=freqmin, f_ref=freqmin,
+        LALparams=lalDict, approximant=lalsim.EccentricTD
+    )
 
-    print(len(peaks) - N_orbits)
-    print('last t: ', t[-1])
+    hp_TS = types.timeseries.TimeSeries(hp.data.data, delta_t=hp.deltaT)  # plus polarisation timeseries
+    hc_TS = types.timeseries.TimeSeries(hc.data.data, delta_t=hc.deltaT)  # cross polarisation timeseries
+    TS = -hp_TS.sample_times[::-1] # Timeseries 
 
-    while not converged:
-        for i in range(len(peaks) - N_orbits):
-            tL = t[peaks[i]]
-            tR = t[peaks[i + N_orbits - 1]]
 
-            # Ensure tL < tR
-            if tL >= tR:
-                print(f"Skipping invalid interval: tL = {tL}, tR = {tR}")
-                continue
 
-            interval_indices = (t >= tL) & (t <= tR)
-            fitted_intervals.append((t[interval_indices], omega_22[interval_indices]))
 
-            # Check if tR corresponds to the last peak
-            if tR >= t[peaks[-1]]:
-                print("Interval has reached the last peak, stopping iteration.")
-                converged = True
-                break
 
-            print('Interval:', tL, tR)
 
-            # How many cycles to convergence 
-            count_iteration += 1
+    # phase = phase_from_polarizations(hp_TS, hc_TS, TS, remove_start_phase=True)
+    print(eccmin)
+    phase_remove = phase_from_polarizations(hp_TS, hc_TS, TS, eccmin, remove_start_phase=False)
+    print('before', phase_remove[:3], hp_TS[:3], hc_TS.data[:3])
+    phases.append(phase_remove)
+    if math.copysign(1, hp_TS[0]) != math.copysign(1, hc_TS[0]):
+        print(eccmin, 'check')
+        phase_remove -= 2*np.pi
+    print('after', phase_remove[:3], hp_TS[:3], hc_TS.data[:3])
+    freq = frequency_from_polarizations(hp_TS, hc_TS, TS, eccmin)
+    freq_time = -freq.sample_times[::-1]
 
-            # Perform fitting on this interval
-            params, _ = curve_fit(fitting_model, t[interval_indices], omega_22[interval_indices], p0=params, maxfev=2000)
-            fitted_params.append(params)
 
-            # Check for convergence
-            omega_fit = fitting_model(t, *params)
-            residual = omega_22 - omega_fit
+    # axs[0].plot(TS, phase, label=f'e = {eccmin}', linewidth=0.6)
 
-            if peak_choice == 'Pericenters':
-                local_peaks, _ = find_peaks(residual[interval_indices])
-            elif peak_choice == 'Apocenters':
-                local_peaks, _ = find_peaks(-residual[interval_indices])
+    axs[0].legend()
+    axs[0].set_ylabel('$\phi$')
+    axs[1].plot(freq_time, freq, linewidth=0.6)
+    axs[1].set_ylabel('freq')
 
-            error = abs(fitting_model(t, *params)[peaks] - omega_22[peaks])
+    axs[2].plot(TS, hp_TS, linewidth=0.6)
+    axs[2].set_ylabel('$h_+$')
+    axs[3].plot(TS, phase_remove, linewidth=0.6)
+    axs[3].set_ylabel('remove $\phi$')
+    # axs[2].set_xlim(-1.40, -1.38)
 
-            if all(err < convergence_value for err in error):
-                print("Convergence criterion met")
-                converged = True
-                break
-
-            # Prepare for the next iteration by updating tL
-            if i + 1 < len(peaks) - N_orbits:
-                tL = t[peaks[i + 1]]
-
-    print(count_iteration, ' Cycles till convergence', '\n fit:', A_fit, n_fit, t_merg_fit)
-
-    # Final plot of the fits with points
-    fig_fits = plt.figure(figsize=(10, 6))
-    plt.plot(t, omega_22, label='Original Data', color='orange', alpha=0.5)
-
-    # Plot each fitted interval and the corresponding fit
-    for i, (params, (t_interval, omega_interval)) in enumerate(zip(fitted_params, fitted_intervals)):
-        plt.scatter(t[peaks], omega_22[peaks], color='red', s=10, label=f'Interval {i+1} Data' if i == 0 else "")
-        plt.plot(t_interval, fitting_model(t_interval, *params), linestyle='--', color='blue', label=f'Interval {i+1} Fit' if i == 0 else "")
-
-    plt.xlabel('Time [M]')
-    plt.ylabel(r'$\omega_{22} [rad/M]$')
-    plt.legend()
-    plt.title('Fitting Intervals with Corresponding Fits')
-    plt.show()
-
-    # Output the last set of fitted parameters
-    print(f"Last Fitted Parameters: A = {A_fit}, n = {n_fit}, t_merg = {t_merg_fit}")
-
-    # Final plot of the fits with points
-    fig_final_fit = plt.figure(figsize=(10, 6))
-    plt.plot(t, omega_22, label='Original Data', color='orange', alpha=0.5)
-    plt.scatter(t[peaks], omega_22[peaks], color='red', s=10, label=f'Interval {i+1} Data' if i == 0 else "")
-    plt.plot(t, fitting_model(t, *fitted_params[-1]), linestyle='--', color='blue', label=f'Final Fit')
-
-    plt.xlabel('Time [M]')
-    plt.ylabel(r'$\omega_{22} [rad/M]$')
-    plt.legend()
-    plt.title('Final Fit for Entire Dataset')
-    plt.show()
-
-    return fitted_params[-1]
-
-w_fit_peris = fitting_model(t, *fit('Pericenters'))
-w_fit_apos = fitting_model(t, *fit('Apocenters'))
-
-def calc_eccentricity(w_fit_peris, w_fit_apos):
-    ecc_w = (np.sqrt(w_fit_peris) - np.sqrt(w_fit_apos)) / (np.sqrt(w_fit_peris) + np.sqrt(w_fit_apos))
-    return ecc_w
-
-fig_ecc = plt.figure()
-plt.plot(t, calc_eccentricity(w_fit_peris, w_fit_apos))
-plt.xlabel('Time [M]')
-plt.ylabel('Eccentricity')
-plt.title('Eccentricity Evolution')
+# print((phases[0][:len(phases[-1])] - phases[-1])/np.pi)
 plt.show()
