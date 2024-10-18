@@ -38,7 +38,6 @@ class Simulate_Inspiral:
 
 
     def sim_inspiral(self, eccmin=None):
-        print(self.total_mass, self.mass_ratio, self.freqmin, self.DeltaT, self.eccmin)
         if eccmin is None:
             eccmin = self.eccmin
 
@@ -67,6 +66,9 @@ class Simulate_Inspiral:
     # @jit(target_backend='cuda')
     def sim_inspiral_mass_indp(self, eccmin=None):
 
+        if eccmin is None:
+            eccmin = self.eccmin
+
         hp_TS, hc_TS, TS = self.sim_inspiral(eccmin)
         # length_diff = len(hp_TS) - self.waveform_size
         # hp_TS_M = hp_TS / self.total_mass 
@@ -76,7 +78,6 @@ class Simulate_Inspiral:
         hc_TS_M = hc_TS 
 
         TS_M = TS / (lal.MTSUN_SI * self.total_mass) 
-        print(lal.MTSUN_SI)
 
         # amp = np.array(waveform.utils.amplitude_from_polarizations(hp_TS_M, hc_TS_M))
         # phase = np.array(waveform.utils.phase_from_polarizations(hp_TS_M, hc_TS_M))
@@ -91,6 +92,10 @@ class Simulate_Inspiral:
         # axs[1].legend()
         # plt.title('amp and phase')
         # plt.show()
+        phase = waveform.utils.phase_from_polarizations(hp_TS, hc_TS)
+        amp = waveform.utils.amplitude_from_polarizations(hp_TS, hc_TS)
+        # np.savez('Frequency.npz', ecc=self.eccmin, frequency=freq, t=TS_M)
+        # np.savez('Amplitude.npz', ecc=self.eccmin, amplitude=amp, t=TS_M)
 
         return hp_TS, hc_TS, TS_M
         
@@ -242,6 +247,7 @@ class Waveform_properties(Simulate_Inspiral):
         self.TS_M_circ = None
         self.hp_TS_circ = None
         self.hc_TS_circ = None
+        self.phase_shift = None
 
         Simulate_Inspiral.__init__(self, eccmin, total_mass=total_mass, mass_ratio=mass_ratio, freqmin=freqmin, waveform_size=waveform_size)
         
@@ -293,7 +299,8 @@ class Waveform_properties(Simulate_Inspiral):
         phase = np.array(waveform.utils.phase_from_polarizations(self.hp_TS_M, self.hc_TS_M))
 
         # Set phase_circ to 0 at start of residual
-        phase_circ = phase_circ - phase_circ[len(phase_circ) - len(phase)]
+        # self.phase_shift = phase_circ[len(phase_circ) - len(phase)]
+        # phase_circ = phase_circ - self.phase_shift
         # Subtract the circular phase
         res_phase = phase_circ[len(phase_circ) - len(phase):] - phase
 
@@ -301,55 +308,56 @@ class Waveform_properties(Simulate_Inspiral):
 
     def plot_residuals(self, property='Frequency'):
         
-        if property == 'Phase':
-            params = [0.0111, 0.0797, 0.098, 0.0119, 0.1844, 0.1707, 0.0595, 0.1943, 0.2, 0.1634, 0.1421, 0.1273, 0.1779, 0.1101, 0.1505, 0.157, 0.1897, 0.0408, 0.1345, 0.1181, 0.0896, 0.0702, 0.1973, 0.1741]
-        elif property == 'Amplitude':
-            params = [0.0268, 0.1657, 0.192, 0.2, 0.1802, 0.0652, 0.173, 0.1558, 0.1478, 0.1863, 0.1063, 0.1322, 0.1966, 0.1166, 0.1402, 0.1608, 0.1242, 0.0115, 0.0949, 0.1768, 0.0839, 0.1893, 0.1516, 0.0507, 0.1692]
+        # if property == 'Phase':
+        #     params = [0.0111, 0.0797, 0.098, 0.0119, 0.1844, 0.1707, 0.0595, 0.1943, 0.2, 0.1634, 0.1421, 0.1273, 0.1779, 0.1101, 0.1505, 0.157, 0.1897, 0.0408, 0.1345, 0.1181, 0.0896, 0.0702, 0.1973, 0.1741]
+        # elif property == 'Amplitude':
+        #     params = [0.0268, 0.1657, 0.192, 0.2, 0.1802, 0.0652, 0.173, 0.1558, 0.1478, 0.1863, 0.1063, 0.1322, 0.1966, 0.1166, 0.1402, 0.1608, 0.1242, 0.0115, 0.0949, 0.1768, 0.0839, 0.1893, 0.1516, 0.0507, 0.1692]
         
-        plt.figure(figsize=(8, 5))
+        # plt.figure(figsize=(8, 5))
 
-        for eccmin in params[:12]:
-            if property == 'Frequency':
-                prop, prop_circ, res_prop, TS_M, TS_M_circ = self.residual_freq(eccmin)
-                units = '[Hz]'
-            elif property == 'Amplitude':
-                prop, prop_circ, res_prop, TS_M, TS_M_circ = self.residual_amp(eccmin)
-                units = ''
-            elif property == 'Phase':
-                prop, prop_circ, res_prop, TS_M, TS_M_circ = self.residual_phase(eccmin)
-                units = '[radians]'
-            else:
-                print('Choose property = "Frequency", "Amplitude" or "Phase"')
-                sys.exit(1)
 
-            plt.plot(TS_M[-3500:], prop[-3500:], label= property, linewidth=0.6)
-            plt.plot(TS_M_circ[-3500:], prop_circ[-3500:], label='Adjusted circular ' + property, linewidth=0.6)
-            plt.plot(TS_M[-3500:], res_prop[-3500:], label='Residual ' + property, linewidth=0.6)
-            # plt.xlim(-12000, 0)
-            # plt.ylim(-30, 30)
+        if property == 'Frequency':
+            prop, prop_circ, res_prop, TS_M, TS_M_circ = self.residual_freq(self.eccmin)
+            units = '[Hz]'
+        elif property == 'Amplitude':
+            prop, prop_circ, res_prop, TS_M, TS_M_circ = self.residual_amp(self.eccmin)
+            units = ''
+        elif property == 'Phase':
+            prop, prop_circ, res_prop, TS_M, TS_M_circ = self.residual_phase(self.eccmin)
+            units = '[radians]'
+        else:
+            print('Choose property = "Frequency", "Amplitude" or "Phase"')
+            sys.exit(1)
+
+        # plt.plot(TS_M, prop, label= property, linewidth=0.6)
+        # plt.plot(TS_M_circ, prop_circ, label='Adjusted circular ' + property, linewidth=0.6)
+
+        plt.plot(TS_M, res_prop, label='Residual ' + property, linewidth=0.6)
+        # plt.xlim(-12000, 0)
+        # plt.ylim(-30, 30)
         plt.xlabel('t [M]')
         plt.ylabel(property + ' ' + units)
-        # plt.legend()
+        plt.legend()
         plt.title('residuals')
         plt.grid(True)
         
-        plt.show()
+        # plt.show()
 
 
     def plot_constructed_waveform(self, waveform_size):
 
-        amp, amp_circ, res_amp, TS_M, TS_M_circ = self.residual_amp()
-        phase, phase_circ, res_phase, TS_M, TS_M_circ = self.residual_phase()
+        hp, hc, TS_M, phase, amp = self.sim_inspiral_mass_indp(self.eccmin)
 
         waveform = amp * np.exp(-1j * phase)
-        print('con', waveform.shape, type(waveform))
+        # print(np.imag(waveform).shape)
 
         # plt.figure(figsize=(8, 5))
         # plt.title('constructed waveform')
-        plt.plot(TS_M[-waveform_size:], np.imag(waveform[-waveform_size:]), linewidth = 0.6, label='constructed imag')
-        plt.plot(TS_M[-waveform_size:], np.real(waveform[-waveform_size:]), linewidth = 0.6, label='constructed real')
-        plt.legend()
-        plt.grid(True)
+        # plt.plot(TS_M, waveform, linewidth = 0.6, label='constructed imag')
+        # plt.plot(TS_M, hp, linewidth = 0.6, label='constructed real')
+        # plt.legend()
+        # plt.grid(True)
+        # plt.show()
 
         
 
@@ -384,8 +392,10 @@ class Dataset(Waveform_properties, Simulate_Inspiral):
             eccmin_list = self.eccmin_list
 
 
-        hp_dataset = np.zeros((len(eccmin_list), self.waveform_size))
-        hc_dataset = np.zeros((len(eccmin_list), self.waveform_size))
+        hp_dataset = []
+        hc_dataset = []
+        hp_DS_cut = np.zeros((len(self.eccmin_list), self.waveform_size))
+        hc_DS_cut = np.zeros((len(self.eccmin_list), self.waveform_size))
 
         for i, eccentricity in enumerate(eccmin_list):
             hp_TS, hc_TS, self.TS_M = self.sim_inspiral_mass_indp(eccentricity)
@@ -397,9 +407,16 @@ class Dataset(Waveform_properties, Simulate_Inspiral):
                 waveform_size = self.waveform_size
 
             length_diff = len(self.TS_M) - waveform_size
-            hp_dataset[i] = hp_TS[length_diff:]
-            hc_dataset[i] = hc_TS[length_diff:]
-            self.TS_M = self.TS_M[length_diff:]
+
+            hp_dataset.append(hp_TS)
+            hc_dataset.append(hc_TS)
+
+            hp_DS_cut[i] = hp_TS[length_diff:]
+            hc_DS_cut[i] = hc_TS[length_diff:]
+
+            # self.TS_M = self.TS_M[length_diff:]
+        hp_dataset = np.array(hp_dataset, dtype=object)
+        hc_dataset = np.array(hc_dataset, dtype=object)
 
         if save_dataset is True:
 
@@ -417,7 +434,7 @@ class Dataset(Waveform_properties, Simulate_Inspiral):
 
             print('Polarisations saved')
 
-        return hp_dataset, hc_dataset, self.TS_M   
+        return hp_DS_cut, hc_DS_cut, self.TS_M[-self.waveform_size:]   
 
     def generate_dataset_property(self, property = 'Frequency', save_dataset=False, eccmin_list=None, training_set=False, val_vecs=False):
 
@@ -428,12 +445,11 @@ class Dataset(Waveform_properties, Simulate_Inspiral):
 
            
         Residual_dataset = np.zeros((len(eccmin_list), self.waveform_size))
-
+        
         try:
-
             if training_set is True:
-                hp_DS = np.load(f'Straindata/Training_Hp_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz')['hp_dataset']
-                hc_DS = np.load(f'Straindata/Training_Hc_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz')['hc_dataset']
+                hp_DS = np.load(f'Straindata/Training_Hp_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz', allow_pickle=True)['hp_dataset']
+                hc_DS = np.load(f'Straindata/Training_Hc_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz', allow_pickle=True)['hc_dataset']
                 self.TS_M = np.load(f'Straindata/Training_TS_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz')['time']
                 print('Hp and hc validation vectors imported.')
             
@@ -441,11 +457,10 @@ class Dataset(Waveform_properties, Simulate_Inspiral):
                 hp_DS, hc_DS, self.TS_M = hp, hc, TS_M = self.generate_dataset_polarisations(save_dataset, eccmin_list, save_dataset=False)
             
             else:
-                hp_DS = np.load(f'Straindata/Hp_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz')['hp_dataset']
-                hc_DS = np.load(f'Straindata/Hc_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz')['hc_dataset']
+                hp_DS = np.load(f'Straindata/Hp_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz', allow_pickle=True)['hp_dataset']
+                hc_DS = np.load(f'Straindata/Hc_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz', allow_pickle=True)['hc_dataset']
                 self.TS_M = np.load(f'Straindata/TS_{min(self.eccmin_list)}_{max(self.eccmin_list)}.npz')['time']
                 print('Hp and hc imported.')
-            
 
             for i, eccentricity in enumerate(eccmin_list):
                 if property == 'Amplitude':
@@ -453,14 +468,14 @@ class Dataset(Waveform_properties, Simulate_Inspiral):
                     self.hc_TS_M = types.TimeSeries(hc_DS[i], delta_t=self.DeltaT)
                     self.eccmin = eccentricity
 
-                    residual = self.residual_amp()[2]
+                    residual = self.residual_amp()[2][-self.waveform_size:]
 
                 elif property == 'Phase':
                     self.hp_TS_M = types.TimeSeries(hp_DS[i], delta_t=self.DeltaT)
                     self.hc_TS_M = types.TimeSeries(hc_DS[i], delta_t=self.DeltaT)
                     self.eccmin = eccentricity
 
-                    residual = self.residual_phase()[2]
+                    residual = self.residual_phase()[2][-self.waveform_size:]
 
                 else:
                     print('Choose property = "Amplitude" or "Phase"')
@@ -471,8 +486,7 @@ class Dataset(Waveform_properties, Simulate_Inspiral):
                 else:
                     waveform_size = self.waveform_size
 
-                length_diff = len(residual) - waveform_size
-                Residual_dataset[i] = residual[length_diff:]
+                Residual_dataset[i] = residual
 
             self.TS_M = self.TS_M[len(self.TS_M) - self.waveform_size:]
             self.hp_T, self.hc_TS = None, None
@@ -540,5 +554,11 @@ class Dataset(Waveform_properties, Simulate_Inspiral):
 
 # plt.show()
 
-
-        
+# ecc_list = np.linspace(0.08, 0.12, num=11).round(4)
+# wf = Waveform_properties(eccmin=0.1, freqmin=18, waveform_size=3500)
+# # # wf.sim_inspiral_mass_indp()
+# for ecc in ecc_list:
+#     wf.plot_residuals(ecc, property='Phase')
+# # wf.plot_constructed_waveform(waveform_size=3500)
+# plt.show()
+# # ds = Dataset()

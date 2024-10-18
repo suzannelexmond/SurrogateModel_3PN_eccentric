@@ -1,0 +1,8 @@
+- Input parameters class (ecc_min, ecc_max, t_ref, amount of wfs OR greedy_errors, M_total, amount of wfs in surrogate)
+- calculate things like self.parameterspace, f_ref, 
+- Save greedy_parameters and time_node_idx
+- First build code, than save all extra data to files and make func for this
+- make seperate functons for example emp nodes and greedy basis and use 1 function to to step after step, but not insert everything into next function
+- make sim_inspiral independent (h/r)
+- make Sim_inspiral objects with function and use these objects for polarizations and residuals
+- Use normalised waveforms in thesis?
