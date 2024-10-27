@@ -13,7 +13,7 @@ import os
 import math
 from pycbc.types import TimeSeries, FrequencySeries, Array, float32, float64, complex_same_precision_as, real_same_precision_as
 
-def phase_from_polarizations(h_plus, h_cross, TS, ecc, remove_start_phase=True):
+def phase_from_polarizations(h_plus, h_cross, remove_start_phase=True):
     """Return gravitational wave phase
 
     Return the gravitation-wave phase from the h_plus and h_cross
@@ -40,18 +40,37 @@ def phase_from_polarizations(h_plus, h_cross, TS, ecc, remove_start_phase=True):
     >>> hp, hc = get_td_waveform(approximant="TaylorT4", mass1=10, mass2=10,
                          f_lower=30, delta_t=1.0/4096)
     >>> phase = phase_from_polarizations(hp, hc)
-
     """
+    # print(math.copysign(1, h_plus.data[0]), math.copysign(1, h_cross.data[0]))
+    # if math.copysign(1, h_cross.data[0]) == -1:
+    #     # Calculate difference between consecutive points
+    #     print(h_cross.data[:5])
+    #     old_sign = math.copysign(1, h_cross.data[0])
+    #     for i in range(1, len(h_cross.data)):
+    #         new_sign = math.copysign(1, h_cross.data[i])
+    #         if old_sign != new_sign:
+    #             h_cross.data[:i] = h_cross.data[:i] * -1
+    #             print('adjust dat cross', i)
+    #             break
+    #         print('i', i)
+
+
+    # if math.copysign(1, h_plus.data[0]) == -1:
+    #     print(h_plus.data[:5])
+    #     old_sign = math.copysign(1, h_plus.data[0])
+    #     for i in range(1, len(h_plus.data)):
+    #         # print(i)
+    #         new_sign = math.copysign(1, h_plus.data[i])
+    #         if old_sign != new_sign:
+    #             h_plus.data[:i] = h_plus.data[:i] * -1
+    #             print('adjust dat plus', i)
+    #             break
+    #         print('i', i)
+
+        
 
     p = np.unwrap(np.arctan2(h_cross.data, h_plus.data)).astype(
         real_same_precision_as(h_plus))
-    
-
-    
-    axs[0].plot(TS[:4], h_cross.data[:4], label=f'{ecc} x', linewidth=0.6)
-    axs[0].plot(TS[:4], h_plus.data[:4], label='+', linewidth=0.6)
-    axs[5].plot(TS[:4], np.arctan2(h_cross.data, h_plus.data)[:4]/np.pi, label= 'arctan2', linewidth=0.6)
-
 
     if remove_start_phase:
         # print(p[0])
@@ -101,70 +120,113 @@ def frequency_from_polarizations(h_plus, h_cross, TS, ecc):
 
 plt.switch_backend('WebAgg')
 
+ecc_list_out = np.linspace(0.01, 0.2, num=300).round(4)
+ecc_list_in = np.linspace(0.01, 0.2, num=150).round(4)
+
+try:
+    phases_in = np.load('phases_in.npz')['phase']
+    phases_out = np.load('phases_out.npz')['phase']
+    hp_TS_out = np.load('phases_out.npz')['hp']
+    hc_TS_out = np.load('phases_out.npz')['hc']
+    hp_TS_in = np.load('phases_in.npz')['hp']
+    hc_TS_in = np.load('phases_in.npz')['hc']
+    TS = np.load('phases_in.npz')['TS']
+    print('phases loaded')
+except:
 
 
-ecc_list = np.linspace(0.13, 0.135, num=15).round(4)
-
-total_mass = 50
-mass_ratio = 1
-freqmin = 18
-DeltaT = 1./2048. # 
-lalDict = lal.CreateDict() # 
+    total_mass = 50
+    mass_ratio = 1
+    freqmin = 18
+    DeltaT = 1./2048. # 
+    lalDict = lal.CreateDict() # 
 
 
-start = timer()
+    start = timer()
 
-mass1 = total_mass / (1 + mass_ratio)
-mass2 = total_mass - mass1
+    mass1 = total_mass / (1 + mass_ratio)
+    mass2 = total_mass - mass1
 
-phases=[]
+    phases_in=np.zeros((len(ecc_list_in), 3000))
+    hp_TS_in = np.zeros((len(ecc_list_in), 3000))
+    hc_TS_in= np.zeros((len(ecc_list_in), 3000))
 
-# fig, axs = plt.subplots(4, sharex=True)
-fig__, axs = plt.subplots(6, figsize=(8, 10))
-for eccmin in ecc_list[3:6]:
-    hp, hc = lalsim.SimInspiralTD(
-        m1=lal.MSUN_SI*mass1, m2=lal.MSUN_SI*mass2,
-        S1x=0., S1y=0., S1z=0., S2x=0., S2y=0., S2z=0.,
-        distance=400.*1e6*lal.PC_SI, inclination=0.,
-        phiRef=0., longAscNodes=0, eccentricity=eccmin, meanPerAno=0.,
-        deltaT=DeltaT, f_min=freqmin, f_ref=freqmin,
-        LALparams=lalDict, approximant=lalsim.EccentricTD
-    )
+    hp0, hc0 = lalsim.SimInspiralTD(
+                m1=lal.MSUN_SI*mass1, m2=lal.MSUN_SI*mass2,
+                S1x=0., S1y=0., S1z=0., S2x=0., S2y=0., S2z=0.,
+                distance=400.*1e6*lal.PC_SI, inclination=0.,
+                phiRef=0., longAscNodes=0, eccentricity=1e-10, meanPerAno=0.,
+                deltaT=DeltaT, f_min=freqmin, f_ref=freqmin,
+                LALparams=lalDict, approximant=lalsim.EccentricTD
+            )
+    
+    hp0 = types.timeseries.TimeSeries(hp0.data.data, delta_t=hp0.deltaT)[:3000]
+    hc0 = types.timeseries.TimeSeries(hc0.data.data, delta_t=hc0.deltaT)[:3000]
+    phase0 = phase_from_polarizations(hp0, hc0)[:3000]
+    
+        
 
-    hp_TS = types.timeseries.TimeSeries(hp.data.data, delta_t=hp.deltaT)  # plus polarisation timeseries
-    hc_TS = types.timeseries.TimeSeries(hc.data.data, delta_t=hc.deltaT)  # cross polarisation timeseries
-    TS = -hp_TS.sample_times[::-1] # Timeseries 
+    for i, eccmin in enumerate(ecc_list_in):
+        hp, hc = lalsim.SimInspiralTD(
+            m1=lal.MSUN_SI*mass1, m2=lal.MSUN_SI*mass2,
+            S1x=0., S1y=0., S1z=0., S2x=0., S2y=0., S2z=0.,
+            distance=400.*1e6*lal.PC_SI, inclination=0.,
+            phiRef=0., longAscNodes=0, eccentricity=eccmin, meanPerAno=0.,
+            deltaT=DeltaT, f_min=freqmin, f_ref=freqmin,
+            LALparams=lalDict, approximant=lalsim.EccentricTD
+        )
+        hp = types.timeseries.TimeSeries(hp.data.data, delta_t=hp.deltaT)
+        hc = types.timeseries.TimeSeries(hc.data.data, delta_t=hc.deltaT)
+        hp_TS_in[i] = hp[:3000]  # plus polarisation timeseries
+        hc_TS_in[i] = hc[:3000] # cross polarisation timeseries
+        TS = -hp.sample_times[::-1][:3000] # Timeseries 
+        phase = phase_from_polarizations(hp, hc)
+        phases_in[i] = phase[:3000] - phase0
+        print(eccmin)
 
+    np.savez('phases_in.npz', phase=phases_in, hp=hp_TS_in, hc=hc_TS_in, TS=TS)
 
+    phases_out=np.zeros((len(ecc_list_out), 3000))
+    hp_TS_out = np.zeros((len(ecc_list_out), 3000))
+    hc_TS_out= np.zeros((len(ecc_list_out), 3000))
 
+    for i, eccmin in enumerate(ecc_list_out):
+        hp, hc = lalsim.SimInspiralTD(
+            m1=lal.MSUN_SI*mass1, m2=lal.MSUN_SI*mass2,
+            S1x=0., S1y=0., S1z=0., S2x=0., S2y=0., S2z=0.,
+            distance=400.*1e6*lal.PC_SI, inclination=0.,
+            phiRef=0., longAscNodes=0, eccentricity=eccmin, meanPerAno=0.,
+            deltaT=DeltaT, f_min=freqmin, f_ref=freqmin,
+            LALparams=lalDict, approximant=lalsim.EccentricTD
+        )
+        hp = types.timeseries.TimeSeries(hp.data.data, delta_t=hp.deltaT)
+        hc = types.timeseries.TimeSeries(hc.data.data, delta_t=hc.deltaT)
+        hp_TS_out[i] = hp[:3000]  # plus polarisation timeseries
+        hc_TS_out[i] = hc[:3000] # cross polarisation timeseries
+        TS = -hp.sample_times[::-1][:3000] # Timeseries 
+        phase = phase_from_polarizations(hp, hc)
+        phases_out[i] = phase[:3000] - phase0
+        print(eccmin)
 
+    np.savez('phases_out.npz', phase=phases_out, hp=hp_TS_out, hc=hc_TS_out, TS=TS)
+    # fig, axs = plt.subplots(4, sharex=True)
 
+# List of values you want to find the indices for
+values_to_find = [0.02, 0.1, 0.13]
+print(ecc_list_in)
 
-    # phase = phase_from_polarizations(hp_TS, hc_TS, TS, remove_start_phase=True)
-    print(eccmin)
-    phase_remove = phase_from_polarizations(hp_TS, hc_TS, TS, eccmin, remove_start_phase=False)
-    print('before', phase_remove[:3], hp_TS[:3], hc_TS.data[:3])
-    phases.append(phase_remove)
-    if math.copysign(1, hp_TS[0]) != math.copysign(1, hc_TS[0]):
-        print(eccmin, 'check')
-        phase_remove -= 2*np.pi
-    print('after', phase_remove[:3], hp_TS[:3], hc_TS.data[:3])
-    freq = frequency_from_polarizations(hp_TS, hc_TS, TS, eccmin)
-    freq_time = -freq.sample_times[::-1]
+# Use np.isin to find the indices where arr has any of the values in values_to_find
+indices_in = np.where(np.isin(ecc_list_in, values_to_find))[0]
+indices_out = np.where(np.isin(ecc_list_out, values_to_find))[0]
 
+# print(phases_in[:, 0].shape, phases_out[:, 0].shape)
 
-    # axs[0].plot(TS, phase, label=f'e = {eccmin}', linewidth=0.6)
+fig__ = plt.figure()
+# print(phases_in[:3], phases_out[:3])
+# print(phases_in[:, 1], phases_out[:, 1])
 
-    axs[0].legend()
-    axs[0].set_ylabel('$\phi$')
-    axs[1].plot(freq_time, freq, linewidth=0.6)
-    axs[1].set_ylabel('freq')
-
-    axs[2].plot(TS, hp_TS, linewidth=0.6)
-    axs[2].set_ylabel('$h_+$')
-    axs[3].plot(TS, phase_remove, linewidth=0.6)
-    axs[3].set_ylabel('remove $\phi$')
-    # axs[2].set_xlim(-1.40, -1.38)
-
-# print((phases[0][:len(phases[-1])] - phases[-1])/np.pi)
+for i in range(len(phases_in[:5])):
+    plt.plot(TS, phases_in[i], label=i)
+# plt.plot(ecc_list_out, phases_out[:, 2000], label='out')
+plt.legend()
 plt.show()

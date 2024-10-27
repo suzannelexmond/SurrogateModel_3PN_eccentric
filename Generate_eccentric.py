@@ -562,3 +562,9 @@ class Dataset(Waveform_properties, Simulate_Inspiral):
 # # wf.plot_constructed_waveform(waveform_size=3500)
 # plt.show()
 # # ds = Dataset()
+
+"""
+Make extra fit which looks for phasejumps. Check for average phase increase and look at what greedy parameters this is most off. Look at greedy params and checking 
+which greedy params are closest to the jumps. Than keep deviding in half to find place of the jump. 
+Do this until certain convergence threshold. 
+"""
