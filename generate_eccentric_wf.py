@@ -176,12 +176,9 @@ class Waveform_properties(Simulate_Inspiral):
         if self.hp_TS_circ is None:
             self.circulair_wf()
 
-        # hp_TS, hc_TS, self.TS_M = self.simulate_inspiral_mass_independent(self.eccmin)
-
         if property == 'phase':
-            circ = np.array(waveform.utils.phase_from_polarizations(self.hp_TS_circ, self.hc_TS_circ, remove_start_phase=False))
-            eccentric = np.array(waveform.utils.phase_from_polarizations(hp, hc, remove_start_phase=False))
-
+            circ = np.array(waveform.utils.phase_from_polarizations(self.hp_TS_circ, self.hc_TS_circ))
+            eccentric = np.array(waveform.utils.phase_from_polarizations(hp, hc))
             units = '[radians]'
 
             # Apply universal phaseshift to set all phases to zero at t_ref
@@ -222,9 +219,9 @@ class Waveform_properties(Simulate_Inspiral):
 
             length_diff = len(circ) - len(eccentric)
             plt.plot(self.TS_M_circ[length_diff:], eccentric, label= property, linewidth=0.6)
-            plt.scatter(self.TS_M[-self.waveform_size], eccentric[-self.waveform_size])
-            plt.scatter(self.TS_M[-self.waveform_size], circ[-self.waveform_size])
-            plt.scatter(self.TS_M[-self.waveform_size], residual[-self.waveform_size])
+            plt.scatter(self.TS_M_circ[length_diff:][length_diff], eccentric[length_diff])
+            plt.scatter(self.TS_M_circ[length_diff:][length_diff], circ[length_diff])
+            plt.scatter(self.TS_M_circ[length_diff:][length_diff], residual[length_diff])
             plt.plot(self.TS_M_circ, circ, label='Circular ' + property, linewidth=0.6)
             plt.plot(self.TS_M_circ[length_diff:], residual, label='Residual ' + property, linewidth=0.6)
             plt.xlabel('t [M]')
@@ -243,10 +240,10 @@ class Waveform_properties(Simulate_Inspiral):
                 fig_residual.savefig('Images/Residuals/' + figname)
 
                 print('Figure is saved in Images/Residuals')
-
         return residual
 
 # wp = Waveform_properties(0.2, waveform_size=3500)
-# wp.calculate_residual('phase', plot_residual=True)
-# wp.calculate_residual('amplitude', plot_residual=True)
+# hp, hc, wp.TS_M = wp.simulate_inspiral_mass_independent()
+# wp.calculate_residual(hp, hc, 'phase', plot_residual=True)
+# wp.calculate_residual(hp, hc, 'amplitude', plot_residual=True)
 # plt.show()
