@@ -1,6 +1,21 @@
 1. Introduction
 
     - Linearized gravity and gauge transformations
+    
+    In general relativity, the Einstein field equations describe the behavior or the gravitational field.
+    The field equations are a set of highly nonlinear equations. However, assuming the perturbations are small,
+    we can approximate the field equations in a linear way, neglecting higher order terms. 
+    This is a reasonable approximation for late stage gravitational waves signals detected by GW detectors, where the waves are weak and weel-described by linear perturbation theory.
+
+    gravitational waves can be described as small perturbations in the curvature of space-time
+    --> g = eta + h,
+    where eta is the background metric in teh absence of a gravitational source and h is the space-time perturbation.
+
+    The linearized field equations can be computed with the Ricci Tensor
+
+
+
+
     - Production of Gravitational Waves
     - Quadrupolar radiation
     - Post-Newtonian expansion
@@ -27,7 +42,44 @@
 
 
 
+NEW IDEAS:
+1. Introduction:
+    Detecting BBH mergers with GW
+    1.1 Introduction/Detecting gravitational waves
+        - Some detector Introduction
+            - Small intro on polarisations
+        - Deriving the polarisations
+            - Linearized gravity
+            - Quadrupolar radiation
+            - Post-Newtonian polarisations
+            - Polarisations in terms of Spherical harmonics
+    
 
+    1.2 Eccentric BBH mergers 
+        - Simple Kepler and dynamics
+        - Eccentric cases (why are they important)
+            - defining eccentricity
+        - BBH Waveforms
+            - IMR and ways of modelling these
+
+
+    
+    1.3 Waveform modeling
+        - Why do we do waveform modelling?
+            - templates
+            - precision/accuracy
+        - Surrogate modelling
+            - Greedy basis
+            - Empirical nodes
+            - Fitting the greedy points
+            - Making the surrogate model
+            - Precision/Generational time-efficiency
+
+        
+
+    
+
+        
 
 
 
