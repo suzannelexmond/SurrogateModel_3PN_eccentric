@@ -1,0 +1,5 @@
+- t_ref instead of f_ref
+- make sim_inspiral independent (h/r)
+- make Sim_inspiral objects with function and use these objects for polarizations and residuals
+- Use normalised waveforms in thesis?
+- change name of residual_parameterspace
