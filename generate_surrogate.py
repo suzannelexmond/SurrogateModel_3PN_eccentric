@@ -5,32 +5,47 @@ from sklearn.gaussian_process.kernels import RBF, Product, ConstantKernel as C
 from sklearn.gaussian_process.kernels import RBF, Matern, RationalQuadratic, WhiteKernel, ExpSineSquared, ConstantKernel as C
 from sklearn.model_selection import train_test_split
 import faulthandler
+<<<<<<< HEAD
 from pycbc.filter import match
 from pycbc.psd import aLIGOZeroDetHighPower
 import pycbc.psd
+=======
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
 
 faulthandler.enable()
 
 class Generate_Surrogate(Generate_TrainingSet):
 
+<<<<<<< HEAD
     def __init__(self, parameter_space, amount_input_wfs, amount_output_wfs, N_greedy_vecs_amp=None, N_greedy_vecs_phase=None, min_greedy_error_amp=None, min_greedy_error_phase=None, waveform_size=None, total_mass=50, mass_ratio=1, freqmin=20):
+=======
+    def __init__(self, parameter_space, amount_input_wfs, amount_output_wfs,  min_greedy_error_amp, min_greedy_error_phase, waveform_size=None, total_mass=50, mass_ratio=1, freqmin=20):
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
         
         self.parameter_space_input = np.linspace(parameter_space[0], parameter_space[1], amount_input_wfs).round(4)
         self.parameter_space_output = np.linspace(parameter_space[0], parameter_space[1], amount_output_wfs).round(4)
         
         self.min_greedy_error_amp = min_greedy_error_amp
         self.min_greedy_error_phase = min_greedy_error_phase
+<<<<<<< HEAD
         self.N_greedy_vecs_amp = N_greedy_vecs_amp
         self.N_greedy_vecs_phase = N_greedy_vecs_phase
         self.surrogate = None
         self.surrogate_amp = None
         self.surrogate_phase = None
+=======
+        self.surrogate = None
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
 
         self.phase_shift_total_output = np.zeros(len(self.parameter_space_output))
         
         Generate_TrainingSet.__init__(self, parameter_space_input=self.parameter_space_input, waveform_size=waveform_size, total_mass=total_mass, mass_ratio=mass_ratio, freqmin=freqmin)
 
+<<<<<<< HEAD
     def fit_to_training_set(self, property, min_greedy_error=None, N_greedy_vecs=None, save_fits_to_file=False, plot_kernels=False, plot_fits=False, save_fig_kernels=False, save_fig_fits=False):
+=======
+    def fit_to_training_set(self, property, min_greedy_error, save_fits_to_file=False, plot_kernels=False, plot_fits=False, save_fig_kernels=False, save_fig_fits=False):
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
 
         def gaussian_process_regression(time_node, training_set, plot_kernels=plot_kernels, save_fig_kernels=save_fig_kernels):
             X = self.parameter_space_output[:, np.newaxis]
@@ -48,7 +63,11 @@ class Generate_Surrogate(Generate_TrainingSet):
             kernels = [
                 # C(1.0, (1e-4, 1e1)) * RBF(length_scale=1.0, length_scale_bounds=(1e-2, 1e2)),
                 # C(1.0, (1e-4, 1e1)) * Matern(length_scale=10.0, length_scale_bounds=(1e-4, 1e3), nu=2.5),
+<<<<<<< HEAD
                 C(1.0, (0.1, 20)) * Matern(length_scale=5.0, length_scale_bounds=(0.0001, 0.3), nu=1.5)
+=======
+                C(1.0, (0.1, 10)) * Matern(length_scale=5.0, length_scale_bounds=(0.001, 0.3), nu=1.5)
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
                 # C(1.0, (1e-4, 1e1)) * Product(periodic_kernel, rbf_kernel) + WhiteKernel(noise_level=1),
                 # C(1.0, (1e-4, 1e1)) * RationalQuadratic(length_scale=1.0, alpha=0.1),
                 # C(1.0, (1e-4, 1e1)) * ExpSineSquared(length_scale=1.0, periodicity=3.0, length_scale_bounds=(1e-2, 1e2), periodicity_bounds=(1e-2, 1e1)),
@@ -116,9 +135,13 @@ class Generate_Surrogate(Generate_TrainingSet):
             return mean_prediction, [(mean_prediction - 1.96 * std_prediction), (mean_prediction + 1.96 * std_prediction)]
 
         try:
+<<<<<<< HEAD
 
             load_GPRfits = np.load(f'Straindata/GPRfits_/{property}_{min(self.parameter_space_input)}_{max(self.parameter_space_input)}_Ni={len(self.parameter_space_input)}_No={len(self.parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}.npz', allow_pickle=True)
             
+=======
+            load_GPRfits = np.load(f'Straindata/GPRfits/{property}_{min(self.parameter_space_input)}_{max(self.parameter_space_input)}_{len(self.parameter_space_input)}wfsIN_{len(self.parameter_space_output)}wfsOUT.npz', allow_pickle=True)
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
             gaussian_fit = load_GPRfits['GPR_fit']
             training_set = load_GPRfits['training_set']
             uncertainty_region = load_GPRfits['uncertainty_region']
@@ -131,7 +154,11 @@ class Generate_Surrogate(Generate_TrainingSet):
         except:
 
             # Generate the training set of greedy parameters at empirical nodes
+<<<<<<< HEAD
             training_set = self.get_training_set(property=property, min_greedy_error=min_greedy_error, N_greedy_vecs=N_greedy_vecs)
+=======
+            training_set = self.get_training_set(property=property, min_greedy_error=min_greedy_error)
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
 
             # Create empty arrays to save fitvalues
             gaussian_fit = np.zeros((len(training_set.T), len(self.parameter_space_output)))
@@ -147,6 +174,7 @@ class Generate_Surrogate(Generate_TrainingSet):
                 uncertainty_region.append(uncertainty_region)
 
         if plot_fits is True:
+<<<<<<< HEAD
             load_parameterspace_input = np.load(f'Straindata/Residuals/residuals_{property}_e=[{min(self.parameter_space_input)}_{max(self.parameter_space_input)}]_N={len(self.parameter_space_input)}.npz')
             residual_parameterspace_input = load_parameterspace_input['residual']
             self.phase_shift_total_input = load_parameterspace_input['total_phase_shift']
@@ -174,6 +202,19 @@ class Generate_Surrogate(Generate_TrainingSet):
 
             except:
                 residual_parameterspace_output, self.phase_shift_total_output = self.generate_property_dataset(eccmin_list=self.parameter_space_output, property=property, save_dataset_to_file=True)
+=======
+            try:
+                load_parameterspace_input = np.load(f'Straindata/Residuals/residual_{property}_full_parameterspace_input_{min(self.parameter_space_input)}_{max(self.parameter_space_input)}.npz')
+                residual_parameterspace_input = load_parameterspace_input['residual']
+                self.phase_shift_total_input = load_parameterspace_input['total_phase_shift']
+                self.TS_M = load_parameterspace_input['TS_M']
+
+                load_parameterspace_output = np.load(f'Straindata/Residuals/residual_{property}_full_parameterspace_output_{min(self.parameter_space_output)}_{max(self.parameter_space_output)}.npz')
+                residual_parameterspace_output = load_parameterspace_output['residual']
+                self.phase_shift_total_output = load_parameterspace_output['total_phase_shift']
+            except:
+                residual_parameterspace_output, self.phase_shift_total_output = self.generate_property_dataset(eccmin_list=self.parameter_space_output, property=property, save_dataset_to_file=f'residual_{property}_full_parameterspace_output_{min(self.parameter_space_input)}_{max(self.parameter_space_input)}_{len(self.parameter_space_output)}wfs.npz')
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
 
             # Define a distinct color palette
             color_palette = plt.cm.tab10.colors 
@@ -191,6 +232,7 @@ class Generate_Surrogate(Generate_TrainingSet):
                 # Use the same color for the fit and the corresponding empirical data
                 axs[0].plot(self.parameter_space_output, gaussian_fit.T[:, i], color=colors[i], linewidth=0.6)
                 axs[0].scatter(self.parameter_space_input[self.greedy_parameters_idx], training_set[:, i], color=colors[i])
+<<<<<<< HEAD
                 # axs[0].plot(self.parameter_space_output, residual_parameterspace_output[:, self.empirical_nodes_idx[i]], linestyle='dashed', linewidth=0.6, color=colors[i], label=f't={self.TS_M[self.empirical_nodes_idx[i]]}')
                 axs[0].plot(self.parameter_space_output, residual_parameterspace_output[:, self.empirical_nodes_idx[i]], linestyle='dashed', linewidth=0.6, color=colors[i])
 
@@ -199,6 +241,17 @@ class Generate_Surrogate(Generate_TrainingSet):
                 relative_error = abs(residual_parameterspace_output[:, self.empirical_nodes_idx[i]] - gaussian_fit.T[:, i]) / abs(residual_parameterspace_output[:, self.empirical_nodes_idx[i]])
                 axs[1].plot(self.parameter_space_output, relative_error, color=colors[i], linewidth=0.6, label=f'Error {i+1} (t={int(self.TS_M[self.empirical_nodes_idx[i]])})')
                 axs[1].set_ylim(0, 2)
+=======
+                axs[0].plot(self.parameter_space_output, residual_parameterspace_output[:, self.empirical_nodes_idx[i]], linestyle='dashed', linewidth=0.6, color=colors[i], label=f't={self.TS_M[self.empirical_nodes_idx[i]]}')
+                # axs[0].plot(self.parameter_space_output, residual_parameterspace_output[:, -1], linestyle='dashed', linewidth=0.6, color=colors[i], label=f't={self.TS_M[self.empirical_nodes_idx[i]]}')
+                # axs[0].plot(self.parameter_space_input, residual_parameterspace_input[:, -1])
+                relative_error = abs(residual_parameterspace_output[:, self.empirical_nodes_idx[i]] - gaussian_fit.T[:, i]) / abs(residual_parameterspace_output[:, self.empirical_nodes_idx[i]])
+
+                # print(f'rel error {property}',(residual_parameterspace_input[:, self.empirical_nodes_idx[i]] - gaussian_fit.T[:, i])[35:45], abs(residual_parameterspace_input[:, self.empirical_nodes_idx[i]])[35:45], relative_error[35:45])
+                axs[1].plot(self.parameter_space_output, relative_error, color=colors[i], label=f'Error {i+1} (t={int(self.TS_M[self.empirical_nodes_idx[i]])})')
+                axs[1].scatter(self.parameter_space_output[30], relative_error[30], s=30)
+                axs[1].scatter(self.parameter_space_output[45], relative_error[45], s=30)
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
             # Adjust legend: smaller font, inside figure, upper left
             axs[0].legend(loc='upper left', ncol=3, bbox_to_anchor=(0.01, 0.99), fontsize='small')
             if property == 'phase':
@@ -228,6 +281,7 @@ class Generate_Surrogate(Generate_TrainingSet):
 
                 print('Figure is saved in Images/Gaussian_fits')
         
+<<<<<<< HEAD
         if save_fits_to_file is True and not os.path.isfile(f'Straindata/GPRfits/{property}_{min(self.parameter_space_input)}_{max(self.parameter_space_input)}_Ni={len(self.parameter_space_input)}_No={len(self.parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}.npz'):
 
             # Ensure the directory exists, creating it if necessary and save
@@ -238,6 +292,18 @@ class Generate_Surrogate(Generate_TrainingSet):
         return gaussian_fit, uncertainty_region
 
     def generate_surrogate_model(self, plot_surr_datapiece_at_ecc=False, save_fig_datapiece=False, plot_surr_at_ecc=False, save_fig_surr=False, plot_GPRfit=False, save_fits_to_file=False):
+=======
+        if save_fits_to_file is not None and not os.path.isfile(f'Straindata/GPRfits/{save_fits_to_file}'):
+
+            # Ensure the directory exists, creating it if necessary and save
+            os.makedirs('Straindata/GPRfits', exist_ok=True)
+            np.savez(f'Straindata/GPRfits/{property}_{min(self.parameter_space_input)}_{max(self.parameter_space_input)}_{len(self.parameter_space_input)}wfsIN_{len(self.parameter_space_output)}wfsOUT.npz', GPR_fit=gaussian_fit, training_set=training_set, uncertainty_region=np.array(uncertainty_region, dtype=object), greedy_parameters=self.greedy_parameters_idx, empirical_nodes=self.empirical_nodes_idx, residual_greedy_basis=self.residual_greedy_basis)
+            print('GPR fits saved')
+
+        return gaussian_fit, uncertainty_region
+
+    def generate_surrogate_model(self, plot_surr_datapiece_at_ecc=False, save_fig_datapiece=False, plot_surr_at_ecc=False, save_fig_surr=False, plot_GPRfit=False):
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
 
         def compute_B_matrix():
 
@@ -277,7 +343,13 @@ class Generate_Surrogate(Generate_TrainingSet):
             self.circulair_wf()
 
             if property == 'phase':
+<<<<<<< HEAD
                 circ = np.array(waveform.utils.phase_from_polarizations(self.hp_TS_circ, self.hc_TS_circ)) 
+=======
+                circ = np.array(waveform.utils.phase_from_polarizations(self.hp_TS_circ, self.hc_TS_circ))
+                circ -= circ[-self.waveform_size]
+
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
             elif property == 'amplitude':
                 circ = np.array(waveform.utils.amplitude_from_polarizations(self.hp_TS_circ, self.hc_TS_circ))
             else:
@@ -314,6 +386,7 @@ class Generate_Surrogate(Generate_TrainingSet):
             ------------------
             surrogate_datapiece (numpy.ndarray), shape (time_samples, lambda): Array representing the reconstructed surrogate waveform datapiece (amplitude or phase).
             """
+<<<<<<< HEAD
             if property == 'phase' and self.surrogate_phase is not None:
                 surrogate_datapiece = self.surrogate_phase
             elif property == 'amplitude' and self.surrogate_amp is not None:
@@ -357,6 +430,28 @@ class Generate_Surrogate(Generate_TrainingSet):
                     # plt.legend()
 
                     surrogate_datapiece = surrogate_datapiece + self.phase_shift_total_output
+=======
+
+            m, _ = B_matrix.shape
+
+            reconstructed_residual = np.zeros((len(self.TS_M), len(self.parameter_space_output)))
+
+            for i in range(m):
+                reconstructed_residual += np.dot(B_matrix[i, :].reshape(-1, 1), fit_matrix[i, :].reshape(1, -1))
+
+
+            # Change back from residual to original (+ circulair)
+            surrogate_datapiece = residual_to_original(residual_dataset=reconstructed_residual, property=property)
+            
+            if property == 'phase':
+                # extend phase shifts for longer parameterspace by using interpolation method
+                old_indices = np.linspace(0, len(self.phase_shift_total_input) - 1, len(self.phase_shift_total_input))
+                new_indices = np.linspace(0, len(self.phase_shift_total_output) - 1, len(self.parameter_space_output)) 
+                self.phase_shift_total_output = np.interp(new_indices, old_indices, self.phase_shift_total_input)
+
+                surrogate_datapiece = surrogate_datapiece + self.phase_shift_total_output
+                print(self.phase_shift_total_input, self.phase_shift_total_output)
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
 
             if (plot_surr_datapiece_at_ecc is not False) and (not isinstance(plot_surr_datapiece_at_ecc, float)):
                 print('plot_surr_datapiece_at_ecc must be float value!')
@@ -372,13 +467,20 @@ class Generate_Surrogate(Generate_TrainingSet):
                 if property == 'amplitude':
                     real_datapiece = np.array(waveform.utils.amplitude_from_polarizations(real_hp, real_hc))[length_diff:]
                     units = ''
+<<<<<<< HEAD
                     self.surrogate_amp = surrogate_datapiece
+=======
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
                 elif property == 'phase':
                     real_datapiece = np.array(waveform.utils.phase_from_polarizations(real_hp, real_hc))
                     real_datapiece = real_datapiece[length_diff:]
 
+<<<<<<< HEAD
                     self.surrogate_phase = surrogate_datapiece
                     # surrogate_datapiece += real_datapiece[-self.waveform_size]
+=======
+                    surrogate_datapiece += real_datapiece[-self.waveform_size]
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
 
                     units = ' [radians]'
 
@@ -413,7 +515,13 @@ class Generate_Surrogate(Generate_TrainingSet):
 
                 # Avoid division by very small numbers by using np.maximum to set a lower limit
                 relative_error = abs(surrogate_datapiece.T[index_ecc_min] - real_datapiece) / abs(real_datapiece)
+<<<<<<< HEAD
                 axs[1].plot(self.TS_M, relative_error, linewidth=0.6)
+=======
+                # print(np.diff(relative_error), abs(real_datapiece))
+                axs[1].plot(self.TS_M, relative_error, linewidth=0.6)
+                axs[1].scatter(self.TS_M[100], relative_error[100], s=20)
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
                 axs[1].set_ylabel(f'Rel. Error in {property}')
                 axs[1].set_xlabel('t [M]')
                 axs[1].grid(True)
@@ -432,6 +540,7 @@ class Generate_Surrogate(Generate_TrainingSet):
                     print('Figure is saved in Images/Surrogate_datapieces')
                     
             return surrogate_datapiece
+<<<<<<< HEAD
 
         # Get matrix with interpolated fits and B_matrix
         fit_matrix_amp = self.fit_to_training_set(min_greedy_error=self.min_greedy_error_amp, N_greedy_vecs=self.N_greedy_vecs_amp, property='amplitude', plot_fits=plot_GPRfit, save_fits_to_file=save_fits_to_file)[0]
@@ -447,6 +556,27 @@ class Generate_Surrogate(Generate_TrainingSet):
         surrogate_phase = reconstruct_surrogate_datapiece(property='phase', B_matrix=B_matrix_phase, fit_matrix=fit_matrix_phase, plot_surr_datapiece_at_ecc=plot_surr_datapiece_at_ecc)
         h_surrogate = np.zeros((len(self.TS_M), len(self.parameter_space_output)), dtype=complex)
         h_surrogate = surrogate_amp * np.exp(1j * surrogate_phase)
+=======
+        if self.surrogate is not None:
+            h_surrogate = self.surrogate
+        else:
+            # Get matrix with interpolated fits and B_matrix
+            fit_matrix_amp = self.fit_to_training_set(min_greedy_error=self.min_greedy_error_amp, property='amplitude', plot_fits=plot_GPRfit)[0]
+            B_matrix_amp = compute_B_matrix()
+            # Reconstruct amplitude datapiece
+            surrogate_amp = reconstruct_surrogate_datapiece(property='amplitude', B_matrix=B_matrix_amp, fit_matrix=fit_matrix_amp, plot_surr_datapiece_at_ecc=plot_surr_datapiece_at_ecc)
+
+            # Get matrix with interpolated fits and B_matrix
+            fit_matrix_phase = self.fit_to_training_set(min_greedy_error=self.min_greedy_error_phase, property='phase', plot_fits=plot_GPRfit)[0]
+            B_matrix_phase = compute_B_matrix()
+
+            # Reconstruct phase datapiece
+            surrogate_phase = reconstruct_surrogate_datapiece(property='phase', B_matrix=B_matrix_phase, fit_matrix=fit_matrix_phase, plot_surr_datapiece_at_ecc=plot_surr_datapiece_at_ecc)
+            h_surrogate = np.zeros((len(self.TS_M), len(self.parameter_space_output)), dtype=complex)
+            h_surrogate = surrogate_amp * np.exp(-1j * surrogate_phase)
+
+            # self.surrogate = h_surrogate
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
 
         if (plot_surr_at_ecc is not False) and (not isinstance(plot_surr_at_ecc, float)):
             print('plot_surr_datapiece_at_ecc must be float value!')
@@ -454,6 +584,7 @@ class Generate_Surrogate(Generate_TrainingSet):
         if isinstance(plot_surr_at_ecc, float):
             
             fig_surrogate, axs = plt.subplots(4, 1, figsize=(12, 6), gridspec_kw={'height_ratios': [3, 1, 3, 1], 'hspace': 0.2}, sharex=True)
+<<<<<<< HEAD
             # fig_surrogate, axs = plt.subplots(2, 1, figsize=(7, 5), sharex=True)
 
             try:
@@ -471,6 +602,26 @@ class Generate_Surrogate(Generate_TrainingSet):
             length_diff = len(true_hp) - self.waveform_size
 
             axs[0].set_title(f'Eccentricity = {plot_surr_at_ecc}')
+=======
+
+            try:
+                index_ecc_min = np.where(self.parameter_space_output == plot_surr_datapiece_at_ecc)[0][0]
+            except:
+                print(f'Eccentricity value {plot_surr_datapiece_at_ecc} not in parameterspace!')
+                sys.exit(1)
+
+            true_hp, true_hc, TS_M = self.simulate_inspiral_mass_independent(plot_surr_datapiece_at_ecc)
+            phase = np.array(waveform.utils.phase_from_polarizations(true_hp, true_hc))
+            phase += self.phase_shift_total_output[index_ecc_min]
+            amp = np.array(waveform.utils.amplitude_from_polarizations(true_hp, true_hc))
+
+            true_h = amp * np.exp(-1j * phase)
+            # print(true_hp, np.real(true_h))
+            # print(true_hc, np.imag(true_h))
+
+            length_diff = len(true_hp) - self.waveform_size
+            axs[0].set_title(f'Eccentricity = {plot_surr_datapiece_at_ecc}')
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
             # axs[0].plot(self.TS_M, true_hp[length_diff:], linewidth=0.6, label='True waveform before')
             axs[0].plot(self.TS_M, np.real(true_h)[length_diff:], linewidth=0.6, label='True waveform after')
             axs[0].plot(self.TS_M, np.real(h_surrogate[:, index_ecc_min]), linewidth=0.6, label='Surrogate')
@@ -479,6 +630,7 @@ class Generate_Surrogate(Generate_TrainingSet):
             axs[0].legend()
 
             # Calculate and Plot plus polarisation error 
+<<<<<<< HEAD
             relative_error_hp = abs(np.real(h_surrogate[:, index_ecc_min]) - np.real(true_h)[length_diff:]) / abs(np.real(true_h)[length_diff:])
             relative_error_hp[relative_error_hp > 1] = 0
             
@@ -486,12 +638,19 @@ class Generate_Surrogate(Generate_TrainingSet):
             axs[1].set_ylabel(f'Rel. Error in $h_+$')
             axs[1].grid(True)
             # axs[1].set_ylim(0, 10)
+=======
+            relative_error_hp = abs(np.real(h_surrogate[:, index_ecc_min]) - true_hp[length_diff:]) / true_hp[length_diff:]
+            axs[1].plot(self.TS_M, relative_error_hp, linewidth=0.6)
+            axs[1].set_ylabel(f'Rel. Error in $h_+$')
+            axs[1].grid(True)
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
             # axs[1].set_title('Relative error $h_x$')
 
             # axs[2].plot(self.TS_M, true_hc[length_diff:], linewidth=0.6, label='True waveform before')
             axs[2].plot(self.TS_M, np.imag(true_h)[length_diff:], linewidth=0.6, label='True waveform after')
             axs[2].plot(self.TS_M, np.imag(h_surrogate[:, index_ecc_min]), linewidth=0.6, label='Surrogate')
             axs[2].grid(True)
+<<<<<<< HEAD
             axs[2].set_ylabel('$h_x$')
             axs[2].legend()
 
@@ -510,6 +669,17 @@ class Generate_Surrogate(Generate_TrainingSet):
             axs[3].set_xlabel('t [M]')
             axs[3].grid(True)
             # axs[3].set_ylim(0, 10)
+=======
+            axs[2].legend()
+
+            # Calculate and Plot cross polarisation error
+            relative_error_hc = abs(np.imag(h_surrogate[:, index_ecc_min]) - true_hc[length_diff:]) / true_hc[length_diff:]
+            axs[3].plot(self.TS_M, relative_error_hc, linewidth=0.6)
+            axs[3].set_ylabel(f'Rel. Error in $h_+$')
+            axs[3].set_xlabel('t [M]')
+            axs[3].grid(True)
+            # axs[3].set_title('Relative error $h_+$')
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
 
 
             if save_fig_surr is True:
@@ -523,7 +693,11 @@ class Generate_Surrogate(Generate_TrainingSet):
 
         # surrogate_error = self.calc_surrogate_error(true_hp, index_ecc_min)
 
+<<<<<<< HEAD
         return h_surrogate, surrogate_amp, surrogate_phase
+=======
+        return h_surrogate
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
 
 # residual_input = np.load('/home/suzannelexmond/anaconda3/envs/igwn-py39/Python_scripts/Thesis_Eccentric_BBHs/Classes/Straindata/Residuals/residual_phase_full_parameterspace_input_0.01_0.2.npz')['residual']
 # residual_output = np.load('/home/suzannelexmond/anaconda3/envs/igwn-py39/Python_scripts/Thesis_Eccentric_BBHs/Classes/Straindata/Residuals/residual_phase_full_parameterspace_output_0.01_0.2.npz')['residual']
@@ -542,6 +716,7 @@ class Generate_Surrogate(Generate_TrainingSet):
 # plt.plot(np.linspace(0.01, 0.2, num=200).round(4), residual_input[:, 200])
 # plt.plot(np.linspace(0.01, 0.2, num=500).round(4), residual_output[:, 500])
 # plt.show()
+<<<<<<< HEAD
 # test = Simulate_Inspiral(0.4)
 """
 CHANGE E^-J TO +j FOR CALCULATION TRUE WAVEFORM AND SURROGATE
@@ -551,6 +726,14 @@ CHANGE E^-J TO +j FOR CALCULATION TRUE WAVEFORM AND SURROGATE
 # ecc_list = np.linspace(0.01, 0.2, num=20).round(5)
 
 # print(gs.parameter_space_output)
+=======
+test = Simulate_Inspiral(0.4)
+
+gs = Generate_Surrogate(parameter_space=[0.01, 0.2], amount_input_wfs=50, amount_output_wfs=500, min_greedy_error_amp=1e-2, min_greedy_error_phase=1e-3, waveform_size=3500, freqmin=18)
+# ecc_list = np.linspace(0.01, 0.2, num=20).round(5)
+
+print(gs.parameter_space_output)
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
 # gs.generate_property_dataset(eccmin_list=ecc_list1, property='phase', plot_residuals=True, save_dataset_to_file='test1.npz')
 # ecc_list2 = np.linspace(0.01, 0.3, num=500).round(5)
 # gs.generate_property_dataset(eccmin_list=ecc_list2, property='phase', plot_residuals=True, save_dataset_to_file='test2.npz')
@@ -572,7 +755,14 @@ CHANGE E^-J TO +j FOR CALCULATION TRUE WAVEFORM AND SURROGATE
 # fig1 = plt.figure()
 # 'residual_phase_full_parameterspace_0.1_0.2.npz'
 
+<<<<<<< HEAD
 # gs.generate_surrogate_model(plot_surr_datapiece_at_ecc=0.1905, plot_surr_at_ecc=0.1905, plot_GPRfit=True)
 # gs.generate_surrogate_model(plot_surr_datapiece_at_ecc=0.0336, plot_surr_at_ecc=0.0336, plot_GPRfit=True)
 
 # plt.show()
+=======
+gs.generate_surrogate_model(plot_surr_datapiece_at_ecc=0.1905, plot_surr_at_ecc=0.1905, plot_GPRfit=True)
+gs.generate_surrogate_model(plot_surr_datapiece_at_ecc=0.0336, plot_surr_at_ecc=0.0336, plot_GPRfit=True)
+
+plt.show()
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
