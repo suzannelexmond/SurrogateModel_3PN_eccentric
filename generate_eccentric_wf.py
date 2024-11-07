@@ -5,12 +5,20 @@ from numba import jit, cuda
 import numpy as np
 import matplotlib.pyplot as plt
 from timeit import default_timer as timer
+<<<<<<< HEAD
+=======
+from scipy.integrate import simps
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
 from pycbc import types
 from pycbc.types import timeseries
 from pycbc import waveform
 import sys
 import os
+<<<<<<< HEAD
 
+=======
+import math
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
 
 plt.switch_backend('WebAgg')
 
@@ -102,11 +110,14 @@ class Simulate_Inspiral:
         hp_TS, hc_TS, TS = self.simulate_inspiral(eccmin)
         TS_M = TS / (lal.MTSUN_SI * self.total_mass) 
 
+<<<<<<< HEAD
         phase = waveform.utils.phase_from_polarizations(hp_TS, hc_TS)
         amp = waveform.utils.amplitude_from_polarizations(hp_TS, hc_TS)
 
         h = amp * np.exp(-1j * phase)
         
+=======
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
         if plot_polarisations is True:
             
             if self.waveform_size is None:
@@ -116,7 +127,10 @@ class Simulate_Inspiral:
             
             length_diff = len(TS) - self.waveform_size
             plt.plot(TS[length_diff:], hp_TS[length_diff:], label = f'$h_+$', linewidth=0.2)
+<<<<<<< HEAD
             # plt.plot(TS, np.real(h))
+=======
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
             # plt.plot(TS_M[length_diff:], hc_TS[length_diff:], label = f'$h_x$', linestyle='dashed', linewidth=0.6)
             plt.legend(loc = 'upper left')
             plt.xlabel('t [M]')
@@ -140,7 +154,11 @@ class Simulate_Inspiral:
 
 
 
+<<<<<<< HEAD
 class Waveform_Properties(Simulate_Inspiral):
+=======
+class Waveform_properties(Simulate_Inspiral):
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
 
     def __init__(self, eccmin, total_mass=50, mass_ratio=1, freqmin=18, waveform_size=None):
  
@@ -246,6 +264,7 @@ class Waveform_Properties(Simulate_Inspiral):
 
                 print('Figure is saved in Images/Residuals')
         return residual
+<<<<<<< HEAD
     
 # si = Simulate_Inspiral(0.2)
 
@@ -445,3 +464,11 @@ class Waveform_Properties(Simulate_Inspiral):
 
 #         ax.set(xlabel='t [M]', ylabel=f'{property} {units}', title='Residual')
        
+=======
+
+# wp = Waveform_properties(0.2, waveform_size=3500)
+# hp, hc, wp.TS_M = wp.simulate_inspiral_mass_independent()
+# wp.calculate_residual(hp, hc, 'phase', plot_residual=True)
+# wp.calculate_residual(hp, hc, 'amplitude', plot_residual=True)
+# plt.show()
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
