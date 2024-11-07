@@ -1,5 +1,9 @@
+<<<<<<< HEAD
 - Change all waveform_size to t_ref
 - Check plot residuals with input of GPR (not consistent)
 - Make relative errors and take out all peaked values
 - Calculate generation times
 - add circ =- circ[-self.waveform] and get rid off :surrogate_datapiece += real_datapiece[-self.waveform_size] in surrogate_datapiece
+=======
+- Change all waveform_size to t_ref
+>>>>>>> 878d76609a262e58255aee4c9589b4c93410c3b3
