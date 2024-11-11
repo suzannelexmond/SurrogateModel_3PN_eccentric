@@ -9,14 +9,16 @@ import time
 import traceback
 from scipy.fft import rfft, rfftfreq
 from pycbc.waveform.utils import taper_timeseries
-import shutil
-
+import seaborn as sns
 
 class Surrogate_analysis(Generate_Surrogate):
 
     def __init__(self, parameter_space, amount_input_wfs, amount_output_wfs,  N_greedy_vecs_amp=None, N_greedy_vecs_phase=None, min_greedy_error_amp=None, min_greedy_error_phase=None, waveform_size=None, total_mass=50, mass_ratio=1, freqmin=20):
         
         self.surrogate_h = None
+        self.parameter_space = parameter_space
+        self.amount_input_wfs = amount_input_wfs
+        self.amount_output_wfs = amount_output_wfs
 
         Generate_Surrogate.__init__(self, parameter_space, amount_input_wfs, amount_output_wfs,  N_greedy_vecs_amp, N_greedy_vecs_phase, min_greedy_error_amp, min_greedy_error_phase, waveform_size=waveform_size, total_mass=total_mass, mass_ratio=mass_ratio, freqmin=freqmin)
 
@@ -296,12 +298,7 @@ class Surrogate_analysis(Generate_Surrogate):
 
     def get_surrogate_mismatches(self, plot_mismatches=False, save_mismatch_fig=False, plot_worst_err=False, save_mismatches_to_file=True):
 
-        # Set timer for calculation of surrogate model
-        start_timer = time.time()
-        h_surrogate, _ , _ = self.generate_surrogate_model()
-        # Stop timer after surrogate is calculated
-        end_timer = time.time()
-        generation_time = end_timer - start_timer
+        h_surrogate, _ , _ , generation_time= self.generate_surrogate_model()
 
         mismatches_hp = np.zeros(len(self.parameter_space_output))
         mismatches_hc = np.zeros(len(self.parameter_space_output))
@@ -455,68 +452,83 @@ class Surrogate_analysis(Generate_Surrogate):
 
                 print('Figure is saved in Images/Mismatches')
 
-    def surrogate_pointwise_error(self, plot_surr=True):
-        start_timer = time.time()
-
-        surrogate_h, surrogate_amp, surrogate_phase = self.generate_surrogate_model()
+    def surrogate_pointwise_error(self, plot_surr=False, save_pointwise_error_fig=True, save_pointwise_errors_to_file=True):
         
-        # Stop timer after surrogate is calculated
-        end_timer = time.time()
-        generation_time_surr = end_timer - start_timer
-
         try:
-            load_polarisations = np.load(f'true_polarisations_[{min(self.parameter_space_output)}_{max(self.parameter_space_output)}]_N={len(self.parameter_space_output)}.npz', allow_pickle=True)
-            true_hp = load_polarisations['hp']
-            true_hc = load_polarisations['hc']
-            TS = load_polarisations['TS'][-self.waveform_size:]
-            generation_time_full_wfs = np.nan
-
+            # Load the .npz file with errors
+            data = np.load(f'Straindata/Pointwise_error/Pointwise_error_{self.parameter_space[0]}_{self.parameter_space[1]}_Ni={self.amount_input_wfs}_No={self.amount_output_wfs}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}.npz')
+            worst_err_amp = data['worst_err_amp']
+            worst_err_phase = data['worst_err_phase']
+            best_err_amp = data['best_err_amp']
+            best_err_phase = data['best_err_phase']
+            mean_err_amp = data['mean_err_amp']
+            mean_err_phase = data['mean_err_phase']
+            generation_time_surr = data['generation_t_surr']
+            generation_time_full_wfs = data['generation_t_full_wfs']
+            print('Pointwise errors loaded')
+            
         except Exception as e:
             print(e)
-            # Simulate the real waveform datapiece
-            
-            true_hp = np.empty(len(self.parameter_space_output), dtype=object)
-            true_hc = np.empty(len(self.parameter_space_output), dtype=object)
 
-            start_timer = time.time()
-            for i, eccentricity in enumerate(self.parameter_space_output):
-                real_hp, real_hc, TS = self.simulate_inspiral_mass_independent(eccentricity)
-                true_hp[i], true_hc[i] = real_hp, real_hc
-                TS = TS[-self.waveform_size:]
-            
-            end_timer = time.time()
-            generation_time_full_wfs = end_timer - start_timer
+            surrogate_h, surrogate_amp, surrogate_phase, generation_time_surr = self.generate_surrogate_model(save_surr_to_file=True)
+
+            try:
+                load_polarisations = np.load(f'true_polarisations_[{min(self.parameter_space_output)}_{max(self.parameter_space_output)}]_N={len(self.parameter_space_output)}.npz', allow_pickle=True)
+                true_hp = load_polarisations['hp']
+                true_hc = load_polarisations['hc']
+                TS = load_polarisations['TS'][-self.waveform_size:]
+                generation_time_full_wfs = load_polarisations['generation_t']
+
+            except Exception as e:
+                print(e)
+                # Simulate the real waveform datapiece
+                
+                true_hp = np.empty(len(self.parameter_space_output), dtype=object)
+                true_hc = np.empty(len(self.parameter_space_output), dtype=object)
+
+                start_timer = time.time()
+                for i, eccentricity in enumerate(self.parameter_space_output):
+                    real_hp, real_hc, TS = self.simulate_inspiral_mass_independent(eccentricity)
+                    true_hp[i], true_hc[i] = real_hp, real_hc
+                    TS = TS[-self.waveform_size:]
+                
+                end_timer = time.time()
+                generation_time_full_wfs = end_timer - start_timer
 
 
-            np.savez(f'true_polarisations_[{min(self.parameter_space_output)}_{max(self.parameter_space_output)}]_N={len(self.parameter_space_output)}.npz', hp=true_hp, hc=true_hc, TS=TS)
-            print('True polarisations saved')
+                np.savez(f'true_polarisations_[{min(self.parameter_space_output)}_{max(self.parameter_space_output)}]_N={len(self.parameter_space_output)}.npz', hp=true_hp, hc=true_hc, TS=TS, generation_t=generation_time_full_wfs)
+                print('True polarisations saved')
 
-        worst_err_amp = np.zeros(len(self.parameter_space_output))
-        best_err_amp = np.zeros(len(self.parameter_space_output))
-        mean_err_amp = np.zeros(len(self.parameter_space_output))
+            worst_err_amp = np.zeros(len(self.parameter_space_output))
+            best_err_amp = np.zeros(len(self.parameter_space_output))
+            mean_err_amp = np.zeros(len(self.parameter_space_output))
 
-        worst_err_phase = np.zeros(len(self.parameter_space_output))
-        best_err_phase = np.zeros(len(self.parameter_space_output))
-        mean_err_phase = np.zeros(len(self.parameter_space_output))
+            worst_err_phase = np.zeros(len(self.parameter_space_output))
+            best_err_phase = np.zeros(len(self.parameter_space_output))
+            mean_err_phase = np.zeros(len(self.parameter_space_output))
 
-        for i in range(len(self.parameter_space_output)):
-            true_amp = np.array(waveform.utils.amplitude_from_polarizations(true_hp[i], true_hc[i]))[-self.waveform_size:]
-            true_phase = np.array(waveform.utils.phase_from_polarizations(true_hp[i], true_hc[i]))[-self.waveform_size:]
+            for i in range(len(self.parameter_space_output)):
+                true_amp = np.array(waveform.utils.amplitude_from_polarizations(true_hp[i], true_hc[i]))[-self.waveform_size:]
+                true_phase = np.array(waveform.utils.phase_from_polarizations(true_hp[i], true_hc[i]))[-self.waveform_size:]
 
-            pointwise_error_phase = abs(surrogate_phase.T[i] - true_phase) / abs(true_phase)
-            pointwise_error_amp = abs(surrogate_amp.T[i] - true_amp) / abs(true_amp)
+                pointwise_error_phase = abs(surrogate_phase.T[i] - true_phase) / abs(true_phase)
+                pointwise_error_amp = abs(surrogate_amp.T[i] - true_amp) / abs(true_amp)
 
-            best_err_amp[i], worst_err_amp[i], mean_err_amp[i] = min(pointwise_error_amp), max(pointwise_error_amp), np.mean(pointwise_error_amp)
-            best_err_phase[i], worst_err_phase[i], mean_err_phase[i] = min(pointwise_error_phase), max(pointwise_error_phase), np.mean(pointwise_error_phase)
+                best_err_amp[i], worst_err_amp[i], mean_err_amp[i] = min(pointwise_error_amp), max(pointwise_error_amp), np.mean(pointwise_error_amp)
+                best_err_phase[i], worst_err_phase[i], mean_err_phase[i] = min(pointwise_error_phase), max(pointwise_error_phase), np.mean(pointwise_error_phase)
 
-        pointwise_errs, axs = plt.subplots(2)
+            if save_pointwise_errors_to_file is True and not os.path.isfile(f'Straindata/Pointwise_error/Pointwise_error_{self.parameter_space[0]}_{self.parameter_space[1]}_Ni={self.amount_input_wfs}_No={self.amount_output_wfs}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}.npz'):
+                # Ensure the directory exists, creating it if necessary and save
+                os.makedirs('Straindata/Pointwise_error', exist_ok=True)
+                np.savez(f'Straindata/Pointwise_error/Pointwise_error_{self.parameter_space[0]}_{self.parameter_space[1]}_Ni={self.amount_input_wfs}_No={self.amount_output_wfs}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}.npz', best_err_amp=best_err_amp, mean_err_amp=mean_err_amp, worst_err_amp=worst_err_amp, best_err_phase=best_err_phase, mean_err_phase=mean_err_phase, worst_err_phase=worst_err_phase, generation_t_surr=generation_time_surr, generation_t_full_wfs=generation_time_full_wfs)
+                print('Pointwise errors saved to Straindata/Pointwise_error')
+
+        fig_pointwise_err, axs = plt.subplots(2)
         
         axs[0].plot(self.parameter_space_output, best_err_phase, linewidth=0.6, label=f'best error', color='green')
         axs[0].plot(self.parameter_space_output, worst_err_phase, linewidth=0.6, label=f'worst error', color='red')
         axs[0].plot(self.parameter_space_output, mean_err_phase, linewidth=0.6, label=f'mean error', color='blue')
-        # axs[0].plot(self.parameter_space_output, surrogate_phase)
-        # axs[0].plot(self.parameter_space_output, self.phase_shift_total_output, label='phase shift')
-        # axs[0].plot(self.parameter_space_input, self.phase_shift_total_input)
+
         axs[0].set_xlabel('eccentricity')
         axs[0].set_ylabel('|$\phi_S$ - $\phi$|')
         axs[0].grid(True)
@@ -525,6 +537,7 @@ class Surrogate_analysis(Generate_Surrogate):
         axs[1].plot(self.parameter_space_output, best_err_amp, linewidth=0.6, label=f'best error', color='green')
         axs[1].plot(self.parameter_space_output, worst_err_amp, linewidth=0.6, label=f'worst error', color='red')
         axs[1].plot(self.parameter_space_output, mean_err_amp, linewidth=0.6, label=f'mean error', color='blue')
+        
         axs[1].set_xlabel('eccentricity')
         axs[1].set_ylabel('|($A_S$ - A) / A|')
         axs[1].grid(True)
@@ -532,32 +545,42 @@ class Surrogate_analysis(Generate_Surrogate):
 
         # Adjust layout to prevent overlap
         plt.tight_layout()
+
+        if save_pointwise_error_fig is True:
+            figname_pointwise = 'Pointwise_errors_M={}_q={}_ecc=[{}_{}]_fmin={}_iN={}_oN={}_gp={}_ga={}.png'.format(self.total_mass, self.mass_ratio, min(self.parameter_space), max(self.parameter_space), self.freqmin, self.amount_input_wfs, self.amount_output_wfs, self.min_greedy_error_phase, self.min_greedy_error_amp)
+            
+            # Ensure the directory exists, creating it if necessary and save
+            os.makedirs('Images/Pointwise_error', exist_ok=True)
+            fig_pointwise_err.savefig('Images/Pointwise_error/' + figname_pointwise)
+
+            print('Figures are saved in Images/Pointwise_error')
         
         if plot_surr is True:
             ecc_worst_phase = self.parameter_space_output[np.argmax(worst_err_phase)]
-            ecc_best_phase = self.parameter_space_output[np.argmin(worst_err_phase)]
+            for i in range(len(worst_err_phase)):
+                if worst_err_phase[i] > np.mean(worst_err_phase)*10:
+                    worst_err_phase[i] = 0
+            for i in range(len(worst_err_phase) - 1):
+                if np.diff(worst_err_phase)[i] > 5:
+                    print(worst_err_phase[i], np.diff(worst_err_phase)[i])
+            ecc_second_worst_phase = self.parameter_space_output[np.argmax(worst_err_phase)]
+            # ecc_best_phase = self.parameter_space_output[np.argmin(worst_err_phase)]
 
-            self.generate_surrogate_model(plot_surr_at_ecc=ecc_worst_phase, plot_surr_datapiece_at_ecc=ecc_worst_phase, plot_GPRfit=True)
-            # self.generate_surrogate_model(plot_surr_at_ecc=ecc_best_phase, plot_surr_datapiece_at_ecc=ecc_best_phase, plot_GPRfit=True)
+            print('worst err phase', worst_err_phase)
+
+            self.generate_surrogate_model(plot_surr_at_ecc=ecc_worst_phase, plot_surr_datapiece_at_ecc=ecc_worst_phase, plot_GPRfit=True, save_fig_datapiece=True, save_fig_surr=True)
+            self.generate_surrogate_model(plot_surr_at_ecc=ecc_second_worst_phase, plot_surr_datapiece_at_ecc=ecc_second_worst_phase, plot_GPRfit=True, save_fig_datapiece=True, save_fig_surr=True)
+            # self.generate_surrogate_model(plot_surr_at_ecc=ecc_best_phase, plot_surr_datapiece_at_ecc=ecc_best_phase, plot_GPRfit=True, save_fig_datapiece=True, save_fig_surr=True)
 
         return best_err_amp, mean_err_amp, worst_err_amp, best_err_phase, mean_err_phase, worst_err_phase, generation_time_surr, generation_time_full_wfs
     
-    def pointwise_error_analysis(self, parameter_space, save_mismatches_inputs_fig=False):
+    def pointwise_error_analysis(self, parameter_space, amount_input_wfs, amount_output_wfs, greedy_errors, save_pointwise_errors_fig=True, save_pointwise_errors_to_file=True):
 
-        # greedy_errors = [5e-4, 1e-3, 5e-3, 1e-2]
-        greedy_errors = [1e-3]
-        worst_errs_phase, best_errs_phase, mean_errs_phase = [], [], []
-        worst_errs_amp, best_errs_amp, mean_errs_amp = [], [], []
-        generation_times_surr = []
-        generation_times_full_wfs = []
+        worst_of_worst_errs_phase, best_of_worst_errs_phase, mean_of_worst_errs_phase = np.zeros(len(greedy_errors)), np.zeros(len(greedy_errors)), np.zeros(len(greedy_errors))
+        worst_of_worst_errs_amp, best_of_worst_errs_amp, mean_of_worst_errs_amp = np.zeros(len(greedy_errors)), np.zeros(len(greedy_errors)), np.zeros(len(greedy_errors))
+        generation_times_surr = np.zeros(len(greedy_errors))
 
-        for greedy_err in greedy_errors:
-
-            surrogate = Surrogate_analysis(parameter_space=parameter_space, amount_input_wfs=35, amount_output_wfs=1000, min_greedy_error_amp=greedy_err, min_greedy_error_phase=greedy_err, waveform_size=self.waveform_size, freqmin=self.freqmin)
-            best_err_amp, mean_err_amp, worst_err_amp, best_err_phase, mean_err_phase, worst_err_phase, generation_t_surr, generation_t_full_wfs = surrogate.surrogate_pointwise_error(plot_surr=True)
-            
-            file_path = 'Straindata/Polarisations/polarisations_e=[0.01_0.2]_N=35.npz'
-
+        def delete_existing_file(file_path):
             # Check if the file exists before attempting to delete
             if os.path.exists(file_path) and os.path.isfile(file_path):
                 os.remove(file_path)
@@ -565,63 +588,104 @@ class Surrogate_analysis(Generate_Surrogate):
             else:
                 print(f"File '{file_path}' does not exist.")
 
-            generation_times_surr.append(generation_t_surr)
-            generation_times_full_wfs.append(generation_t_full_wfs)
+        # delete_existing_file(f'true_polarisations_[{parameter_space[0]}_{parameter_space[1]}]_N={amount_output_wfs}.npz')
 
-            worst_err_phase, best_err_phase, mean_err_phase = max(worst_err_phase), min(worst_err_phase), np.mean(worst_err_phase)
-            worst_err_amp, best_err_amp, mean_err_amp = max(worst_err_amp), min(worst_err_amp), np.mean(worst_err_amp)
+        for i, greedy_err in enumerate(greedy_errors):
+            print(f'Calculate pointwise error for: greedy_error = {greedy_err}')
+
+            # Delete saved polarisations if exists
+            file_path_polarisations = f'Straindata/Polarisations/polarisations_e=[{parameter_space[0]}_{parameter_space[1]}]_N={amount_input_wfs}.npz'
+            delete_existing_file(file_path_polarisations)
+
+            surrogate = Surrogate_analysis(parameter_space=parameter_space, amount_input_wfs=amount_input_wfs, amount_output_wfs=amount_output_wfs, min_greedy_error_amp=greedy_err, min_greedy_error_phase=greedy_err, waveform_size=self.waveform_size, freqmin=self.freqmin)
+            best_errs_amp, mean_errs_amp, worst_errs_amp, best_errs_phase, mean_errs_phase, worst_errs_phase, generation_times_surr[i], generation_t_full_wfs = surrogate.surrogate_pointwise_error(plot_surr=True, save_pointwise_error_fig=True)
+
+                
+            # Get best, mean and worst value of the WORST approximated points in eccentric waveforms.
+            for j in range(len(worst_errs_phase)):
+                if worst_errs_phase[j] > np.mean(worst_errs_phase)*10:
+                    print(worst_errs_phase[j])
+
+            worst_of_worst_errs_phase[i], best_of_worst_errs_phase[i], mean_of_worst_errs_phase[i] = max(worst_errs_phase), min(worst_errs_phase), np.mean(worst_errs_phase)
+            worst_of_worst_errs_amp[i], best_of_worst_errs_amp[i], mean_of_worst_errs_amp[i] = max(worst_errs_amp), min(worst_errs_amp), np.mean(worst_errs_amp)
             
-            worst_errs_phase.append(worst_err_phase), best_errs_phase.append(best_err_phase), mean_errs_phase.append(mean_err_phase)
-            worst_errs_amp.append(worst_err_amp), best_errs_amp.append(best_err_amp), mean_errs_amp.append(mean_err_amp)
-
+          
         fig_pointwise_errs = plt.figure()
         for i in range(len(greedy_errors)):
-            plt.scatter(greedy_errors[i], worst_errs_phase[i], marker='+', color='red', label='+ = $\phi$')
-            plt.scatter(greedy_errors[i], best_errs_phase[i], marker='+', color='green')
-            plt.scatter(greedy_errors[i], mean_errs_phase[i], marker='+', color='blue')
-            plt.scatter(greedy_errors[i], worst_errs_amp[i], marker='x', color='red', label='x = A')
-            plt.scatter(greedy_errors[i], best_errs_amp[i], marker='x', color='green')
-            plt.scatter(greedy_errors[i], mean_errs_amp[i], marker='x', color='blue')
+            plt.scatter(greedy_errors[i], worst_of_worst_errs_phase[i], marker='s', color='red')
+            plt.scatter(greedy_errors[i], best_of_worst_errs_phase[i], marker='s', color='green')
+            plt.scatter(greedy_errors[i], mean_of_worst_errs_phase[i], marker='s', color='blue')
+            plt.scatter(greedy_errors[i], worst_of_worst_errs_amp[i], marker='^', color='red')
+            plt.scatter(greedy_errors[i], best_of_worst_errs_amp[i], marker='^', color='green')
+            plt.scatter(greedy_errors[i], mean_of_worst_errs_amp[i], marker='^', color='blue')
 
         plt.xlabel('minimum greedy error')
         plt.ylabel('worst pointwise error')
         plt.grid()
         plt.legend()
 
+        colors = sns.color_palette("tab20")
+
         fig_generation_time = plt.figure()
         for i in range(len(greedy_errors)):
-            plt.scatter(worst_errs_phase[i], generation_times_surr[i], marker='s')
-            plt.plot(worst_errs_phase[i], generation_times_surr[i], linewidth=0.6, label=f'N={greedy_errors[i]}')
-            plt.scatter(worst_errs_amp[i], generation_times_surr[i], marker='^')
-            plt.plot(worst_errs_amp[i], generation_times_surr[i], linewidth=0.6)
-            plt.plot(np.linspace(0, 1, num=1000), np.full(1000, generation_times_full_wfs[i]), label='full waveform set')
-        plt.ylabel('surrogate generation time')
-        plt.xlabel('worst pointwise datapiece')
+            plt.scatter(mean_of_worst_errs_phase[i], generation_times_surr[i], marker='s', color=colors[i], label=f'greedy error = {greedy_errors[i]}')
+            plt.scatter(mean_of_worst_errs_amp[i], generation_times_surr[i], marker='^', color=colors[i])
+        plt.plot(np.linspace(0, max(mean_of_worst_errs_amp + mean_of_worst_errs_phase)*1.2, num=1000), np.full(1000, generation_t_full_wfs), linestyle='dashed', color='black', lw=0.6, label='full waveform set')
+        plt.ylabel('surrogate computational time')
+        plt.xlabel('mean of worst pointwise error')
         plt.grid()
-        plt.legend()
+        plt.legend(loc='upper right')
 
 
-        if save_mismatches_inputs_fig is True:
-                figname = 'Pointwise_errors_analysis_M={}_q={}_ecc=[{}_{}]_o={}_gp={}_ga={}.png'.format(self.total_mass, self.mass_ratio, min(parameter_space), max(parameter_space), len(self.parameter_space_output), self.min_greedy_error_phase, self.min_greedy_error_amp)
+        if save_pointwise_errors_fig is True:
+                figname_pointwise = 'Pointwise_errors_analysis_M={}_q={}_ecc=[{}_{}]_iN={}_oN={}.png'.format(self.total_mass, self.mass_ratio, min(parameter_space), max(parameter_space), amount_input_wfs, amount_output_wfs)
+                figname_compu_cost = 'Computational_cost_M={}_q={}_ecc=[{}_{}]_iN={}_oN={}.png'.format(self.total_mass, self.mass_ratio, min(parameter_space), max(parameter_space), amount_input_wfs, amount_output_wfs)
                         
                 # Ensure the directory exists, creating it if necessary and save
                 os.makedirs('Images/Pointwise_error', exist_ok=True)
-                fig_pointwise_errs.savefig('Images/Pointwise_error/' + figname)
+                os.makedirs('Images/Computational_efficiency', exist_ok=True)
+                fig_pointwise_errs.savefig('Images/Pointwise_error/' + figname_pointwise)
+                fig_generation_time.savefig('Images/Computational_efficiency/' + figname_compu_cost)
 
-                print('Figure is saved in Images/Pointwise_error')
-    
+                print('Figures are saved in Images/Pointwise_error and Images/Computational_efficiency')
+
 # analysis = Surrogate_analysis(parameter_space=[0.01, 0.3], amount_input_wfs=30, amount_output_wfs=1000, min_greedy_error_amp=5e-4, min_greedy_error_phase=5e-4, waveform_size=3500, freqmin=18)
-# TS11 = analysis1.get_training_set(property='phase', min_greedy_error=5e-4, plot_greedy_error=True, plot_training_set=True)
+# TS11 = analysis1.get_training_set(property='phase', min_greedy_error=1e-3, plot_greedy_error=True, plot_training_set=True)
 # TS12 = analysis1.get_training_set(property='amplitude', N_greedy_vecs=20, plot_greedy_error=True, plot_training_set=True)
 # print(TS1.shape, TS2.shape)
 # analysis.get_surrogate_mismatches(plot_mismatches=True, save_mismatch_fig=True, plot_worst_err=True)
 
 # analysis = Surrogate_analysis(parameter_space=[0.01, 0.2], amount_input_wfs=40, amount_output_wfs=500, min_greedy_error_amp=1e-3, min_greedy_error_phase=1e-3, waveform_size=3500, freqmin=18)
-analysis = Surrogate_analysis(parameter_space=[0.01, 0.2], amount_input_wfs=35, amount_output_wfs=1000, min_greedy_error_amp=1e-3, min_greedy_error_phase=1e-3, waveform_size=3500, freqmin=18)
+analysis = Surrogate_analysis(parameter_space=[0.01, 0.3], amount_input_wfs=1000, amount_output_wfs=1000, N_greedy_vecs_amp=1000, N_greedy_vecs_phase=1000, waveform_size=5000, freqmin=20)
 # print(analysis.parameter_space_output)
 # analysis.generate_property_dataset(np.linspace(0.01, 0.2, num=9), 'phase', plot_residuals=True)
-# analysis.surrogate_datapiece_error()
-analysis.pointwise_error_analysis(parameter_space=[0.01, 0.2], save_mismatches_inputs_fig=True)
+# analysis.surrogate_pointwise_error(plot_surr=True, save_pointwise_error_fig=True)
+analysis.get_training_set(property='phase', N_greedy_vecs=1000, plot_greedy_error=True, save_greedy_fig=True)
+analysis.get_training_set(property='amplitude', N_greedy_vecs=1000, plot_greedy_error=True, save_greedy_fig=True)
+# analysis = Surrogate_analysis(parameter_space=[0.01, 0.3], amount_input_wfs=60, amount_output_wfs=1000, min_greedy_error_amp=1e-3, min_greedy_error_phase=1e-3, waveform_size=2200, freqmin=18)
+# # print(analysis.parameter_space_output)
+# # analysis.generate_property_dataset(np.linspace(0.01, 0.2, num=9), 'phase', plot_residuals=True)
+# # analysis.surrogate_pointwise_error(plot_surr=True, save_pointwise_error_fig=True)
+# analysis.fit_to_training_set('phase', 1e-3, plot_fits=True)
+# analysis.fit_to_training_set('amplitude', 1e-3, plot_fits=True)
+
+# analysis = Surrogate_analysis(parameter_space=[0.01, 0.3], amount_input_wfs=70, amount_output_wfs=1000, min_greedy_error_amp=1e-3, min_greedy_error_phase=1e-3, waveform_size=2200, freqmin=18)
+# # print(analysis.parameter_space_output)
+# # analysis.generate_property_dataset(np.linspace(0.01, 0.2, num=9), 'phase', plot_residuals=True)
+# # analysis.surrogate_pointwise_error(plot_surr=True, save_pointwise_error_fig=True)
+# analysis.fit_to_training_set('phase', 5e-4, plot_fits=True)
+# analysis.fit_to_training_set('amplitude', 5e-4, plot_fits=True)
+
+# analysis.pointwise_error_analysis(parameter_space=[0.01, 0.3], amount_input_wfs=60, amount_output_wfs=1500, greedy_errors=[5e-4, 7e-4, 8e-4, 1e-3, 3e-3])
+# 5e-4, 7e-4, 8e-4, 1e-3, 3e-3, 5e-3, 1e-2
+
+# analysis.pointwise_error_analysis(parameter_space=[0.01, 0.2], amount_input_wfs=35, amount_output_wfs=1000, greedy_errors=[5e-4, 8e-4, 1e-3, 3e-3])
+# wp1 = Waveform_Properties(eccmin=0.2, freqmin=20)
+# wp2 = Waveform_Properties(eccmin=0.2, freqmin=10)
+# hp1, hc1, TS1 = wp1.simulate_inspiral_mass_independent()
+# hp2, hc2, TS2 = wp2.simulate_inspiral_mass_independent()
+# wp1.calculate_residual(hp1, hc1, 'phase', plot_residual=True)
+# wp2.calculate_residual(hp2, hc2, 'phase', plot_residual=True)
 plt.show()
 # TS21 = analysis.get_training_set(property='phase', min_greedy_error=1e-3, plot_greedy_error=True, plot_training_set=True)
 # TS22 = analysis.get_training_set(property='amplitude', min_greedy_error=1e-3, plot_greedy_error=True, plot_training_set=True)
