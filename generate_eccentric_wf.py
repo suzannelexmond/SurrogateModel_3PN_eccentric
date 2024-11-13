@@ -116,15 +116,18 @@ class Simulate_Inspiral:
             if self.waveform_size is None:
                 self.waveform_size = len(TS_M)
 
-            fig_simulate_inspiral = plt.figure()
-            
+            fig_simulate_inspiral = plt.figure(figsize=(12,5))
+
             length_diff = len(TS) - self.waveform_size
+
             plt.plot(TS[length_diff:], hp_TS[length_diff:], label = f'$h_+$', linewidth=0.2)
+            plt.plot(TS, hp_TS, label = f'ecc = {eccmin}', linewidth=0.6, color='#0072B2')
+
             # plt.plot(TS, np.real(h))
             # plt.plot(TS_M[length_diff:], hc_TS[length_diff:], label = f'$h_x$', linestyle='dashed', linewidth=0.6)
             plt.legend(loc = 'upper left')
-            plt.xlabel('t [M]')
-            plt.ylabel('h$_{22}$')
+            plt.xlabel('t [s]')
+            plt.ylabel('$h_{22}$')
             plt.title(f'M={self.total_mass}$M_\odot$, q={self.mass_ratio}, e={eccmin}, f_min={self.freqmin} Hz')
             plt.grid(True)
 
@@ -193,15 +196,18 @@ class Waveform_Properties(Simulate_Inspiral):
             # Apply universal phaseshift to set all phases to zero at t_ref
             # eccentric -= eccentric[-self.waveform_size]
             # circ -= circ[-self.waveform_size]
-
-            residual = circ[len(circ) - len(eccentric):] - eccentric
+            waveform_size = min(len(circ), len(eccentric))
+            residual = circ[-waveform_size:] - eccentric[-waveform_size:]
+            # residual = circ[len(circ) - len(eccentric):] - eccentric
 
         elif property == 'amplitude':
             circ = np.array(waveform.utils.amplitude_from_polarizations(self.hp_TS_circ, self.hc_TS_circ))
             eccentric = np.array(waveform.utils.amplitude_from_polarizations(hp, hc))
             units = ''
 
-            residual = eccentric - circ[len(circ) - len(eccentric):]
+            waveform_size = min(len(circ), len(eccentric))
+            residual = eccentric[-waveform_size:] - circ[-waveform_size:] 
+            # residual = eccentric - circ[len(circ) - len(eccentric):]
 
         elif property == 'frequency':
             circ = waveform.utils.frequency_from_polarizations(self.hp_TS_circ, self.hc_TS_circ)
@@ -213,7 +219,8 @@ class Waveform_Properties(Simulate_Inspiral):
             self.TS_M_circ = -circ.sample_times[::-1] / (lal.MTSUN_SI * self.total_mass )
             circ, eccentric = np.array(circ), np.array(eccentric)
 
-            residual = eccentric - circ[len(circ) - len(eccentric):]
+            waveform_size = min(len(circ), len(eccentric))
+            residual = eccentric[-waveform_size:] - circ[-waveform_size:] 
         else:
             print('Choose property = "phase", "amplitude", "frequency"', property, 2)
             sys.exit(1)
@@ -449,3 +456,7 @@ class Waveform_Properties(Simulate_Inspiral):
 
 #         ax.set(xlabel='t [M]', ylabel=f'{property} {units}', title='Residual')
 
+# wp = Waveform_Properties(eccmin=0.2, freqmin=10)
+# hp, hc, TS = wp.simulate_inspiral_mass_independent(plot_polarisations=True)
+# wp.calculate_residual(hp, hc, 'phase', plot_residual=True)
+# plt.show()
