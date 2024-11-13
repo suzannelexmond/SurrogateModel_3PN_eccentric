@@ -65,7 +65,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
         try: 
             # Attempt to load existing residual dataset
-            load_residuals = np.load(f'Straindata/Residuals/residuals_{property}_e=[{min(eccmin_list)}_{max(eccmin_list)}]_N={len(eccmin_list)}.npz_')
+            load_residuals = np.load(f'Straindata/Residuals_/residuals_{property}_e=[{min(eccmin_list)}_{max(eccmin_list)}]_N={len(eccmin_list)}.npz_')
             residual_dataset = load_residuals['residual']
             self.TS_M = load_residuals['TS_M'][-self.waveform_size:]
             phase_shift_eccminlist = load_residuals['total_phase_shift']
@@ -85,7 +85,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
        
         # If plot_residuals is True, plot whole residual dataset
         if plot_residuals is True:
-            self._plot_residuals(residual_dataset, eccmin_list, property, save_fig)
+            self._plot_residuals(residual_dataset, eccmin_list, phase_shift_eccminlist, property, save_fig)
         
         self.TS_M = self.TS_M[-self.waveform_size:]
         return residual_dataset, phase_shift_eccminlist
@@ -110,7 +110,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         """
         try:
             # Attempt to load existing polarisation dataset
-            load_polarisations = np.load(f'Straindata/Polarisations/polarisations_e=[{min(eccmin_list)}_{max(eccmin_list)}]_N={len(eccmin_list)}.npz', allow_pickle=True)
+            load_polarisations = np.load(f'Straindata/Polarisations/polarisations_e=[{min(eccmin_list)}_{max(eccmin_list)}]_N={len(eccmin_list)}_fmin={self.freqmin}_M={self.total_mass}_q={self.mass_ratio}.npz', allow_pickle=True)
             hp_dataset = load_polarisations['hp']
             hc_dataset = load_polarisations['hc']
             self.TS_M = load_polarisations['TS']
@@ -133,7 +133,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
             # Ensure the directory exists, creating it if necessary and save
             os.makedirs('Straindata/Polarisations', exist_ok=True)
-            np.savez(f'Straindata/Polarisations/polarisations_e=[{min(eccmin_list)}_{max(eccmin_list)}]_N={len(eccmin_list)}.npz', hp=hp_dataset, hc=hc_dataset, TS=self.TS_M)
+            np.savez(f'Straindata/Polarisations/polarisations_e=[{min(eccmin_list)}_{max(eccmin_list)}]_N={len(eccmin_list)}_fmin={self.freqmin}_M={self.total_mass}_q={self.mass_ratio}.npz', hp=hp_dataset, hc=hc_dataset, TS=self.TS_M)
 
         return hp_dataset, hc_dataset, self.TS_M
 
@@ -159,57 +159,60 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         phase_shift_eccminlist : ndarray
             Phase shift for each eccentricity in eccmin_list.
         """
+        # Get length of non-eccentric case for waveform size limits
+        self.circulair_wf()
+        limit_waveform_size = min(len(self.TS_M), len(hp_dataset[-1])) - 20
+        if self.waveform_size > limit_waveform_size:
+            self.waveform_size = limit_waveform_size
+
         # Create residual dataset
         residual_dataset = np.zeros((len(eccmin_list), self.waveform_size))
-        
+
         for i, eccmin in enumerate(eccmin_list):
             # Convert numpy arrays back to Timeseries object for residual calculation
             hp, hc = TimeSeries(hp_dataset[i], delta_t=self.DeltaT), TimeSeries(hc_dataset[i], delta_t=self.DeltaT)
             residual = self.calculate_residual(hp, hc, property)
-            try :
-                residual_dataset[i] = residual[-self.waveform_size:]
-            except:
-                print('Waveform size if too short. Waveform is by default set to length of shortest waveform.')
-                self.waveform_size = len(hp_dataset[-1]) - 20 # Cut waveform to smallest waveform size + 20 for rough start cutoff
-                residual_dataset = residual_dataset[:, :self.waveform_size]
-                residual_dataset[i] = residual[-self.waveform_size:]
-            
-
+            residual_dataset[i] = residual[-self.waveform_size:]
         
         # Create phaseshift dataset 
         phase_shift_eccminlist = np.zeros(len(eccmin_list))
         if property == 'phase':
 
-            # # File with very largly extended parameterspace to accurately predict the phase shifts
-            # load_phase_shifts = np.load(f'Straindata/Phaseshift/estimated_phase_shift_{self.freqmin}Hz.npz')
-            # loaded_phase_shift = load_phase_shifts['phase_shift']
-            # loaded_parameter_space = load_phase_shifts['parameter_space']
+            # File with very largly extended parameterspace to accurately predict the phase shifts
+            load_phase_shifts = np.load(f'Straindata/Phaseshift/estimated_phase_shift_{self.freqmin}Hz.npz')
+            loaded_phase_shift = load_phase_shifts['total_phase_shift']
+            loaded_parameter_space = load_phase_shifts['parameter_space']
                 
-            # # Only use eccentricities for requested surrogate model
-            # total_phase_shift_cut = loaded_phase_shift[loaded_parameter_space <= max(eccmin_list)]
-            # old_size = len(total_phase_shift_cut)
-            # new_size = len(eccmin_list)
+            # Only use eccentricities for requested surrogate model
+            total_phase_shift_cut = loaded_phase_shift[(min(self.parameter_space_input) <= loaded_parameter_space) & (loaded_parameter_space <= max(self.parameter_space_input))]
 
-            # # Generate the old and new indices
-            # old_indices = np.linspace(0, old_size - 1, old_size)
-            # new_indices = np.linspace(0, old_size - 1, new_size)
+            old_size = len(total_phase_shift_cut)
+            new_size = len(eccmin_list)
 
-            # # Interpolate the values at the new indices
-            # phase_shift_eccminlist = np.interp(new_indices, old_indices, total_phase_shift_cut)
-            phase_shift_eccminlist = residual_dataset[:, 0]
-            self._save_phase_shifts(phase_shift_eccminlist)
+            # Generate the old and new indices
+            old_indices = np.linspace(0, old_size - 1, old_size)
+            new_indices = np.linspace(0, old_size - 1, new_size)
+
+            # Interpolate the values at the new indices
+            phase_shift_eccminlist = np.interp(new_indices, old_indices, total_phase_shift_cut)
+
+            # phase_shift_eccminlist = -residual_dataset[:, 0]
+            # self._save_phase_shifts(phase_shift_eccminlist)
+
             # Adjust residual dataset to cancel out the phase sudden shifts
-            residual_dataset = (residual_dataset.T + phase_shift_eccminlist).T
+            residual_dataset = (residual_dataset.T - phase_shift_eccminlist).T
 
         return residual_dataset, phase_shift_eccminlist
     
-    def _plot_residuals(self, residual_dataset, eccmin_list, property, save_fig):
+    def _plot_residuals(self, residual_dataset, eccmin_list, phase_shift_eccminlist, property, save_fig):
         """Function to plot and option for saving residuals."""
+        print(phase_shift_eccminlist)
         fig_residuals = plt.figure()
 
         for i in range(len(residual_dataset)):
-            plt.plot(self.TS_M[-self.waveform_size:], residual_dataset[i], label='e$_{min}$' + f' = {eccmin_list[i]}', linewidth=0.6)
-        
+            # plt.plot(self.TS_M[-self.waveform_size:], residual_dataset[i], label='e$_{min}$' + f' = {eccmin_list[i]}', linewidth=0.6)
+            plt.plot(eccmin_list, residual_dataset.T[i])
+            # plt.plot(eccmin_list, phase_shift_eccminlist)
         plt.xlabel('t [M]')
         if property == 'phase':
             plt.ylabel(' $\Delta \phi_{22}$ [radians]')
@@ -220,12 +223,12 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             sys.exit(1)
         plt.title(f'Residuals {property}')
         plt.grid(True)
-        plt.legend(fontsize='small')
+        # plt.legend(fontsize='small')
 
         plt.tight_layout()
 
         if save_fig is True:
-            figname = f'Residuals M={self.total_mass}, q={self.mass_ratio}, ecc_list=[{min(eccmin_list)}_{max(eccmin_list)}].png'
+            figname = f'Residuals_{property}_M={self.total_mass}_q={self.mass_ratio}_ecc_list=[{min(eccmin_list)}_{max(eccmin_list)}]_fmin={self.freqmin}_iN={len(self.parameter_space_input)}.png'
             # Ensure the directory exists, creating it if necessary and save
             os.makedirs('Images/Residuals', exist_ok=True)
             fig_residuals.savefig('Images/Residuals/' + figname)
@@ -250,7 +253,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
     def get_greedy_parameters(self, U, property, min_greedy_error=None, N_greedy_vecs=None, reg=1e-6, 
                             plot_greedy_error=True, plot_validation_errors=False, save_validation_fig=False, 
-                            save_greedy_fig=False):
+                            save_greedy_fig=True):
         """
         Perform strong greedy algorithm to select the basis vectors with highest uniqueness. 
         The process stops when either convergence is reached or when a specified number of 
@@ -352,17 +355,21 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         plt.figure(figsize=(7, 5))
         plt.plot(N_basis_vectors, greedy_errors, label='Greedy Errors')
         plt.scatter(N_basis_vectors, greedy_errors, s=4)
-        for i, label in enumerate(self.parameter_space_input[greedy_parameters_idx]):
-            plt.annotate(label, (N_basis_vectors[i], greedy_errors[i]), textcoords="offset points", xytext=(5, 5), ha='center', fontsize=5.5)
+        # for i, label in enumerate(self.parameter_space_input[greedy_parameters_idx]):
+        #     plt.annotate(label, (N_basis_vectors[i], greedy_errors[i]), textcoords="offset points", xytext=(5, 5), ha='center', fontsize=5.5)
         plt.xlabel('Number of Waveforms')
-        plt.ylabel('Greedy Error')
+        if property == 'phase':
+            plt.ylabel(f'Greedy error $\Delta \phi$')
+        elif property == 'amplitude':
+            plt.ylabel(f'Greedy error $\Delta A$')
         plt.yscale('log')
-        plt.title('Greedy errors of residual {} for N = {}'.format(property, len(greedy_errors)-1))
+        # plt.title('Greedy errors of residual {} for N = {}'.format(property, len(greedy_errors)-1))
         plt.grid(True)
 
         if save_greedy_fig:
             os.makedirs('Images/Greedy_errors', exist_ok=True)
-            plt.savefig(f'Images/Greedy_errors/Greedy_error_{property}_{self.total_mass}.png')
+            plt.savefig(f'Images/Greedy_errors/Greedy_error_{property}_M={self.total_mass}_q={self.mass_ratio}_ecc=[{min(self.parameter_space_input)}_{max(self.parameter_space_input)}]_fmin={self.freqmin}_iN={len(self.parameter_space_input)}_gerr={min(greedy_errors).round(4)}.png')
+            print('Greedy error fig saved to Images/Greedy_errors')
 
     def _plot_validation_errors(self, validation_vecs, greedy_basis, trivial_basis, property, save_validation_fig):
         """Function to plot and option to save validation errors."""
@@ -397,10 +404,10 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
         if save_validation_fig:
             os.makedirs('Images/Validation_errors', exist_ok=True)
-            plt.savefig(f'Images/Validation_errors/Validation_error_{property}_{self.total_mass}.png')
+            plt.savefig(f'Images/Validation_errors/Validation_error_{property}_M={self.total_mass}_q={self.mass_ratio}_ecc=[{min(self.parameter_space_input)}_{max(self.parameter_space_input)}]_fmin={self.freqmin}_iN={len(self.parameter_space_input)}.png')
 
 
-    def get_empirical_nodes(self, reduced_basis, property, plot_emp_nodes=False, save_fig=False):
+    def get_empirical_nodes(self, reduced_basis, property, plot_emp_nodes=True, save_fig=True):
         """
         Calculate the empirical nodes for a given dataset based on a reduced basis of residual properties.
 
@@ -493,7 +500,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         ax.legend(loc='upper left')
 
         if save_fig:
-            fig_path = f'Images/Empirical_nodes/EIM_{property}_e={eccentricity}.png'
+            fig_path = f'Images/Empirical_nodes/EIM_{property}_e={eccentricity}_M={self.total_mass}_q={self.mass_ratio}_fmin={self.freqmin}_iN={len(self.parameter_space_input)}_gN={len(self.greedy_parameters_idx)}.png'
             os.makedirs(os.path.dirname(fig_path), exist_ok=True)
             fig.savefig(fig_path)
             print(f'Figure is saved in {fig_path}')
@@ -577,14 +584,15 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         ax.grid(True)
 
         if save_fig:
-            figname = f'Training set {property} M={self.total_mass}, q={self.mass_ratio}, ecc_list=[{min(self.parameter_space_input)}_{max(self.parameter_space_input)}].png'
+            figname = f'Training_set_{property}_M={self.total_mass}_q={self.mass_ratio}_ecc_list=[{min(self.parameter_space_input)}_{max(self.parameter_space_input)}]_fmin={self.freqmin}_gN={len(self.greedy_parameters_idx)}.png'
             os.makedirs('Images/TrainingSet', exist_ok=True)
             fig.savefig(f'Images/TrainingSet/{figname}')
             print('Figure is saved in Images/TrainingSet')
 
 
-gt = Generate_TrainingSet(np.linspace(0.01, 0.4, num=5000), 30000, freqmin=10)
-gt.generate_property_dataset(np.linspace(0.01, 0.4, num=5000), 'phase', save_dataset_to_file=True)
-gt = Generate_TrainingSet(np.linspace(0.01, 0.4, num=5000), 30000, freqmin=20)
-gt.generate_property_dataset(np.linspace(0.01, 0.4, num=5000), 'phase', save_dataset_to_file=True)
+# gt = Generate_TrainingSet(np.linspace(0.01, 0.3, num=20), 1000, freqmin=20)
+# gt.generate_property_dataset(eccmin_list=np.linspace(0.01, 0.3, num=100), property='phase', plot_residuals=True)
+# plt.show()
+# gt = Generate_TrainingSet(np.linspace(0.01, 0.4, num=5000), 30000, freqmin=20)
+# gt.generate_property_dataset(np.linspace(0.01, 0.4, num=5000), 'phase', save_dataset_to_file=True)
 
