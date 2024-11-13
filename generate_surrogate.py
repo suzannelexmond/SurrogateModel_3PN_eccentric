@@ -31,106 +31,7 @@ class Generate_Surrogate(Generate_TrainingSet):
         
         Generate_TrainingSet.__init__(self, parameter_space_input=self.parameter_space_input, waveform_size=waveform_size, total_mass=total_mass, mass_ratio=mass_ratio, freqmin=freqmin)
 
-    def fit_to_training_set(self, property, min_greedy_error=None, N_greedy_vecs=None, save_fits_to_file=False, plot_kernels=False, plot_fits=False, save_fig_kernels=False, save_fig_fits=False):
-
-        def gaussian_process_regression_all(training_set, plot_kernels=plot_kernels, save_fig_kernels=save_fig_kernels):
-            X = self.parameter_space_output[:, np.newaxis]
-
-            X_train = np.array(self.parameter_space_input[self.greedy_parameters_idx]).reshape(-1, 1)
-            y_train = np.squeeze(training_set.T)
-
-            # Combine training data across all waveforms and nodes
-            X_train_all = np.repeat(X_train, y_train.shape[1], axis=0)  # Repeat X_train for each waveform
-            y_train_all = y_train.flatten()  # Flatten y_train across all waveforms and nodes
-
-            
-            # Scale y_train
-            scaler = StandardScaler()
-            y_train_all_scaled = scaler.fit_transform(y_train_all.reshape(-1, 1)).flatten()
-            # periodic_kernel = ExpSineSquared(length_scale=10.0, periodicity=1.0, length_scale_bounds=(1e-2, 1e3), periodicity_bounds=(1e-2, 1e1))
-            # rbf_kernel = RBF(length_scale=10.0, length_scale_bounds=(1e-2, 1e3))
-            # locally_periodic_kernel = C(1.0, (1e-4, 1e1)) * Product(periodic_kernel, rbf_kernel) + WhiteKernel(noise_level=1)
-            if property == 'phase':
-                print('phase kernel')
-                kernels = [
-                    # C(1.0, (1e-4, 1e1)) * RBF(length_scale=1.0, length_scale_bounds=(1e-2, 1e2)),
-                    # C(1.0, (1e-4, 1e1)) * Matern(length_scale=10.0, length_scale_bounds=(1e-4, 0.3), nu=2.5), for 0.2
-                    C(1.0, (5, 100)) * Matern(length_scale=10.0, length_scale_bounds=(1e-1, 1e3), nu=1.5)
-                    # C(1.0, (1e-4, 1e1)) * Product(periodic_kernel, rbf_kernel) + WhiteKernel(noise_level=1),
-                    # C(1.0, (1e-4, 1e1)) * RationalQuadratic(length_scale=1.0, alpha=0.1),
-                    # C(1.0, (1e-4, 1e1)) * ExpSineSquared(length_scale=1.0, periodicity=3.0, length_scale_bounds=(1e-2, 1e2), periodicity_bounds=(1e-2, 1e1)),
-                    # C(1.0, (1e-4, 1e1)) * ExpSineSquared(length_scale=1.0, periodicity=1.0) + WhiteKernel(noise_level=1),
-                    # C(1.0, (1e-4, 1e1)) * ExpSineSquared(length_scale=1.0, periodicity=1.0) + WhiteKernel(noise_level=1)
-                ]
-            else: # amplitude
-                kernels = [
-                    C(100, (100, 500)) * Matern(length_scale=10.0, length_scale_bounds=(1e-1, 1e3), nu=1.5), # Matern
-                    # C(1.0, (0.1, 10)) * (ExpSineSquared(length_scale=1.0, periodicity=10) + DotProduct() + RBF(length_scale=1.0)) # Periodic, linear , RBF
-                ]
-
-            """
-            GPR parameters:
-            - length_scale: A larger length_scale means the GP will consider data points further apart as similar, resulting in a smoother function.
-            - nu: The nu parameter in the Matern kernel controls the smoothness of the kernel. Higher values of nu (e.g., 2.5) will produce a smoother function.
-
-
-            """
-
-            mean_prediction_per_kernel = []
-            std_predictions_per_kernel = []
-
-            # region_mask = [[X_train < 0.2], [0.2 < X_train < 0.3]]
-            # for mask in region_mask is True:
-            #     kernel = 
-            for kernel in kernels:
-                start_time = time.time()
-                gaussian_process = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=20)
-                gaussian_process.fit(X_train_all, y_train_all_scaled)
-                gaussian_process.kernel_
-                # Print the optimized kernel with its hyperparameters
-                end_time = time.time()
-                print(f"Optimized kernel: {gaussian_process.kernel_} | time: {end_time - start_time}")
-
-                mean_prediction_scaled, std_prediction_scaled = gaussian_process.predict(X, return_std=True)
-                mean_prediction = scaler.inverse_transform(mean_prediction_scaled.reshape(-1, 1)).flatten()
-                std_prediction = std_prediction_scaled * scaler.scale_[0]
-
-                mean_prediction_per_kernel.append(mean_prediction)
-                std_predictions_per_kernel.append(std_prediction)
-
-            
-            if plot_kernels is True:
-                GPR_fit = plt.figure()
-
-                for i in range(len(mean_prediction_per_kernel)):
-                    plt.scatter(X_train, y_train, color='red', label="Observations", s=10)
-                    plt.plot(X, mean_prediction_per_kernel[i], label='Mean prediction', linewidth=0.8)
-                    plt.fill_between(
-                        X.ravel(),
-                    (mean_prediction_per_kernel[i] - 1.96 * std_predictions_per_kernel[i]), 
-                    (mean_prediction_per_kernel[i] + 1.96 * std_predictions_per_kernel[i]),
-                        alpha=0.5,
-                        label=r"95% confidence interval",
-                    )
-                plt.legend(loc = 'upper right')
-                plt.xlabel("$e$")
-                if property == 'amplitude':
-                    plt.ylabel("$f_A(e)$")
-                elif property == 'phase':
-                    plt.ylabel("$f_{\phi}(e)$")
-                # plt.title(f"GPR {property} at T_{time_node}")
-                # plt.show()
-
-                if save_fig_kernels is True:
-                    figname = 'Gaussian kernels {property} M={}, q={}, ecc=[{},{}].png'.format(self.total_mass, self.mass_ratio, min(self.parameter_space_input), max(self.parameter_space_input))
-                    
-                    # Ensure the directory exists, creating it if necessary and save
-                    os.makedirs('Images/Gaussian_kernels', exist_ok=True)
-                    fig_residual_training_fit.savefig('Images/Gaussian_kernels/' + figname)
-
-                    print('Figure is saved in Images/Gaussian_kernels')
-
-            return mean_prediction, [(mean_prediction - 1.96 * std_prediction), (mean_prediction + 1.96 * std_prediction)]
+    def fit_to_training_set(self, property, min_greedy_error=None, N_greedy_vecs=None, save_fits_to_file=True, plot_kernels=False, plot_fits=False, save_fig_kernels=False, save_fig_fits=False):
         
         def gaussian_process_regression(time_node, training_set, optimized_kernel = None, plot_kernels=plot_kernels, save_fig_kernels=save_fig_kernels):
             X = self.parameter_space_output[:, np.newaxis]
@@ -141,21 +42,11 @@ class Generate_Surrogate(Generate_TrainingSet):
             # Scale y_train
             scaler = StandardScaler()
             y_train_scaled = scaler.fit_transform(y_train.reshape(-1, 1)).flatten()
-            # periodic_kernel = ExpSineSquared(length_scale=10.0, periodicity=1.0, length_scale_bounds=(1e-2, 1e3), periodicity_bounds=(1e-2, 1e1))
-            # rbf_kernel = RBF(length_scale=10.0, length_scale_bounds=(1e-2, 1e3))
-            # locally_periodic_kernel = C(1.0, (1e-4, 1e1)) * Product(periodic_kernel, rbf_kernel) + WhiteKernel(noise_level=1)
-            if property == 'phase':
-                kernels = [
-                    # C(1.0, (1e-4, 1e1)) * RBF(length_scale=1.0, length_scale_bounds=(1e-2, 1e2)),
-                    # C(1.0, (1e-4, 1e1)) * Matern(length_scale=10.0, length_scale_bounds=(1e-4, 0.3), nu=2.5), for 0.2
-                    Matern(length_scale=0.1, length_scale_bounds=(1e-1, 1), nu=1.5)
 
-                ]
-            else: # amplitude
-                kernels = [
-                    # C(20, (20, 500)) * Matern(length_scale=10.0, length_scale_bounds=(1e-1, 1e3), nu=1.5), # Matern
-                    Matern(length_scale=0.1, length_scale_bounds=(1e-1, 1), nu=1.5)
-                ]
+            kernels = [
+                # Matern(length_scale=0.1, length_scale_bounds=(1e-3, 1), nu=1.5)
+                Matern(length_scale=0.1, length_scale_bounds=(1e-1, 1), nu=1.5) # <= 0.3 eccentricity
+            ]
 
             """
             GPR parameters:
@@ -175,6 +66,7 @@ class Generate_Surrogate(Generate_TrainingSet):
 
                 if optimized_kernel is None:
                     gaussian_process = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=20)
+
                 else:
                     gaussian_process = GaussianProcessRegressor(kernel=optimized_kernel, optimizer=None)
 
@@ -215,7 +107,7 @@ class Generate_Surrogate(Generate_TrainingSet):
                 # plt.show()
 
                 if save_fig_kernels is True:
-                    figname = 'Gaussian kernels {property} M={}, q={}, ecc=[{},{}].png'.format(self.total_mass, self.mass_ratio, min(self.parameter_space_input), max(self.parameter_space_input))
+                    figname = f'Gaussian_kernels_{property}_ecc=[{min(self.parameter_space_input)}_{max(self.parameter_space_input)}]_M={self.total_mass}_q={self.mass_ratio}_fmin={self.freqmin}_iN={len(self.parameter_space_input)}_oN={len(self.parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}.png'
                     
                     # Ensure the directory exists, creating it if necessary and save
                     os.makedirs('Images/Gaussian_kernels', exist_ok=True)
@@ -227,7 +119,7 @@ class Generate_Surrogate(Generate_TrainingSet):
 
         try:
 
-            load_GPRfits = np.load(f'Straindata/GPRfits_/{property}_{min(self.parameter_space_input)}_{max(self.parameter_space_input)}_Ni={len(self.parameter_space_input)}_No={len(self.parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}.npz', allow_pickle=True)
+            load_GPRfits = np.load(f'Straindata/GPRfits/{property}_{min(self.parameter_space_input)}_{max(self.parameter_space_input)}_Ni={len(self.parameter_space_input)}_No={len(self.parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}.npz', allow_pickle=True)
             
             gaussian_fit = load_GPRfits['GPR_fit']
             training_set = load_GPRfits['training_set']
@@ -305,7 +197,7 @@ class Generate_Surrogate(Generate_TrainingSet):
             fig_residual_training_fit, axs = plt.subplots(2, 1, figsize=(11,6), gridspec_kw={'height_ratios': [3, 1], 'hspace': 0.4}, sharex=True)
 
             # Top left subplot for amplitude main plot
-            for i in range(len(gaussian_fit)):
+            for i in range(len(gaussian_fit[:3])):
                 # Use the same color for the fit and the corresponding empirical data
                 axs[0].plot(self.parameter_space_output, gaussian_fit.T[:, i], color=colors[i], linewidth=0.6)
                 axs[0].scatter(self.parameter_space_input[self.greedy_parameters_idx], training_set[:, i], color=colors[i])
@@ -321,10 +213,10 @@ class Generate_Surrogate(Generate_TrainingSet):
             axs[0].legend(loc='upper left', ncol=3, bbox_to_anchor=(0.01, 0.99), fontsize='small')
             if property == 'phase':
                 axs[0].set_ylabel('$\Delta \phi$ ')
-                axs[0].set_title('GPRfit $\phi$')
+                axs[0].set_title(f'GPRfit $\phi$; greedy error = {min_greedy_error}')
             elif property == 'amplitude':
                 axs[0].set_ylabel('$\Delta$ A')
-                axs[0].set_title('GPRfit A')
+                axs[0].set_title(f'GPRfit A; greedy error = {min_greedy_error}')
             axs[0].grid()
 
             # Adjust legend: smaller font, inside figure, upper right
@@ -338,7 +230,7 @@ class Generate_Surrogate(Generate_TrainingSet):
             plt.tight_layout()
 
             if save_fig_fits is True:
-                figname = 'Gaussian fits {property} M={}, q={}, ecc=[{},{}].png'.format(self.total_mass, self.mass_ratio, min(self.parameter_space_input), max(self.parameter_space_input))
+                figname = f'GPR_fits_{property}_ecc=[{min(self.parameter_space_input)}_{max(self.parameter_space_input)}]_M={self.total_mass}_q={self.mass_ratio}_fmin={self.freqmin}_iN={len(self.parameter_space_input)}_oN={len(self.parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}.png'
                 
                 # Ensure the directory exists, creating it if necessary and save
                 os.makedirs('Images/Gaussian_fits', exist_ok=True)
@@ -355,7 +247,7 @@ class Generate_Surrogate(Generate_TrainingSet):
 
         return gaussian_fit, uncertainty_region
 
-    def generate_surrogate_model(self, plot_surr_datapiece_at_ecc=False, save_fig_datapiece=False, plot_surr_at_ecc=False, save_fig_surr=False, plot_GPRfit=False, save_fits_to_file=False, save_surr_to_file=False):
+    def generate_surrogate_model(self, plot_surr_datapiece_at_ecc=False, save_fig_datapiece=False, plot_surr_at_ecc=False, save_fig_surr=False, plot_GPRfit=False, save_fits_to_file=False, save_fig_fits=False, save_surr_to_file=False):
 
         def compute_B_matrix():
 
@@ -465,8 +357,8 @@ class Generate_Surrogate(Generate_TrainingSet):
                     loaded_phase_shift = load_phase_shifts['total_phase_shift']
                     loaded_parameter_space = load_phase_shifts['parameter_space']
 
-                    original_array = loaded_phase_shift[loaded_parameter_space <= max(self.parameter_space_output)]
-                    original_array_input = loaded_phase_shift[loaded_parameter_space <= max(self.parameter_space_input)]
+                    original_array = loaded_phase_shift[(min(self.parameter_space_output) <= loaded_parameter_space) & (loaded_parameter_space <= max(self.parameter_space_output))]
+
                     # Define the new desired size, less than the original
                     new_size = len(self.parameter_space_output)
 
@@ -485,7 +377,7 @@ class Generate_Surrogate(Generate_TrainingSet):
                     # plt.plot(self.parameter_space_input, self.phase_shift_total_input)
                     # plt.legend()
 
-                    surrogate_datapiece = surrogate_datapiece + self.phase_shift_total_output
+                    surrogate_datapiece = surrogate_datapiece - self.phase_shift_total_output
 
             if (plot_surr_datapiece_at_ecc is not False) and (not isinstance(plot_surr_datapiece_at_ecc, float)):
                 print('plot_surr_datapiece_at_ecc must be float value!')
@@ -496,17 +388,14 @@ class Generate_Surrogate(Generate_TrainingSet):
 
                 # Simulate the real waveform datapiece
                 real_hp, real_hc, real_TS = self.simulate_inspiral_mass_independent(plot_surr_datapiece_at_ecc)
-                length_diff = len(real_TS) - self.waveform_size
+                minimum_length = min(len(real_TS), self.waveform_size)
 
                 if property == 'amplitude':
-                    real_datapiece = np.array(waveform.utils.amplitude_from_polarizations(real_hp, real_hc))[length_diff:]
+                    real_datapiece = np.array(waveform.utils.amplitude_from_polarizations(real_hp, real_hc))[-minimum_length:]
                     units = ''
                 elif property == 'phase':
-                    real_datapiece = np.array(waveform.utils.phase_from_polarizations(real_hp, real_hc))
-                    real_datapiece = real_datapiece[length_diff:]
+                    real_datapiece = np.array(waveform.utils.phase_from_polarizations(real_hp, real_hc))[-minimum_length:]
                     units = ' [radians]'
-
-                # Ensure the time series lengths match by accounting for differences
 
                 try:
                     index_ecc_min = np.where(self.parameter_space_output == plot_surr_datapiece_at_ecc)[0][0]
@@ -514,14 +403,9 @@ class Generate_Surrogate(Generate_TrainingSet):
                     print(f'Eccentricity value {plot_surr_datapiece_at_ecc} not in parameterspace')
                     sys.exit(1)
 
-                # true_phase = np.load(f'/home/suzannelexmond/anaconda3/envs/igwn-py39/Python_scripts/Thesis_Eccentric_BBHs/Classes/Straindata/Residuals/residual_{property}_full_parameterspace_output_0.01_0.3_500wfs.npz')['residual']
-                # self.circulair_wf
-                # phase0 = np.array(waveform.utils.phase_from_polarizations(self.hp_TS_circ, self.hc_TS_circ))[-self.waveform_size:]
-                # true_phase += phase0
-                # (10, surrogate_datapiece.shape, true_phase.shape)
                 # Plot Surrogate and Real Amplitude (Top Left)
                 # axs[0].plot(self.parameter_space_output, surrogate_datapiece[index_ecc_min], label='surr')
-                axs[0].plot(self.TS_M, surrogate_datapiece.T[index_ecc_min], linewidth=0.6, label=f'Surrogate: e = {plot_surr_datapiece_at_ecc}')
+                axs[0].plot(self.TS_M, surrogate_datapiece.T[index_ecc_min][-minimum_length:], linewidth=0.6, label=f'Surrogate: e = {plot_surr_datapiece_at_ecc}')
                 # axs[0].plot(self.TS_M, true_phase[index_ecc_min], linewidth=0.6, label=f'Surrogate: e = {plot_surr_datapiece_at_ecc}')
                 axs[0].plot(self.TS_M, real_datapiece, linewidth=0.6, linestyle='dashed', label=f'Real: e = {plot_surr_datapiece_at_ecc}')
                 # axs[0].plot(self.parameter_space_output, true_phase[:, index_ecc_min], label='real')
@@ -547,7 +431,7 @@ class Generate_Surrogate(Generate_TrainingSet):
                 plt.tight_layout()
 
                 if save_fig_datapiece is True:
-                    figname = f'Surrogate_{property}_eccmin={plot_surr_datapiece_at_ecc}_for_ecc=[{min(self.parameter_space_input)}_{max(self.parameter_space_input)}].png'
+                    figname = f'Surrogate_{property}_eccmin={plot_surr_datapiece_at_ecc}_for_ecc=[{min(self.parameter_space_input)}_{max(self.parameter_space_input)}]_M={self.total_mass}_q={self.mass_ratio}_fmin={self.freqmin}_iN={len(self.parameter_space_input)}_oN={len(self.parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}.png'
                     
                     # Ensure the directory exists, creating it if necessary and save
                     os.makedirs('Images/Surrogate_datapieces', exist_ok=True)
@@ -566,7 +450,7 @@ class Generate_Surrogate(Generate_TrainingSet):
         surrogate_amp = reconstruct_surrogate_datapiece(property='amplitude', B_matrix=B_matrix_amp, fit_matrix=fit_matrix_amp, plot_surr_datapiece_at_ecc=plot_surr_datapiece_at_ecc)
         self.surrogate_amp = surrogate_amp
         # Get matrix with interpolated fits and B_matrix
-        fit_matrix_phase = self.fit_to_training_set(min_greedy_error=self.min_greedy_error_phase, N_greedy_vecs=self.N_greedy_vecs_phase, property='phase', plot_fits=plot_GPRfit, save_fits_to_file=save_fits_to_file)[0]
+        fit_matrix_phase = self.fit_to_training_set(min_greedy_error=self.min_greedy_error_phase, N_greedy_vecs=self.N_greedy_vecs_phase, property='phase', plot_fits=plot_GPRfit, save_fig_fits=save_fig_fits, save_fits_to_file=save_fits_to_file)[0]
         B_matrix_phase = compute_B_matrix()
 
         # Reconstruct phase datapiece
@@ -593,7 +477,7 @@ class Generate_Surrogate(Generate_TrainingSet):
         if isinstance(plot_surr_at_ecc, float):
             
             fig_surrogate, axs = plt.subplots(4, 1, figsize=(12, 6), gridspec_kw={'height_ratios': [3, 1, 3, 1], 'hspace': 0.2}, sharex=True)
-            # fig_surrogate, axs = plt.subplots(2, 1, figsize=(7, 5), sharex=True)
+            fig_surrogate, axs = plt.subplots(2, 1, figsize=(7, 7), sharex=True)
 
             try:
                 index_ecc_min = np.where(self.parameter_space_output == plot_surr_at_ecc)[0][0]
@@ -621,38 +505,38 @@ class Generate_Surrogate(Generate_TrainingSet):
             relative_error_hp = abs(np.real(h_surrogate[:, index_ecc_min]) - np.real(true_h)[length_diff:]) / abs(np.real(true_h)[length_diff:])
             relative_error_hp[relative_error_hp > 1] = 0
             
-            axs[1].plot(self.TS_M, relative_error_hp, linewidth=0.6)
-            axs[1].set_ylabel(f'Rel. Error in $h_+$')
-            axs[1].grid(True)
-            # axs[1].set_ylim(0, 10)
-            # axs[1].set_title('Relative error $h_x$')
-
-            # axs[2].plot(self.TS_M, true_hc[length_diff:], linewidth=0.6, label='True waveform before')
-            axs[2].plot(self.TS_M, np.imag(true_h)[length_diff:], linewidth=0.6, label='True waveform after')
-            axs[2].plot(self.TS_M, np.imag(h_surrogate[:, index_ecc_min]), linewidth=0.6, label='Surrogate')
-            axs[2].grid(True)
-            axs[2].set_ylabel('$h_x$')
-            axs[2].legend()
+            # axs[1].plot(self.TS_M, relative_error_hp, linewidth=0.6)
+            # axs[1].set_ylabel(f'Rel. Error in $h_+$')
+            # axs[1].grid(True)
+            # # axs[1].set_ylim(0, 10)
+            # # axs[1].set_title('Relative error $h_x$')
 
             # # axs[2].plot(self.TS_M, true_hc[length_diff:], linewidth=0.6, label='True waveform before')
-            # axs[1].plot(self.TS_M, np.imag(true_h)[length_diff:], linewidth=0.6, label='True waveform after')
-            # axs[1].plot(self.TS_M, np.imag(h_surrogate[:, index_ecc_min]), linewidth=0.6, label='Surrogate')
-            # axs[1].grid(True)
-            # axs[1].set_ylabel('$h_x$')
-            # axs[1].legend()
+            # axs[2].plot(self.TS_M, np.imag(true_h)[length_diff:], linewidth=0.6, label='True waveform after')
+            # axs[2].plot(self.TS_M, np.imag(h_surrogate[:, index_ecc_min]), linewidth=0.6, label='Surrogate')
+            # axs[2].grid(True)
+            # axs[2].set_ylabel('$h_x$')
+            # axs[2].legend()
 
-            # Calculate and Plot cross polarisation error
-            relative_error_hc = abs(np.imag(h_surrogate[:, index_ecc_min]) - np.imag(true_h)[length_diff:]) / abs(np.imag(true_h)[length_diff:])
-            relative_error_hc[relative_error_hc > 1] = 0
-            axs[3].plot(self.TS_M, relative_error_hc, linewidth=0.6)
-            axs[3].set_ylabel(f'Rel. Error in $h_x$')
-            axs[3].set_xlabel('t [M]')
-            axs[3].grid(True)
-            # axs[3].set_ylim(0, 10)
+            # axs[2].plot(self.TS_M, true_hc[length_diff:], linewidth=0.6, label='True waveform before')
+            axs[1].plot(self.TS_M, np.imag(true_h)[length_diff:], linewidth=0.6, label='True waveform after')
+            axs[1].plot(self.TS_M, np.imag(h_surrogate[:, index_ecc_min]), linewidth=0.6, label='Surrogate')
+            axs[1].grid(True)
+            axs[1].set_ylabel('$h_x$')
+            axs[1].legend()
+
+            # # Calculate and Plot cross polarisation error
+            # relative_error_hc = abs(np.imag(h_surrogate[:, index_ecc_min]) - np.imag(true_h)[length_diff:]) / abs(np.imag(true_h)[length_diff:])
+            # relative_error_hc[relative_error_hc > 1] = 0
+            # axs[3].plot(self.TS_M, relative_error_hc, linewidth=0.6)
+            # axs[3].set_ylabel(f'Rel. Error in $h_x$')
+            # axs[3].set_xlabel('t [M]')
+            # axs[3].grid(True)
+            # # axs[3].set_ylim(0, 10)
 
 
             if save_fig_surr is True:
-                figname = f'Surrogate_wf_eccmin={plot_surr_at_ecc}_for_ecc=[{min(self.parameter_space_input)}_{max(self.parameter_space_input)}].png'
+                figname = f'Surrogate_wf_eccmin={plot_surr_at_ecc}_for_ecc=[{min(self.parameter_space_input)}_{max(self.parameter_space_input)}]_M={self.total_mass}_q={self.mass_ratio}_fmin={self.freqmin}_iN={len(self.parameter_space_input)}_oN={len(self.parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}.png'
                 
                 # Ensure the directory exists, creating it if necessary and save
                 os.makedirs('Images/Surrogate_wf', exist_ok=True)
