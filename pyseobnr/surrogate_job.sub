@@ -1,0 +1,14 @@
+executable              = generate_eob.sh
+log                     = log_surr.log
+output                  = outfile_surr.txt
+error                   = errors_surr.txt
+
++UseOS                  = "el9"
++JobCategory            = "medium"
+
+request_memory          = 1 TB
+request_disk            = 1 TB
+
+accounting_group = ligo.dev.o5.cbc.explore.test
+queue
+
