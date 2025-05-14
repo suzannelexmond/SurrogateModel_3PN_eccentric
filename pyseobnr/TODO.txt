@@ -1,0 +1,4 @@
+- instead of cutting waveforms, change freqmin for every waveform so it is all same length (much faster)
+- change waveform size to time in [M]
+- test greedy algorithm (differen strategy?)
+- integrate chi, rel_anomaly and deltaT in all classes
