@@ -1,40 +1,41 @@
 from generate_eccentric_eob import *
 import random
-from sklearn.preprocessing import StandardScaler
 from sklearn.preprocessing import normalize
-from pycbc.types import TimeSeries
 
 plt.switch_backend('WebAgg')
 
 class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
     """
-    Class to generate a training dataset for gravitational waveform simulations.
+    Class to generate a training dataset for gravitational waveform simulations using a greedy algorithm and empirical interpolation.
     Inherits from WaveformProperties and SimulateInspiral to leverage methods for waveform 
     property calculations and waveform generation.
 
-    Parameters:
-    ----------
-    parameter_space_input : array-like
-        Array of parameter values defining the waveform parameter space.
-    waveform_size : int, optional
-        Size of the waveform (number of indices before merger).
-    total_mass : float, default=50
-        Total mass of the binary black hole system in solar masses.
-    mass_ratio : float, default=1
-        Mass ratio of the binary system (0 < q < 1).
-    freqmin : float, default=18
-        Minimum frequency to start the waveform simulation.
     """
 
+
     def __init__(self, parameter_space_input, waveform_size=None, mass_ratio=1, freqmin=650):
+        """
+        Parameters:
+        ----------------
+        parameter_space_input [dimensionless], float, ndarray : Numpy array of eccentric values used to calculate training set. MORE VALUES RESULTS IN LARGER COMPUTATIONAL TIME!
+        mass_ratio [dimensionless], float : Mass ratio of the binary, mass ratio >= 1.
+        freqmin [Hz], float: Start frequency of the waveform
+        waveform_size [dimensionless], int: Waveform size used for Surrogate model. Amount of indices before merger. By default set to None, for which it generates the full waveform from fmin to t=0. 
+        TS [M], TimeSeries : TimeSeries object with time-array of waveform
+        residual_greedy_basis [dimenionless OR rad], narray, float: Stores the residual greedy basis, set later during get_greedy_parameters().
+        greedy_parameters_idx [dimensionless], narray, float: Holds indices of greedy parameters, set later during get_greedy_parameters().
+        empirical_nodes_idx [dimenionless], narray, int: Stores indices of empirical nodes, to be set during get_empirical_nodes().
+
+        """
+        self.parameter_space_input = parameter_space_input 
         
-        self.parameter_space_input = parameter_space_input
-        
+        # To be stored parameters
         self.TS = None
         self.residual_greedy_basis = None
         self.greedy_parameters_idx = None
         self.empirical_nodes_idx = None
 
+        # Inherit parameters from all previously defined classes
         super().__init__(eccmin=None, mass_ratio=mass_ratio, freqmin=freqmin, waveform_size=waveform_size)
     
     def generate_property_dataset(self, eccmin_list, property, save_dataset_to_file=None, plot_residuals_time_evolv=True, plot_residuals_eccentric_evolv=False, save_fig_eccentric_evolv=False, save_fig_time_evolve=True):
@@ -167,8 +168,12 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         # Create residual dataset
         residual_dataset = np.zeros((len(eccmin_list), self.waveform_size))
 
-        for i, eccmin in enumerate(eccmin_list):
-            residual = self.calculate_residual(hp_dataset[i], hc_dataset[i], self.TS, property)
+        for i in range(len(eccmin_list)):
+            # Transform back to TimeSeries for calculate_residual()
+            hp_TS = types.timeseries.TimeSeries(hp_dataset[i], delta_t=self.DeltaT)  # plus polarisation in TimeSeries
+            hc_TS = types.timeseries.TimeSeries(hc_dataset[i], delta_t=self.DeltaT)  # cross polarisation in TimeSeries
+            
+            residual = self.calculate_residual(hp_TS, hc_TS, self.TS, property)
             residual_dataset[i] = residual[-self.waveform_size:]
 
         return residual_dataset
@@ -366,7 +371,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
     def _plot_validation_errors(self, validation_vecs, greedy_basis, trivial_basis, property, save_validation_fig):
         """Function to plot and option to save validation errors."""
         
-        def compute_proj_errors(basis, V):
+        def compute_proj_errors(basis, V, reg=1e-6):
             """Computes the projection errors when approximating target vectors V using the basis."""
             normalized_basis = basis / np.linalg.norm(basis, axis=1, keepdims=True)
             normalized_V = V / np.linalg.norm(V, axis=1, keepdims=True)

@@ -5,3 +5,44 @@
 ...
 000 (474119839.000.000) 2025-05-02 06:43:44 Job submitted from host: <10.14.0.12:9618?addrs=10.14.0.12-9618&alias=ldas-grid.ligo.caltech.edu&noUDP&sock=schedd_2292_b328>
 ...
+000 (474611479.000.000) 2025-05-14 02:06:14 Job submitted from host: <10.14.0.12:9618?addrs=10.14.0.12-9618&alias=ldas-grid.ligo.caltech.edu&noUDP&sock=schedd_2400_c762>
+...
+009 (474611479.000.000) 2025-05-14 02:25:24 Job was aborted.
+	via condor_rm (by user suzanne.lexmond)
+...
+000 (474611590.000.000) 2025-05-14 02:25:39 Job submitted from host: <10.14.0.12:9618?addrs=10.14.0.12-9618&alias=ldas-grid.ligo.caltech.edu&noUDP&sock=schedd_2400_c762>
+...
+001 (474611590.000.000) 2025-05-14 02:30:33 Job executing on host: <10.14.9.88:9618?addrs=10.14.9.88-9618&alias=node2088.cluster.ldas.cit&noUDP&sock=startd_3774_3a83>
+	SlotName: slot1_9@node2088.cluster.ldas.cit
+	CondorScratchDir = "/var/lib/condor/execute/dir_810222"
+	Cpus = 1
+	Disk = 104858624
+	GPUs = 0
+	Memory = 102400
+...
+006 (474611590.000.000) 2025-05-14 02:30:33 Image size of job updated: 160
+	0  -  MemoryUsage of job (MB)
+	0  -  ResidentSetSize of job (KB)
+...
+005 (474611590.000.000) 2025-05-14 02:30:33 Job terminated.
+	(1) Normal termination (return value 0)
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Run Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Run Local Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Total Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Total Local Usage
+	0  -  Run Bytes Sent By Job
+	0  -  Run Bytes Received By Job
+	0  -  Total Bytes Sent By Job
+	0  -  Total Bytes Received By Job
+	Partitionable Resources :    Usage   Request Allocated 
+	   Cpus                 :                  1         1 
+	   Disk (KB)            :        1 104857600 104858624 
+	   GPUs                 :                            0 
+	   Memory (MB)          :        0    102400    102400 
+	   TimeExecute (s)      :        0                     
+	   TimeSlotBusy (s)     :       15                     
+
+	Job terminated of its own accord at 2025-05-14T09:30:33Z with exit-code 0.
+...
+000 (474611686.000.000) 2025-05-14 02:35:09 Job submitted from host: <10.14.0.12:9618?addrs=10.14.0.12-9618&alias=ldas-grid.ligo.caltech.edu&noUDP&sock=schedd_2400_c762>
+...

@@ -1,0 +1,1 @@
+/home/suzanne.lexmond/Surrogate_model/Surrogate_model_repo/SurrogateModel_3PN_eccentric/pyseobnr/generate_eob.sh: line 4: python: command not found
