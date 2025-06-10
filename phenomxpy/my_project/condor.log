@@ -1,0 +1,137 @@
+000 (485830867.000.000) 2025-06-10 04:07:56 Job submitted from host: <10.14.0.12:9618?addrs=10.14.0.12-9618&alias=ldas-grid.ligo.caltech.edu&noUDP&sock=schedd_2400_c762>
+...
+040 (485830867.000.000) 2025-06-10 04:09:26 Started transferring input files
+	Transferring to host: <10.14.10.71:9618?addrs=10.14.10.71-9618&alias=node2321.cluster.ldas.cit&noUDP&sock=slot1_6_3742_53d1_15004>
+...
+040 (485830867.000.000) 2025-06-10 04:09:26 Finished transferring input files
+...
+001 (485830867.000.000) 2025-06-10 04:09:26 Job executing on host: <10.14.10.71:9618?addrs=10.14.10.71-9618&alias=node2321.cluster.ldas.cit&noUDP&sock=startd_2835_2715>
+	SlotName: slot1_6@node2321.cluster.ldas.cit
+	CondorScratchDir = "/var/lib/condor/execute/dir_2900700"
+	Cpus = 1
+	Disk = 5243905
+	GPUs = 0
+	Memory = 16384
+...
+006 (485830867.000.000) 2025-06-10 04:09:33 Image size of job updated: 900
+	0  -  MemoryUsage of job (MB)
+	0  -  ResidentSetSize of job (KB)
+...
+040 (485830867.000.000) 2025-06-10 04:09:33 Started transferring output files
+...
+040 (485830867.000.000) 2025-06-10 04:09:33 Finished transferring output files
+...
+005 (485830867.000.000) 2025-06-10 04:09:33 Job terminated.
+	(1) Normal termination (return value 0)
+		Usr 0 00:00:02, Sys 0 00:00:01  -  Run Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Run Local Usage
+		Usr 0 00:00:02, Sys 0 00:00:01  -  Total Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Total Local Usage
+	291  -  Run Bytes Sent By Job
+	830  -  Run Bytes Received By Job
+	291  -  Total Bytes Sent By Job
+	830  -  Total Bytes Received By Job
+	Partitionable Resources :    Usage  Request Allocated 
+	   Cpus                 :                 1         1 
+	   Disk (KB)            :       68  5242880   5243905 
+	   GPUs                 :                           0 
+	   Memory (MB)          :        0    16384     16384 
+	   TimeExecute (s)      :        7                    
+	   TimeSlotBusy (s)     :        7                    
+
+	Job terminated of its own accord at 2025-06-10T11:09:33Z with exit-code 0.
+...
+000 (485830868.000.000) 2025-06-10 04:10:34 Job submitted from host: <10.14.0.12:9618?addrs=10.14.0.12-9618&alias=ldas-grid.ligo.caltech.edu&noUDP&sock=schedd_2400_c762>
+...
+040 (485830868.000.000) 2025-06-10 04:11:51 Started transferring input files
+	Transferring to host: <10.14.10.71:9618?addrs=10.14.10.71-9618&alias=node2321.cluster.ldas.cit&noUDP&sock=slot1_1_3742_53d1_15029>
+...
+040 (485830868.000.000) 2025-06-10 04:11:51 Finished transferring input files
+...
+001 (485830868.000.000) 2025-06-10 04:11:51 Job executing on host: <10.14.10.71:9618?addrs=10.14.10.71-9618&alias=node2321.cluster.ldas.cit&noUDP&sock=startd_2835_2715>
+	SlotName: slot1_1@node2321.cluster.ldas.cit
+	CondorScratchDir = "/var/lib/condor/execute/dir_2903766"
+	Cpus = 1
+	Disk = 5243905
+	GPUs = 0
+	Memory = 16384
+...
+006 (485830868.000.000) 2025-06-10 04:12:00 Image size of job updated: 63044
+	62  -  MemoryUsage of job (MB)
+	63044  -  ResidentSetSize of job (KB)
+...
+006 (485830868.000.000) 2025-06-10 04:12:10 Image size of job updated: 132668
+	62  -  MemoryUsage of job (MB)
+	63044  -  ResidentSetSize of job (KB)
+...
+040 (485830868.000.000) 2025-06-10 04:12:10 Started transferring output files
+...
+040 (485830868.000.000) 2025-06-10 04:12:10 Finished transferring output files
+...
+005 (485830868.000.000) 2025-06-10 04:12:11 Job terminated.
+	(1) Normal termination (return value 0)
+		Usr 0 00:00:10, Sys 0 00:00:02  -  Run Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Run Local Usage
+		Usr 0 00:00:10, Sys 0 00:00:02  -  Total Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Total Local Usage
+	97  -  Run Bytes Sent By Job
+	839  -  Run Bytes Received By Job
+	97  -  Total Bytes Sent By Job
+	839  -  Total Bytes Received By Job
+	Partitionable Resources :    Usage  Request Allocated 
+	   Cpus                 :                 1         1 
+	   Disk (KB)            :      128  5242880   5243905 
+	   GPUs                 :                           0 
+	   Memory (MB)          :       62    16384     16384 
+	   TimeExecute (s)      :       19                    
+	   TimeSlotBusy (s)     :       19                    
+
+	Job terminated of its own accord at 2025-06-10T11:12:10Z with exit-code 0.
+...
+000 (485830869.000.000) 2025-06-10 04:14:03 Job submitted from host: <10.14.0.12:9618?addrs=10.14.0.12-9618&alias=ldas-grid.ligo.caltech.edu&noUDP&sock=schedd_2400_c762>
+...
+040 (485830869.000.000) 2025-06-10 04:16:39 Started transferring input files
+	Transferring to host: <10.14.9.103:9618?addrs=10.14.9.103-9618&alias=node2103.cluster.ldas.cit&noUDP&sock=slot1_2_1672984_52b8_57207>
+...
+040 (485830869.000.000) 2025-06-10 04:16:39 Finished transferring input files
+...
+001 (485830869.000.000) 2025-06-10 04:16:39 Job executing on host: <10.14.9.103:9618?addrs=10.14.9.103-9618&alias=node2103.cluster.ldas.cit&noUDP&sock=startd_3740_e84b>
+	SlotName: slot1_2@node2103.cluster.ldas.cit
+	CondorScratchDir = "/var/lib/condor/execute/dir_2701619"
+	Cpus = 1
+	Disk = 5243904
+	GPUs = 0
+	Memory = 16384
+...
+006 (485830869.000.000) 2025-06-10 04:16:48 Image size of job updated: 1196
+	2  -  MemoryUsage of job (MB)
+	1196  -  ResidentSetSize of job (KB)
+...
+006 (485830869.000.000) 2025-06-10 04:17:12 Image size of job updated: 142056
+	2  -  MemoryUsage of job (MB)
+	1196  -  ResidentSetSize of job (KB)
+...
+040 (485830869.000.000) 2025-06-10 04:17:12 Started transferring output files
+...
+040 (485830869.000.000) 2025-06-10 04:17:12 Finished transferring output files
+...
+005 (485830869.000.000) 2025-06-10 04:17:12 Job terminated.
+	(1) Normal termination (return value 0)
+		Usr 0 00:00:19, Sys 0 00:00:02  -  Run Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Run Local Usage
+		Usr 0 00:00:19, Sys 0 00:00:02  -  Total Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Total Local Usage
+	322  -  Run Bytes Sent By Job
+	839  -  Run Bytes Received By Job
+	322  -  Total Bytes Sent By Job
+	839  -  Total Bytes Received By Job
+	Partitionable Resources :    Usage  Request Allocated 
+	   Cpus                 :                 1         1 
+	   Disk (KB)            :      128  5242880   5243904 
+	   GPUs                 :                           0 
+	   Memory (MB)          :        2    16384     16384 
+	   TimeExecute (s)      :       33                    
+	   TimeSlotBusy (s)     :       36                    
+
+	Job terminated of its own accord at 2025-06-10T11:17:12Z with exit-code 0.
+...

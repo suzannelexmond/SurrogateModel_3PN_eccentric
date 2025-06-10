@@ -116,12 +116,12 @@ class Simulate_Inspiral:
             
             # Set a specific shorter waveform length, or by default set to the length of the shortest waveform in the dataset to ensure all waveforms are equal in length.
             if self.waveform_size is None:
-                self.waveform_size = len(t)
+                self.waveform_size = len(t_TS)
 
             fig_simulate_inspiral = plt.figure(figsize=(12,5))
-            length_diff = len(t) - self.waveform_size
+            length_diff = len(t_TS) - self.waveform_size
 
-            plt.plot(t[length_diff:], hp[length_diff:], label = f'$h_+$', linewidth=0.6)
+            plt.plot(t_TS[length_diff:], hp_TS[length_diff:], label = f'$h_+$', linewidth=0.6)
 
             plt.legend(loc = 'upper left')
             plt.xlabel('t [s]')
