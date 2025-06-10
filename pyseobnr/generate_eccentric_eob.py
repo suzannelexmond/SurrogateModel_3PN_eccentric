@@ -9,7 +9,7 @@ from timeit import default_timer as timer
 import warnings
 warnings.filterwarnings("ignore", "Wswiglal-redir-stdio")
 
-plt.switch_backend('WebAgg')
+plt.switch_backend('Agg')
 
 class Simulate_Inspiral:
     """ Simulates time-domain (2,2) mode EOB waveform of a binary blackhole merger. Generates time-domain from starting frequency (freqmin) till peak at t=0 for time in geometric units. """
@@ -85,11 +85,6 @@ class Simulate_Inspiral:
             f_gw_geom = f_gw_hz * M_sec
             omega_geom = f_gw_geom * 3.14159 # geometric units 
             return omega_geom
-
-        # settings = dict(
-        #     t_backwards=self.t_backwards_geom,  # Geometric units
-        #     warning_bwd_int=False,  # Setting this to False will avoid the warning message
-        # )
         
         # eccentric waveform generator, using the psyeobnr model with eccentric EOB approximant
         t, modes = generate_modes_opt( 
@@ -106,10 +101,12 @@ class Simulate_Inspiral:
         hc = modes["2,2"].imag # mass independent hc (2,2) mode
 
         # Convert to TimeSeries for eccentric case
-        hp_TS = types.timeseries.TimeSeries(hp, delta_t=self.DeltaT)  # plus polarisation in TimeSeries
-        hc_TS = types.timeseries.TimeSeries(hc, delta_t=self.DeltaT)  # cross polarisation in TimeSeries
+        hp_TS = types.timeseries.TimeSeries(hp, delta_t=self.DeltaT, dtype=np.float32)  # plus polarisation in TimeSeries
+        hc_TS = types.timeseries.TimeSeries(hc, delta_t=self.DeltaT, dtype=np.float32)  # cross polarisation in TimeSeries
         t_TS = -hp_TS.sample_times[::-1] # Timeseries time-domain
-      
+        
+        del modes, hp, hc # Clear large variables after usage
+        
         t0_idx = np.argmax(t > 0)  # First index where value > 0 because we only care about waveform up until peak at t=0
         hp_TS, hc_TS, t_TS = hp_TS[:t0_idx], hc_TS[:t0_idx], t_TS[:t0_idx]
 
@@ -135,13 +132,15 @@ class Simulate_Inspiral:
             plt.tight_layout()
 
             if save_fig is True:
-                figname = 'Polarisations q={}, ecc={}.png'.format(self.mass_ratio, eccmin)
+                figname = 'Polarisations_q={}_ecc={}.png'.format(self.mass_ratio, eccmin)
                 
                 # Ensure the directory exists, creating it if necessary and save
                 os.makedirs('Images/Polarisations', exist_ok=True)
                 fig_simulate_inspiral.savefig('Images/Polarisations/' + figname)
 
                 print('Figure is saved in Images/Polarisations')
+
+            plt.close('all')  # Clean up plots
 
         return hp_TS, hc_TS, t_TS
 
@@ -268,6 +267,8 @@ class Waveform_Properties(Simulate_Inspiral):
 
             plt.tight_layout()
 
+            plt.close('all')  # Clean up plots
+
             if save_fig is True:
                 figname = f'Residual {property} q={self.mass_ratio}, ecc={self.eccmin}.png'
                 
@@ -279,12 +280,9 @@ class Waveform_Properties(Simulate_Inspiral):
         return residual
     
 
-# wp = Waveform_Properties(eccmin=0.2, mass_ratio=1, freqmin=650)
-# hp_TS, hc_TS, TS = wp.simulate_inspiral_mass_independent(plot_polarisations=True)
-# wp.calculate_residual(hp_TS, hc_TS, TS, property='phase', plot_residual=True)
-# wp.calculate_residual(hp_TS, hc_TS, TS, property='amplitude', plot_residual=True)
-# wp.calculate_residual(hp_TS, hc_TS, TS, property='frequency', plot_residual=True)
-# plt.show()
+wp = Waveform_Properties(eccmin=0.2, mass_ratio=1, freqmin=650)
+hp_TS, hc_TS, TS = wp.simulate_inspiral_mass_independent(plot_polarisations=True, save_fig=True)
+wp.calculate_residual(hp_TS, hc_TS, TS, property='phase', plot_residual=True, save_fig=True)
 
 
 
