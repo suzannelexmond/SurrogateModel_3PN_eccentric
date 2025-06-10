@@ -12,7 +12,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
     """
 
-
     def __init__(self, parameter_space_input, waveform_size=None, mass_ratio=1, freqmin=650):
         """
         Parameters:
@@ -119,13 +118,13 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         except:
             hp_dataset, hc_dataset = [], []
             for eccmin in eccmin_list:
-                hp, hc, TS = self.simulate_inspiral_mass_independent(eccmin)
+                hp, hc, TS = self.simulate_inspiral_mass_independent(eccmin) 
                 hp_dataset.append(hp)
                 hc_dataset.append(hc)
                 self.TS = TS
             
 
-            # Save hp and hc for unequal waveform lengths
+            # Save hp and hc with unequal waveform lengths
             hp_dataset, hc_dataset = np.array(hp_dataset, dtype=object), np.array(hc_dataset, dtype=object)
 
             # Ensure the directory exists, creating it if necessary and save
@@ -159,15 +158,16 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         self.circulair_wf()
 
         # Choose future waveform length of all waveforms to be either self set waveform length or the shortest waveform in the dataset
-        limit_waveform_size = min(len(self.TS), len(hp_dataset[-1])) - 20 # Shortest waveform: hp_dataset[-1]
+        limit_waveform_size = min(len(self.TS), len(hp_dataset[-1])) - 20 # Shortest waveform: hp_dataset[-1], -20 to remove rough edges
         if self.waveform_size is None:
             self.waveform_size = limit_waveform_size
         elif (self.waveform_size is not None) and (self.waveform_size > limit_waveform_size):
             self.waveform_size = limit_waveform_size
 
-        # Create residual dataset
+        # Create empty residual dataset
         residual_dataset = np.zeros((len(eccmin_list), self.waveform_size))
 
+        # Fill residual dataset with residuals of chosen property for given eccentric parameter space
         for i in range(len(eccmin_list)):
             # Transform back to TimeSeries for calculate_residual()
             hp_TS = types.timeseries.TimeSeries(hp_dataset[i], delta_t=self.DeltaT)  # plus polarisation in TimeSeries
@@ -179,8 +179,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         return residual_dataset
     
     def _plot_residuals(self, residual_dataset, eccmin_list, property, plot_eccentric_evolv=False, plot_time_evolve=False, save_fig_eccentric_evolve=False, save_fig_time_evolve=False):
-        """Function to plot and option for saving residuals."""
-        print(f'ecc evolve ={plot_eccentric_evolv}, time evolve={plot_time_evolve}')
+        """Function to plot residuals dataset including save figure option."""
         if plot_eccentric_evolv is True:
             fig_residuals_ecc = plt.figure()
 
@@ -334,9 +333,9 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
         # Plot greedy errors if requested
         if plot_greedy_error:
-            self._plot_greedy_errors(greedy_errors, greedy_parameters_idx, property, save_greedy_fig)
+            self._plot_greedy_errors(greedy_errors, property, save_greedy_fig)
 
-        # Validation error plot
+        # Plot validation errors
         if plot_validation_errors:
             validation_vecs = calc_validation_vectors(15)
             trivial_basis = U[:len(greedy_basis)]
@@ -346,9 +345,10 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         print(greedy_parameters_idx)
         return greedy_parameters_idx, greedy_basis
 
-    def _plot_greedy_errors(self, greedy_errors, greedy_parameters_idx, property, save_greedy_fig):
+    def _plot_greedy_errors(self, greedy_errors, property, save_greedy_fig):
         """Function to plot and option to save the greedy errors."""
         N_basis_vectors = np.arange(1, len(greedy_errors) + 1)
+
         plt.figure(figsize=(7, 5))
         plt.plot(N_basis_vectors, greedy_errors, label='Greedy Errors')
         plt.scatter(N_basis_vectors, greedy_errors, s=4)
@@ -373,6 +373,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         
         def compute_proj_errors(basis, V, reg=1e-6):
             """Computes the projection errors when approximating target vectors V using the basis."""
+            
             normalized_basis = basis / np.linalg.norm(basis, axis=1, keepdims=True)
             normalized_V = V / np.linalg.norm(V, axis=1, keepdims=True)
             G = np.dot(normalized_basis, normalized_basis.T) + reg * np.eye(normalized_basis.shape[0])
@@ -486,9 +487,11 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         - save_fig (bool): If True, saves the plot to a file.
         """
 
+        # Get the waveform at the requested eccentricity
         hp, hc, TS = self.simulate_inspiral_mass_independent(eccentricity)
         fig, ax = plt.subplots(figsize=(12, 6))
 
+        # Plot the waveform and the empirical nodes together for reference
         ax.plot(TS[-self.waveform_size:], hp[-self.waveform_size:], linewidth=0.2, color='black', label=f'$h_+$: ecc = {eccentricity}')
         ax.plot(TS[-self.waveform_size:], hc[-self.waveform_size:], linewidth=0.2, linestyle='dashed', color='black', label=f'$h_\times$: ecc = {eccentricity}')
         ax.scatter(self.TS[emp_nodes_idx], np.zeros(len(emp_nodes_idx)), color='red', s=8)
@@ -497,6 +500,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         ax.set_xlabel('t [M]')
         ax.legend(loc='upper left')
 
+        # IF savefig is set to True, save the figure
         if save_fig:
             fig_path = f'Images/Empirical_nodes/EIM_{property}_e={eccentricity}_q={self.mass_ratio}_fmin={self.freqmin}_iN={len(self.parameter_space_input)}_gN={len(self.greedy_parameters_idx)}.png'
             os.makedirs(os.path.dirname(fig_path), exist_ok=True)
@@ -560,7 +564,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         residual_training_set = self.residual_greedy_basis[:, self.empirical_nodes_idx]
         self.TS_training = self.TS[self.empirical_nodes_idx]
 
-        # Step 5: Optionally plot the training set
+        # Optionally plot the training set
         if plot_training_set:
             self._plot_training_set(residual_training_set, property, save_fig_training_set)
 
@@ -595,7 +599,9 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             print('Figure is saved in Images/TrainingSet')
 
 
-# gt = Generate_TrainingSet(parameter_space_input=np.linspace(0.01, 0.3, num=40), freqmin=650)file loaded
+gt = Generate_TrainingSet(parameter_space_input=np.linspace(0.01, 0.3, num=40), freqmin=650)
+gt._generate_polarisation_data(np.linspace(0.01, 0.2, num=100))
+
 # gt.generate_property_dataset(eccmin_list=np.linspace(0.01, 0.2, num=100), property='phase', plot_residuals_eccentric_evolv=True, plot_residuals_time_evolv=True)
 # gt.generate_property_dataset(eccmin_list=np.linspace(0.01, 0.2, num=100), property='amplitude', plot_residuals_eccentric_evolv=True, plot_residuals_time_evolv=True)
 # gt.get_training_set(property='phase', N_greedy_vecs=20, plot_emp_nodes_at_ecc=0.1, plot_greedy_error=True, plot_residuals_eccentric_evolve=True, plot_residuals_time_evolve=True, plot_training_set=True)

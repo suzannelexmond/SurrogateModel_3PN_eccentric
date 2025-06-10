@@ -11,6 +11,7 @@ import time
 import seaborn as sns
 from matplotlib.lines import Line2D
 from inspect import currentframe, getframeinfo
+from sklearn.preprocessing import StandardScaler
 
 f = currentframe()
 plt.switch_backend('WebAgg')

@@ -1,14 +1,20 @@
-executable              = generate_eob.sh
-log                     = log_surr.log
-output                  = outfile_surr.txt
-error                   = errors_surr.txt
+executable              = /bin/bash
+arguments              = "-l generate_eob.sh"
+log                     = log.log
+output                  = bash_output.log
+error                   = errors.err
 
 +UseOS                  = "el9"
-+JobCategory            = "medium"
++JobCategory            = "short"
 
-request_memory          = 1 TB
-request_disk            = 1 TB
+# Increased resources (10MB is too small)
+request_memory          = 2 GB
+request_disk            = 1 GB
+request_cpus           = 1
 
-accounting_group = ligo.dev.o5.cbc.explore.test
+accounting_group        = ligo.dev.o5.cbc.explore.test
+should_transfer_files   = YES
+when_to_transfer_output = ON_EXIT
+transfer_input_files    = generate_eob.sh
+
 queue
-
