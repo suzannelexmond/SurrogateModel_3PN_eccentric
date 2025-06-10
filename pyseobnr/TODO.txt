@@ -2,3 +2,8 @@
 - change waveform size to time in [M]
 - test greedy algorithm (differen strategy?)
 - integrate chi, rel_anomaly and deltaT in all classes
+
+Last time (06/06/2025):
+- Somehow the image folder for EMp nodes don't appear eventough it said the images are saved. 
+I tried to alter the emperical nodes code to make it more efficient, but it doesnt work yet
+I tried it out by adding a _test function, but it already errors in the normal function I don't think I changed.

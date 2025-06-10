@@ -21,13 +21,13 @@ export PYTHONUNBUFFERED=1
 source /etc/profile.d/igwn-conda.sh 2>/dev/null
 source ~/.bashrc
 
-conda activate igwn || {
+conda activate phenomxpy_env || {
     echo "ERROR: Conda activation failed" > ${JOB_NAME}/conda_error.log
     exit 1
 }
 
 # Run with all output captured
-python /home/suzanne.lexmond/Surrogate_model/Surrogate_model_repo/SurrogateModel_3PN_eccentric/pyseobnr/generate_eob_training_set.py > python_output.log 2>&1
+python /home/suzanne.lexmond/Surrogate_model/Surrogate_model_repo/SurrogateModel_3PN_eccentric/phenomxpy/phenomxpy/my_project/test_phenomxpy.py > python_output.log 2>&1
 
 # Move output file to job directory specified in .sub file
 mv python_output.log ${JOB_NAME}
