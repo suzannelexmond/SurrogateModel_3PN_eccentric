@@ -1,0 +1,580 @@
+000 (485787038.000.000) 2025-06-06 07:05:53 Job submitted from host: <10.14.0.12:9618?addrs=10.14.0.12-9618&alias=ldas-grid.ligo.caltech.edu&noUDP&sock=schedd_2400_c762>
+...
+040 (485787038.000.000) 2025-06-06 07:07:03 Started transferring input files
+	Transferring to host: <10.14.4.73:9618?addrs=10.14.4.73-9618&alias=node823.cluster.ldas.cit&noUDP&sock=slot1_5_356559_d23c_325571>
+...
+040 (485787038.000.000) 2025-06-06 07:07:03 Finished transferring input files
+...
+001 (485787038.000.000) 2025-06-06 07:07:04 Job executing on host: <10.14.4.73:9618?addrs=10.14.4.73-9618&alias=node823.cluster.ldas.cit&noUDP&sock=startd_9264_e974>
+	SlotName: slot1_5@node823.cluster.ldas.cit
+	CondorScratchDir = "/var/lib/condor/execute/dir_3541044"
+	Cpus = 1
+	Disk = 5243904
+	GPUs = 0
+	Memory = 16384
+...
+006 (485787038.000.000) 2025-06-06 07:07:13 Image size of job updated: 32816
+	17  -  MemoryUsage of job (MB)
+	17112  -  ResidentSetSize of job (KB)
+...
+006 (485787038.000.000) 2025-06-06 07:09:46 Image size of job updated: 471116
+	17  -  MemoryUsage of job (MB)
+	17368  -  ResidentSetSize of job (KB)
+...
+040 (485787038.000.000) 2025-06-06 07:09:46 Started transferring output files
+...
+040 (485787038.000.000) 2025-06-06 07:09:46 Finished transferring output files
+...
+021 (485787038.000.000) 2025-06-06 07:09:46 Error from starter on slot1_5@node823.cluster.ldas.cit:
+	STARTER at 10.14.4.73 failed to send file(s) to <10.14.0.12:9618>; SHADOW at 10.14.0.12 - |Error: writing to file /home/suzanne.lexmond/Surrogate_model/Surrogate_model_repo/SurrogateModel_3PN_eccentric/pyseobnr/./generate_eccentric_eob_job: (errno 21) Is a directory
+	Code 12 Subcode 21
+...
+004 (485787038.000.000) 2025-06-06 07:10:06 Job was evicted. Code 12 Subcode 21
+	(0) CPU times
+		Usr 0 00:01:53, Sys 0 00:00:05  -  Run Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Run Local Usage
+	0  -  Run Bytes Sent By Job
+	769  -  Run Bytes Received By Job
+	Reason: Transfer output files failure at access point ldas-grid while receiving files from execution point slot1_5@node823.cluster.ldas.cit. Details: writing to file /home/suzanne.lexmond/Surrogate_model/Surrogate_model_repo/SurrogateModel_3PN_eccentric/pyseobnr/./generate_eccentric_eob_job: (errno 21) Is a directory
+	Partitionable Resources :    Usage  Request Allocated 
+	   Cpus                 :                 1         1 
+	   Disk (KB)            :      204  5242880   5243904 
+	   GPUs                 :                           0 
+	   Memory (MB)          :       17    16384     16384 
+	   TimeExecute (s)      :      162                    
+	   TimeSlotBusy (s)     :      164                    
+...
+012 (485787038.000.000) 2025-06-06 07:10:06 Job was held.
+	Transfer output files failure at access point ldas-grid while receiving files from execution point slot1_5@node823.cluster.ldas.cit. Details: writing to file /home/suzanne.lexmond/Surrogate_model/Surrogate_model_repo/SurrogateModel_3PN_eccentric/pyseobnr/./generate_eccentric_eob_job: (errno 21) Is a directory
+	Code 12 Subcode 21
+...
+000 (485787042.000.000) 2025-06-06 07:12:49 Job submitted from host: <10.14.0.12:9618?addrs=10.14.0.12-9618&alias=ldas-grid.ligo.caltech.edu&noUDP&sock=schedd_2400_c762>
+...
+040 (485787042.000.000) 2025-06-06 07:14:11 Started transferring input files
+	Transferring to host: <10.14.10.92:9618?addrs=10.14.10.92-9618&alias=node2342.cluster.ldas.cit&noUDP&sock=slot1_2_4166_12e2_7391>
+...
+040 (485787042.000.000) 2025-06-06 07:14:11 Finished transferring input files
+...
+001 (485787042.000.000) 2025-06-06 07:14:11 Job executing on host: <10.14.10.92:9618?addrs=10.14.10.92-9618&alias=node2342.cluster.ldas.cit&noUDP&sock=startd_3067_490e>
+	SlotName: slot1_2@node2342.cluster.ldas.cit
+	CondorScratchDir = "/var/lib/condor/execute/dir_3828898"
+	Cpus = 1
+	Disk = 5243905
+	GPUs = 0
+	Memory = 16384
+...
+006 (485787042.000.000) 2025-06-06 07:14:20 Image size of job updated: 205624
+	201  -  MemoryUsage of job (MB)
+	205624  -  ResidentSetSize of job (KB)
+...
+006 (485787042.000.000) 2025-06-06 07:14:29 Image size of job updated: 365656
+	201  -  MemoryUsage of job (MB)
+	205624  -  ResidentSetSize of job (KB)
+...
+040 (485787042.000.000) 2025-06-06 07:14:29 Started transferring output files
+...
+040 (485787042.000.000) 2025-06-06 07:14:29 Finished transferring output files
+...
+021 (485787042.000.000) 2025-06-06 07:14:29 Error from starter on slot1_2@node2342.cluster.ldas.cit:
+	STARTER at 10.14.10.92 failed to send file(s) to <10.14.0.12:9618>; SHADOW at 10.14.0.12 - |Error: writing to file /home/suzanne.lexmond/Surrogate_model/Surrogate_model_repo/SurrogateModel_3PN_eccentric/pyseobnr/./generate_eccentric_eob_job/bash_output.log: (errno 20) Not a directory
+	Code 12 Subcode 20
+...
+004 (485787042.000.000) 2025-06-06 07:14:49 Job was evicted. Code 12 Subcode 20
+	(0) CPU times
+		Usr 0 00:00:09, Sys 0 00:00:03  -  Run Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Run Local Usage
+	0  -  Run Bytes Sent By Job
+	769  -  Run Bytes Received By Job
+	Reason: Transfer output files failure at access point ldas-grid while receiving files from execution point slot1_2@node2342.cluster.ldas.cit. Details: writing to file /home/suzanne.lexmond/Surrogate_model/Surrogate_model_repo/SurrogateModel_3PN_eccentric/pyseobnr/./generate_eccentric_eob_job/bash_output.log: (errno 20) Not a directory
+	Partitionable Resources :    Usage  Request Allocated 
+	   Cpus                 :                 1         1 
+	   Disk (KB)            :      204  5242880   5243905 
+	   GPUs                 :                           0 
+	   Memory (MB)          :      201    16384     16384 
+	   TimeExecute (s)      :       18                    
+	   TimeSlotBusy (s)     :       18                    
+...
+012 (485787042.000.000) 2025-06-06 07:14:49 Job was held.
+	Transfer output files failure at access point ldas-grid while receiving files from execution point slot1_2@node2342.cluster.ldas.cit. Details: writing to file /home/suzanne.lexmond/Surrogate_model/Surrogate_model_repo/SurrogateModel_3PN_eccentric/pyseobnr/./generate_eccentric_eob_job/bash_output.log: (errno 20) Not a directory
+	Code 12 Subcode 20
+...
+000 (485787047.000.000) 2025-06-06 07:15:54 Job submitted from host: <10.14.0.12:9618?addrs=10.14.0.12-9618&alias=ldas-grid.ligo.caltech.edu&noUDP&sock=schedd_2400_c762>
+...
+040 (485787047.000.000) 2025-06-06 07:17:36 Started transferring input files
+	Transferring to host: <10.14.4.73:9618?addrs=10.14.4.73-9618&alias=node823.cluster.ldas.cit&noUDP&sock=slot1_5_356559_d23c_325572>
+...
+040 (485787047.000.000) 2025-06-06 07:17:36 Finished transferring input files
+...
+001 (485787047.000.000) 2025-06-06 07:17:36 Job executing on host: <10.14.4.73:9618?addrs=10.14.4.73-9618&alias=node823.cluster.ldas.cit&noUDP&sock=startd_9264_e974>
+	SlotName: slot1_5@node823.cluster.ldas.cit
+	CondorScratchDir = "/var/lib/condor/execute/dir_3543370"
+	Cpus = 1
+	Disk = 5243904
+	GPUs = 0
+	Memory = 16384
+...
+006 (485787047.000.000) 2025-06-06 07:17:44 Image size of job updated: 27940
+	28  -  MemoryUsage of job (MB)
+	27940  -  ResidentSetSize of job (KB)
+...
+006 (485787047.000.000) 2025-06-06 07:18:14 Image size of job updated: 346240
+	28  -  MemoryUsage of job (MB)
+	28252  -  ResidentSetSize of job (KB)
+...
+040 (485787047.000.000) 2025-06-06 07:18:14 Started transferring output files
+...
+040 (485787047.000.000) 2025-06-06 07:18:14 Finished transferring output files
+...
+021 (485787047.000.000) 2025-06-06 07:18:14 Error from starter on slot1_5@node823.cluster.ldas.cit:
+	STARTER at 10.14.4.73 failed to send file(s) to <10.14.0.12:9618>; SHADOW at 10.14.0.12 - |Error: writing to file /home/suzanne.lexmond/Surrogate_model/Surrogate_model_repo/SurrogateModel_3PN_eccentric/pyseobnr/./generate_eccentric_eob_job/bash_output.log: (errno 20) Not a directory
+	Code 12 Subcode 20
+...
+004 (485787047.000.000) 2025-06-06 07:18:34 Job was evicted. Code 12 Subcode 20
+	(0) CPU times
+		Usr 0 00:00:29, Sys 0 00:00:05  -  Run Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Run Local Usage
+	0  -  Run Bytes Sent By Job
+	788  -  Run Bytes Received By Job
+	Reason: Transfer output files failure at access point ldas-grid while receiving files from execution point slot1_5@node823.cluster.ldas.cit. Details: writing to file /home/suzanne.lexmond/Surrogate_model/Surrogate_model_repo/SurrogateModel_3PN_eccentric/pyseobnr/./generate_eccentric_eob_job/bash_output.log: (errno 20) Not a directory
+	Partitionable Resources :    Usage  Request Allocated 
+	   Cpus                 :                 1         1 
+	   Disk (KB)            :      208  5242880   5243904 
+	   GPUs                 :                           0 
+	   Memory (MB)          :       28    16384     16384 
+	   TimeExecute (s)      :       38                    
+	   TimeSlotBusy (s)     :       40                    
+...
+012 (485787047.000.000) 2025-06-06 07:18:34 Job was held.
+	Transfer output files failure at access point ldas-grid while receiving files from execution point slot1_5@node823.cluster.ldas.cit. Details: writing to file /home/suzanne.lexmond/Surrogate_model/Surrogate_model_repo/SurrogateModel_3PN_eccentric/pyseobnr/./generate_eccentric_eob_job/bash_output.log: (errno 20) Not a directory
+	Code 12 Subcode 20
+...
+000 (485787100.000.000) 2025-06-06 07:19:11 Job submitted from host: <10.14.0.12:9618?addrs=10.14.0.12-9618&alias=ldas-grid.ligo.caltech.edu&noUDP&sock=schedd_2400_c762>
+...
+000 (485787101.000.000) 2025-06-06 07:20:15 Job submitted from host: <10.14.0.12:9618?addrs=10.14.0.12-9618&alias=ldas-grid.ligo.caltech.edu&noUDP&sock=schedd_2400_c762>
+...
+040 (485787100.000.000) 2025-06-06 07:21:08 Started transferring input files
+	Transferring to host: <10.14.10.40:9618?addrs=10.14.10.40-9618&alias=node2290.cluster.ldas.cit&noUDP&sock=slot1_6_10055_6832_5841>
+...
+040 (485787100.000.000) 2025-06-06 07:21:08 Finished transferring input files
+...
+001 (485787100.000.000) 2025-06-06 07:21:08 Job executing on host: <10.14.10.40:9618?addrs=10.14.10.40-9618&alias=node2290.cluster.ldas.cit&noUDP&sock=startd_9439_f287>
+	SlotName: slot1_6@node2290.cluster.ldas.cit
+	CondorScratchDir = "/var/lib/condor/execute/dir_3883006"
+	Cpus = 1
+	Disk = 5243904
+	GPUs = 0
+	Memory = 16384
+...
+040 (485787101.000.000) 2025-06-06 07:21:08 Started transferring input files
+	Transferring to host: <10.14.10.41:9618?addrs=10.14.10.41-9618&alias=node2291.cluster.ldas.cit&noUDP&sock=slot1_2_9814_99c8_7641>
+...
+040 (485787101.000.000) 2025-06-06 07:21:08 Finished transferring input files
+...
+001 (485787101.000.000) 2025-06-06 07:21:08 Job executing on host: <10.14.10.41:9618?addrs=10.14.10.41-9618&alias=node2291.cluster.ldas.cit&noUDP&sock=startd_9294_7d4b>
+	SlotName: slot1_2@node2291.cluster.ldas.cit
+	CondorScratchDir = "/var/lib/condor/execute/dir_3661562"
+	Cpus = 1
+	Disk = 5243904
+	GPUs = 0
+	Memory = 16384
+...
+006 (485787101.000.000) 2025-06-06 07:21:13 Image size of job updated: 152
+	0  -  MemoryUsage of job (MB)
+	0  -  ResidentSetSize of job (KB)
+...
+040 (485787101.000.000) 2025-06-06 07:21:14 Started transferring output files
+...
+040 (485787101.000.000) 2025-06-06 07:21:14 Finished transferring output files
+...
+006 (485787100.000.000) 2025-06-06 07:21:14 Image size of job updated: 1004
+	0  -  MemoryUsage of job (MB)
+	0  -  ResidentSetSize of job (KB)
+...
+040 (485787100.000.000) 2025-06-06 07:21:14 Started transferring output files
+...
+040 (485787100.000.000) 2025-06-06 07:21:14 Finished transferring output files
+...
+005 (485787101.000.000) 2025-06-06 07:21:14 Job terminated.
+	(1) Normal termination (return value 0)
+		Usr 0 00:00:02, Sys 0 00:00:02  -  Run Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Run Local Usage
+		Usr 0 00:00:02, Sys 0 00:00:02  -  Total Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Total Local Usage
+	137  -  Run Bytes Sent By Job
+	731  -  Run Bytes Received By Job
+	137  -  Total Bytes Sent By Job
+	731  -  Total Bytes Received By Job
+	Partitionable Resources :    Usage  Request Allocated 
+	   Cpus                 :                 1         1 
+	   Disk (KB)            :       68  5242880   5243904 
+	   GPUs                 :                           0 
+	   Memory (MB)          :        0    16384     16384 
+	   TimeExecute (s)      :        5                    
+	   TimeSlotBusy (s)     :        6                    
+
+	Job terminated of its own accord at 2025-06-06T14:21:13Z with exit-code 0.
+...
+005 (485787100.000.000) 2025-06-06 07:21:15 Job terminated.
+	(1) Normal termination (return value 0)
+		Usr 0 00:00:02, Sys 0 00:00:02  -  Run Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Run Local Usage
+		Usr 0 00:00:02, Sys 0 00:00:02  -  Total Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Total Local Usage
+	137  -  Run Bytes Sent By Job
+	731  -  Run Bytes Received By Job
+	137  -  Total Bytes Sent By Job
+	731  -  Total Bytes Received By Job
+	Partitionable Resources :    Usage  Request Allocated 
+	   Cpus                 :                 1         1 
+	   Disk (KB)            :       68  5242880   5243904 
+	   GPUs                 :                           0 
+	   Memory (MB)          :        0    16384     16384 
+	   TimeExecute (s)      :        6                    
+	   TimeSlotBusy (s)     :        6                    
+
+	Job terminated of its own accord at 2025-06-06T14:21:14Z with exit-code 0.
+...
+000 (485787103.000.000) 2025-06-06 07:22:21 Job submitted from host: <10.14.0.12:9618?addrs=10.14.0.12-9618&alias=ldas-grid.ligo.caltech.edu&noUDP&sock=schedd_2400_c762>
+...
+040 (485787103.000.000) 2025-06-06 07:24:52 Started transferring input files
+	Transferring to host: <10.14.4.73:9618?addrs=10.14.4.73-9618&alias=node823.cluster.ldas.cit&noUDP&sock=slot1_5_356559_d23c_325573>
+...
+040 (485787103.000.000) 2025-06-06 07:24:52 Finished transferring input files
+...
+001 (485787103.000.000) 2025-06-06 07:24:52 Job executing on host: <10.14.4.73:9618?addrs=10.14.4.73-9618&alias=node823.cluster.ldas.cit&noUDP&sock=startd_9264_e974>
+	SlotName: slot1_5@node823.cluster.ldas.cit
+	CondorScratchDir = "/var/lib/condor/execute/dir_3545695"
+	Cpus = 1
+	Disk = 5243904
+	GPUs = 0
+	Memory = 16384
+...
+006 (485787103.000.000) 2025-06-06 07:25:01 Image size of job updated: 29696
+	18  -  MemoryUsage of job (MB)
+	17740  -  ResidentSetSize of job (KB)
+...
+006 (485787103.000.000) 2025-06-06 07:25:33 Image size of job updated: 373836
+	18  -  MemoryUsage of job (MB)
+	17892  -  ResidentSetSize of job (KB)
+...
+040 (485787103.000.000) 2025-06-06 07:25:33 Started transferring output files
+...
+040 (485787103.000.000) 2025-06-06 07:25:33 Finished transferring output files
+...
+005 (485787103.000.000) 2025-06-06 07:25:33 Job terminated.
+	(1) Normal termination (return value 0)
+		Usr 0 00:00:29, Sys 0 00:00:04  -  Run Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Run Local Usage
+		Usr 0 00:00:29, Sys 0 00:00:04  -  Total Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Total Local Usage
+	2586  -  Run Bytes Sent By Job
+	819  -  Run Bytes Received By Job
+	2586  -  Total Bytes Sent By Job
+	819  -  Total Bytes Received By Job
+	Partitionable Resources :    Usage  Request Allocated 
+	   Cpus                 :                 1         1 
+	   Disk (KB)            :      208  5242880   5243904 
+	   GPUs                 :                           0 
+	   Memory (MB)          :       18    16384     16384 
+	   TimeExecute (s)      :       41                    
+	   TimeSlotBusy (s)     :       43                    
+
+	Job terminated of its own accord at 2025-06-06T14:25:33Z with exit-code 0.
+...
+009 (485787038.000.000) 2025-06-06 07:26:01 Job was aborted.
+	via condor_rm (by user suzanne.lexmond)
+
+	Job terminated by itself at 2025-06-06T14:09:46Z (using method 0: OF_ITS_OWN_ACCORD).
+...
+009 (485787042.000.000) 2025-06-06 07:26:01 Job was aborted.
+	via condor_rm (by user suzanne.lexmond)
+
+	Job terminated by itself at 2025-06-06T14:14:29Z (using method 0: OF_ITS_OWN_ACCORD).
+...
+009 (485787047.000.000) 2025-06-06 07:26:01 Job was aborted.
+	via condor_rm (by user suzanne.lexmond)
+
+	Job terminated by itself at 2025-06-06T14:18:14Z (using method 0: OF_ITS_OWN_ACCORD).
+...
+000 (485787126.000.000) 2025-06-06 07:28:01 Job submitted from host: <10.14.0.12:9618?addrs=10.14.0.12-9618&alias=ldas-grid.ligo.caltech.edu&noUDP&sock=schedd_2400_c762>
+...
+040 (485787126.000.000) 2025-06-06 07:29:15 Started transferring input files
+	Transferring to host: <10.14.4.73:9618?addrs=10.14.4.73-9618&alias=node823.cluster.ldas.cit&noUDP&sock=slot1_5_356559_d23c_325574>
+...
+040 (485787126.000.000) 2025-06-06 07:29:15 Finished transferring input files
+...
+001 (485787126.000.000) 2025-06-06 07:29:15 Job executing on host: <10.14.4.73:9618?addrs=10.14.4.73-9618&alias=node823.cluster.ldas.cit&noUDP&sock=startd_9264_e974>
+	SlotName: slot1_5@node823.cluster.ldas.cit
+	CondorScratchDir = "/var/lib/condor/execute/dir_3547919"
+	Cpus = 1
+	Disk = 5243904
+	GPUs = 0
+	Memory = 16384
+...
+006 (485787126.000.000) 2025-06-06 07:29:23 Image size of job updated: 17556
+	18  -  MemoryUsage of job (MB)
+	17556  -  ResidentSetSize of job (KB)
+...
+006 (485787126.000.000) 2025-06-06 07:30:21 Image size of job updated: 402468
+	18  -  MemoryUsage of job (MB)
+	17572  -  ResidentSetSize of job (KB)
+...
+040 (485787126.000.000) 2025-06-06 07:30:21 Started transferring output files
+...
+040 (485787126.000.000) 2025-06-06 07:30:21 Finished transferring output files
+...
+005 (485787126.000.000) 2025-06-06 07:30:22 Job terminated.
+	(1) Normal termination (return value 0)
+		Usr 0 00:00:32, Sys 0 00:00:05  -  Run Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Run Local Usage
+		Usr 0 00:00:32, Sys 0 00:00:05  -  Total Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Total Local Usage
+	2820  -  Run Bytes Sent By Job
+	819  -  Run Bytes Received By Job
+	2820  -  Total Bytes Sent By Job
+	819  -  Total Bytes Received By Job
+	Partitionable Resources :    Usage  Request Allocated 
+	   Cpus                 :                 1         1 
+	   Disk (KB)            :      208  5242880   5243904 
+	   GPUs                 :                           0 
+	   Memory (MB)          :       18    16384     16384 
+	   TimeExecute (s)      :       66                    
+	   TimeSlotBusy (s)     :       68                    
+
+	Job terminated of its own accord at 2025-06-06T14:30:21Z with exit-code 0.
+...
+000 (485787127.000.000) 2025-06-06 07:31:41 Job submitted from host: <10.14.0.12:9618?addrs=10.14.0.12-9618&alias=ldas-grid.ligo.caltech.edu&noUDP&sock=schedd_2400_c762>
+...
+040 (485787127.000.000) 2025-06-06 07:33:57 Started transferring input files
+	Transferring to host: <10.14.9.147:9618?addrs=10.14.9.147-9618&alias=node2147.cluster.ldas.cit&noUDP&sock=slot1_8_2016931_197b_62852>
+...
+040 (485787127.000.000) 2025-06-06 07:33:57 Finished transferring input files
+...
+001 (485787127.000.000) 2025-06-06 07:33:57 Job executing on host: <10.14.9.147:9618?addrs=10.14.9.147-9618&alias=node2147.cluster.ldas.cit&noUDP&sock=startd_3659_591f>
+	SlotName: slot1_8@node2147.cluster.ldas.cit
+	CondorScratchDir = "/var/lib/condor/execute/dir_3750006"
+	Cpus = 1
+	Disk = 5243904
+	GPUs = 0
+	Memory = 16384
+...
+006 (485787127.000.000) 2025-06-06 07:34:05 Image size of job updated: 84644
+	83  -  MemoryUsage of job (MB)
+	84644  -  ResidentSetSize of job (KB)
+...
+006 (485787127.000.000) 2025-06-06 07:34:19 Image size of job updated: 373288
+	83  -  MemoryUsage of job (MB)
+	84644  -  ResidentSetSize of job (KB)
+...
+040 (485787127.000.000) 2025-06-06 07:34:19 Started transferring output files
+...
+040 (485787127.000.000) 2025-06-06 07:34:19 Finished transferring output files
+...
+005 (485787127.000.000) 2025-06-06 07:34:19 Job terminated.
+	(1) Normal termination (return value 0)
+		Usr 0 00:00:15, Sys 0 00:00:03  -  Run Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Run Local Usage
+		Usr 0 00:00:15, Sys 0 00:00:03  -  Total Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Total Local Usage
+	2853  -  Run Bytes Sent By Job
+	819  -  Run Bytes Received By Job
+	2853  -  Total Bytes Sent By Job
+	819  -  Total Bytes Received By Job
+	Partitionable Resources :    Usage  Request Allocated 
+	   Cpus                 :                 1         1 
+	   Disk (KB)            :      208  5242880   5243904 
+	   GPUs                 :                           0 
+	   Memory (MB)          :       83    16384     16384 
+	   TimeExecute (s)      :       22                    
+	   TimeSlotBusy (s)     :       23                    
+
+	Job terminated of its own accord at 2025-06-06T14:34:19Z with exit-code 0.
+...
+000 (485787128.000.000) 2025-06-06 07:36:30 Job submitted from host: <10.14.0.12:9618?addrs=10.14.0.12-9618&alias=ldas-grid.ligo.caltech.edu&noUDP&sock=schedd_2400_c762>
+...
+040 (485787128.000.000) 2025-06-06 07:39:10 Started transferring input files
+	Transferring to host: <10.14.9.147:9618?addrs=10.14.9.147-9618&alias=node2147.cluster.ldas.cit&noUDP&sock=slot1_8_2016931_197b_62853>
+...
+040 (485787128.000.000) 2025-06-06 07:39:10 Finished transferring input files
+...
+001 (485787128.000.000) 2025-06-06 07:39:10 Job executing on host: <10.14.9.147:9618?addrs=10.14.9.147-9618&alias=node2147.cluster.ldas.cit&noUDP&sock=startd_3659_591f>
+	SlotName: slot1_8@node2147.cluster.ldas.cit
+	CondorScratchDir = "/var/lib/condor/execute/dir_3752420"
+	Cpus = 1
+	Disk = 5243904
+	GPUs = 0
+	Memory = 16384
+...
+006 (485787128.000.000) 2025-06-06 07:39:18 Image size of job updated: 122484
+	120  -  MemoryUsage of job (MB)
+	122484  -  ResidentSetSize of job (KB)
+...
+006 (485787128.000.000) 2025-06-06 07:41:12 Image size of job updated: 674492
+	120  -  MemoryUsage of job (MB)
+	122484  -  ResidentSetSize of job (KB)
+...
+040 (485787128.000.000) 2025-06-06 07:41:12 Started transferring output files
+...
+040 (485787128.000.000) 2025-06-06 07:41:12 Finished transferring output files
+...
+005 (485787128.000.000) 2025-06-06 07:41:12 Job terminated.
+	(1) Normal termination (return value 0)
+		Usr 0 00:01:53, Sys 0 00:00:05  -  Run Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Run Local Usage
+		Usr 0 00:01:53, Sys 0 00:00:05  -  Total Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Total Local Usage
+	16271  -  Run Bytes Sent By Job
+	819  -  Run Bytes Received By Job
+	16271  -  Total Bytes Sent By Job
+	819  -  Total Bytes Received By Job
+	Partitionable Resources :    Usage  Request Allocated 
+	   Cpus                 :                 1         1 
+	   Disk (KB)            :   185700  5242880   5243904 
+	   GPUs                 :                           0 
+	   Memory (MB)          :      120    16384     16384 
+	   TimeExecute (s)      :      122                    
+	   TimeSlotBusy (s)     :      123                    
+
+	Job terminated of its own accord at 2025-06-06T14:41:12Z with exit-code 0.
+...
+000 (485787133.000.000) 2025-06-06 07:43:35 Job submitted from host: <10.14.0.12:9618?addrs=10.14.0.12-9618&alias=ldas-grid.ligo.caltech.edu&noUDP&sock=schedd_2400_c762>
+...
+040 (485787133.000.000) 2025-06-06 07:47:54 Started transferring input files
+	Transferring to host: <10.14.9.147:9618?addrs=10.14.9.147-9618&alias=node2147.cluster.ldas.cit&noUDP&sock=slot1_8_2016931_197b_62854>
+...
+040 (485787133.000.000) 2025-06-06 07:47:54 Finished transferring input files
+...
+001 (485787133.000.000) 2025-06-06 07:47:54 Job executing on host: <10.14.9.147:9618?addrs=10.14.9.147-9618&alias=node2147.cluster.ldas.cit&noUDP&sock=startd_3659_591f>
+	SlotName: slot1_8@node2147.cluster.ldas.cit
+	CondorScratchDir = "/var/lib/condor/execute/dir_3754769"
+	Cpus = 1
+	Disk = 5243904
+	GPUs = 0
+	Memory = 16384
+...
+006 (485787133.000.000) 2025-06-06 07:48:03 Image size of job updated: 200076
+	196  -  MemoryUsage of job (MB)
+	200076  -  ResidentSetSize of job (KB)
+...
+006 (485787133.000.000) 2025-06-06 07:49:54 Image size of job updated: 674752
+	196  -  MemoryUsage of job (MB)
+	200080  -  ResidentSetSize of job (KB)
+...
+040 (485787133.000.000) 2025-06-06 07:49:54 Started transferring output files
+...
+040 (485787133.000.000) 2025-06-06 07:49:55 Finished transferring output files
+...
+005 (485787133.000.000) 2025-06-06 07:49:55 Job terminated.
+	(1) Normal termination (return value 0)
+		Usr 0 00:01:52, Sys 0 00:00:04  -  Run Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Run Local Usage
+		Usr 0 00:01:52, Sys 0 00:00:04  -  Total Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Total Local Usage
+	15915  -  Run Bytes Sent By Job
+	819  -  Run Bytes Received By Job
+	15915  -  Total Bytes Sent By Job
+	819  -  Total Bytes Received By Job
+	Partitionable Resources :    Usage  Request Allocated 
+	   Cpus                 :                 1         1 
+	   Disk (KB)            :   185800  5242880   5243904 
+	   GPUs                 :                           0 
+	   Memory (MB)          :      196    16384     16384 
+	   TimeExecute (s)      :      120                    
+	   TimeSlotBusy (s)     :      121                    
+
+	Job terminated of its own accord at 2025-06-06T14:49:54Z with exit-code 0.
+...
+000 (485787142.000.000) 2025-06-06 07:55:09 Job submitted from host: <10.14.0.12:9618?addrs=10.14.0.12-9618&alias=ldas-grid.ligo.caltech.edu&noUDP&sock=schedd_2400_c762>
+...
+040 (485787142.000.000) 2025-06-06 07:56:10 Started transferring input files
+	Transferring to host: <10.14.9.147:9618?addrs=10.14.9.147-9618&alias=node2147.cluster.ldas.cit&noUDP&sock=slot1_8_2016931_197b_62856>
+...
+040 (485787142.000.000) 2025-06-06 07:56:10 Finished transferring input files
+...
+001 (485787142.000.000) 2025-06-06 07:56:10 Job executing on host: <10.14.9.147:9618?addrs=10.14.9.147-9618&alias=node2147.cluster.ldas.cit&noUDP&sock=startd_3659_591f>
+	SlotName: slot1_8@node2147.cluster.ldas.cit
+	CondorScratchDir = "/var/lib/condor/execute/dir_3757108"
+	Cpus = 1
+	Disk = 5243904
+	GPUs = 0
+	Memory = 16384
+...
+006 (485787142.000.000) 2025-06-06 07:56:18 Image size of job updated: 99300
+	97  -  MemoryUsage of job (MB)
+	99300  -  ResidentSetSize of job (KB)
+...
+006 (485787142.000.000) 2025-06-06 07:58:17 Image size of job updated: 1153284
+	97  -  MemoryUsage of job (MB)
+	99300  -  ResidentSetSize of job (KB)
+...
+040 (485787142.000.000) 2025-06-06 07:58:17 Started transferring output files
+...
+040 (485787142.000.000) 2025-06-06 07:58:17 Finished transferring output files
+...
+005 (485787142.000.000) 2025-06-06 07:58:17 Job terminated.
+	(1) Normal termination (return value 0)
+		Usr 0 00:01:56, Sys 0 00:00:07  -  Run Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Run Local Usage
+		Usr 0 00:01:56, Sys 0 00:00:07  -  Total Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Total Local Usage
+	15892  -  Run Bytes Sent By Job
+	819  -  Run Bytes Received By Job
+	15892  -  Total Bytes Sent By Job
+	819  -  Total Bytes Received By Job
+	Partitionable Resources :    Usage  Request Allocated 
+	   Cpus                 :                 1         1 
+	   Disk (KB)            :   185800  5242880   5243904 
+	   GPUs                 :                           0 
+	   Memory (MB)          :       97    16384     16384 
+	   TimeExecute (s)      :      127                    
+	   TimeSlotBusy (s)     :      128                    
+
+	Job terminated of its own accord at 2025-06-06T14:58:17Z with exit-code 0.
+...
+000 (485830871.000.000) 2025-06-10 04:32:09 Job submitted from host: <10.14.0.12:9618?addrs=10.14.0.12-9618&alias=ldas-grid.ligo.caltech.edu&noUDP&sock=schedd_2400_c762>
+...
+040 (485830871.000.000) 2025-06-10 04:32:50 Started transferring input files
+	Transferring to host: <10.14.9.118:9618?addrs=10.14.9.118-9618&alias=node2118.cluster.ldas.cit&noUDP&sock=slot1_9_4922_be81_56000>
+...
+040 (485830871.000.000) 2025-06-10 04:32:50 Finished transferring input files
+...
+001 (485830871.000.000) 2025-06-10 04:32:50 Job executing on host: <10.14.9.118:9618?addrs=10.14.9.118-9618&alias=node2118.cluster.ldas.cit&noUDP&sock=startd_4863_3126>
+	SlotName: slot1_9@node2118.cluster.ldas.cit
+	CondorScratchDir = "/var/lib/condor/execute/dir_3454288"
+	Cpus = 1
+	Disk = 5243904
+	GPUs = 0
+	Memory = 16384
+...
+006 (485830871.000.000) 2025-06-10 04:32:58 Image size of job updated: 106704
+	105  -  MemoryUsage of job (MB)
+	106704  -  ResidentSetSize of job (KB)
+...
+006 (485830871.000.000) 2025-06-10 04:34:53 Image size of job updated: 664808
+	105  -  MemoryUsage of job (MB)
+	106704  -  ResidentSetSize of job (KB)
+...
+040 (485830871.000.000) 2025-06-10 04:34:53 Started transferring output files
+...
+040 (485830871.000.000) 2025-06-10 04:34:53 Finished transferring output files
+...
+005 (485830871.000.000) 2025-06-10 04:34:53 Job terminated.
+	(1) Normal termination (return value 0)
+		Usr 0 00:01:52, Sys 0 00:00:05  -  Run Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Run Local Usage
+		Usr 0 00:01:52, Sys 0 00:00:05  -  Total Remote Usage
+		Usr 0 00:00:00, Sys 0 00:00:00  -  Total Local Usage
+	14674  -  Run Bytes Sent By Job
+	819  -  Run Bytes Received By Job
+	14674  -  Total Bytes Sent By Job
+	819  -  Total Bytes Received By Job
+	Partitionable Resources :    Usage  Request Allocated 
+	   Cpus                 :                 1         1 
+	   Disk (KB)            :   185800  5242880   5243904 
+	   GPUs                 :                           0 
+	   Memory (MB)          :      105    16384     16384 
+	   TimeExecute (s)      :      123                    
+	   TimeSlotBusy (s)     :      124                    
+
+	Job terminated of its own accord at 2025-06-10T11:34:53Z with exit-code 0.
+...
