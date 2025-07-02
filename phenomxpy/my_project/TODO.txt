@@ -149,3 +149,42 @@ print(phen.pWF.__dict__)
 
 Note:
 pWF = "Phenomenological WaveForm" internal parameter object within PhenomT that holds detailed settings and physical parameters.
+
+
+
+
+
+30/06/2025:
+- I was using a different waveform class, so somehow this didn;t give me the right waveform. 
+Instead use the class: from phenomxpy.common import Waveform
+parameters = {'mass1': m1, # Solar masses
+            'mass2':m2, # Solar masses          
+            'distance':distance, # Mpc
+            'longAscNodes':long_asc_nodes,
+            'spin1x':0., 
+            'spin1y':0., 
+            'spin1z':S1z,
+            'spin2x':0., 
+            'spin2y':0., 
+            'spin2z':S2z, 
+            'f_max':0,
+            'delta_t_sec':deltaT,
+            'inclination':incl, 
+            'phiRef':phi_ref - np.pi/2,  # LAL uses phiRef + pi/2
+            'eccentricity':ecc,
+            'mean_anomaly':0.,
+            'mode_array':[[2,2]]
+            }
+
+waveform_arguments={}
+waveform_arguments["f_lower"] = f_min_eccTD - 1
+waveform_arguments["f_ref"] = f_ref
+
+NOTE! 'phiRef':phi_ref - np.pi/2,  # LAL uses phiRef - pi/2
+So EccentricTD uses h(t) = h+ + hx and PhenomT uses h(t)= h+ - hx, so this automatically gives pi/2 difference due to cos and sin difference!
+
+- Don't know why this happens yet, butthe waveforms don't seem to have the same length. They do seem to correspond with waveform_arguments["f_lower"] = f_min_eccTD - 1.
+Still need to figure out why...
+
+- There still seems to be a veeery slight phase difference, but that is probably due to different approximations and PN-terms.
+Possibility to do: plot both in frequency domain and check what the fuck is going on
