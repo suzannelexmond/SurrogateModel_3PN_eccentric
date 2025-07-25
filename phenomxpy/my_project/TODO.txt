@@ -1,5 +1,3 @@
-- instead of cutting waveforms, change freqmin for every waveform so it is all same length (much faster)
-- change waveform size to time in [M]
 - test greedy algorithm (differen strategy?)
 - integrate chi, rel_anomaly and deltaT in all classes
 
@@ -188,3 +186,144 @@ Still need to figure out why...
 
 - There still seems to be a veeery slight phase difference, but that is probably due to different approximations and PN-terms.
 Possibility to do: plot both in frequency domain and check what the fuck is going on
+
+
+04/07/2025:
+I FIXED IT :)
+How to get identical waveforms in geomteric units:
+times = np.linspace(-10000, 0, num=10000)  # times in seconds
+    phen = phenomt.PhenomTE(
+    mode=[2,2],
+    times=times,
+    eccentricity=eccmin,                  
+    f_ref=f_ref,                   
+    f_lower=f_min,
+    total_mass=total_mass,  
+    distance=distance,
+    phiRef=np.pi/2 - phiRef,
+    inclination=inclination)
+
+    # phen = phenomt.PhenomTE(mode=[2,2], times=times, eccentricity=eccmin, f_ref=f_min, f_lower=f_ref, phiRef=np.pi/2 - phiRef, inclination=inclination)
+    phen.compute_polarizations(times=times)
+    geom_freq = HztoMf(phen.pWF.f_lower, total_mass)
+    f_ref_ref = MftoHz(geom_freq, total_mass2)
+    f_min_ref = f_ref_ref
+
+    phen_ref = phenomt.PhenomTE(
+    mode=[2,2],
+    times=times,
+    eccentricity=eccmin,                 
+    f_ref=f_ref_ref,                   
+    f_lower=f_min_ref,     
+    total_mass=total_mass2,
+    distance=distance2,             
+    phiRef=np.pi/2 - phiRef,
+    inclination=inclination)
+
+    # phen = phenomt.PhenomTE(mode=[2,2], times=times, eccentricity=eccmin, f_ref=f_min, f_lower=f_ref, phiRef=np.pi/2 - phiRef, inclination=inclination)
+    phen_ref.compute_polarizations(times=times)
+
+
+
+    
+
+22/07/2025:
+Below is a full example pipeline showing how to build and implement the surrogate:
+1. Define a fixed time grid (used in both training & PE),
+
+import numpy as np
+
+duration = 4.0                # seconds
+sampling_frequency = 2048    # Hz
+n_samples = int(duration * sampling_frequency)
+
+time = np.linspace(0, duration, n_samples, endpoint=False)
+
+2. Generate training waveforms (with a dummy waveform model),
+3. Apply greedy basis construction,
+4. Build GPR models at empirical nodes,
+5. Save your surrogate,
+6. Use it with Bilby for injection & parameter estimation.
+
+
+Example:
+
+OFFLINE:
+import numpy as np
+from sklearn.gaussian_process import GaussianProcessRegressor
+import pickle
+
+# --- Step 1: Generate training data ---
+# Example parameters: masses (just 1D for demo)
+training_params = np.linspace(10, 60, 20).reshape(-1, 1)  # 20 training points
+
+# Simulate waveforms: for simplicity, waveform amplitude = sin(param * time)
+time_grid = np.linspace(0, 1, 100)  # 100 time samples
+training_waveforms = np.array([
+    np.sin(param * time_grid) for param in training_params.flatten()
+])  # shape (20, 100)
+
+# --- Step 2: Reduced basis via SVD (simple surrogate example) ---
+# This finds dominant waveform "modes"
+U, S, Vt = np.linalg.svd(training_waveforms, full_matrices=False)
+n_basis = 5  # number of basis vectors to keep
+basis = Vt[:n_basis]  # shape (5, 100)
+
+# --- Step 3: Choose empirical nodes (just pick indices for demo) ---
+empirical_nodes = np.linspace(0, 99, n_basis, dtype=int)  # e.g. [0, 24, 49, 74, 99]
+
+# --- Step 4: Train GPRs for coefficients at empirical nodes ---
+gpr_models = []
+for i in range(n_basis):
+    # Extract waveform values at empirical node i
+    y = training_waveforms[:, empirical_nodes[i]]  # shape (20,)
+    # Train GPR to predict amplitude at this node from params
+    gpr = GaussianProcessRegressor()
+    gpr.fit(training_params, y)
+    gpr_models.append(gpr)
+
+# --- Step 5: Save surrogate components ---
+surrogate = {
+    'basis': basis,
+    'empirical_nodes': empirical_nodes,
+    'gpr_models': gpr_models,
+    'time_grid': time_grid,
+}
+
+with open('trained_surrogate.pkl', 'wb') as f:
+    pickle.dump(surrogate, f)
+
+print("Surrogate trained and saved.")
+
+
+ONLINE:
+
+import numpy as np
+import pickle
+
+# Load surrogate (once)
+with open('trained_surrogate.pkl', 'rb') as f:
+    surrogate = pickle.load(f)
+
+basis = surrogate['basis']             # (5, 100)
+empirical_nodes = surrogate['empirical_nodes']  # [0, 24, 49, 74, 99]
+gpr_models = surrogate['gpr_models']   # list of 5 GPRs
+time_grid = surrogate['time_grid']     # (100,)
+
+def surrogate_predict(params):
+    # params: array-like shape (1, number_of_params) e.g. [[35.0]]
+    
+    # Predict waveform coefficients (amplitude at empirical nodes)
+    coeffs = np.array([gpr.predict([params])[0] for gpr in gpr_models])  # shape (5,)
+    
+    # Reconstruct full waveform using basis and coefficients
+    # basis shape: (5, 100), coeffs shape: (5,)
+    waveform = np.dot(coeffs, basis)  # shape (100,)
+    
+    return time_grid, waveform
+
+# Example call during PE:
+params = np.array([35.0])
+t, amp = surrogate_predict(params)
+
+print(f"Predicted waveform amplitude shape: {amp.shape}")
