@@ -12,7 +12,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
     """
 
-    def __init__(self, time_array, ecc_ref_parameterspace, total_mass, luminosity_distance, f_lower=10, f_ref=20, chi1=0, chi2=0, phiRef=0., rel_anomaly=0., inclination=0., truncate_at_ISCO=True):
+    def __init__(self, time_array, ecc_ref_parameterspace, total_mass, luminosity_distance, f_lower=10, f_ref=20, chi1=0, chi2=0, phiRef=0., rel_anomaly=0., inclination=0., truncate_at_ISCO=True, truncate_at_tmin=True):
         """
         Parameters:
         ----------------
@@ -33,15 +33,16 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
         """
         self.parameter_space_input = ecc_ref_parameterspace
-        
+    
         # To be stored parameters
         self.time = None
         self.residual_greedy_basis = None
         self.greedy_parameters_idx = None
         self.empirical_nodes_idx = None
+        self.highest_tmin_value = None
 
         # Inherit parameters from all previously defined classes
-        super().__init__(time_array, None, total_mass, luminosity_distance, f_lower, f_ref, chi1, chi2, phiRef, rel_anomaly, inclination, truncate_at_ISCO)
+        super().__init__(time_array, None, total_mass, luminosity_distance, f_lower, f_ref, chi1, chi2, phiRef, rel_anomaly, inclination, truncate_at_ISCO, truncate_at_tmin)
     
     def generate_property_dataset(self, ecc_list, property, save_dataset_to_file=None, plot_residuals_time_evolv=False, plot_residuals_eccentric_evolv=False, save_fig_eccentric_evolv=False, save_fig_time_evolve=False):
         """
@@ -69,10 +70,11 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
         try: 
             # Attempt to load existing residual dataset
-            load_residuals = np.load(f'_Straindata/Residuals/residuals_{property}_M={self.total_mass}_t_lower={self.time[0]}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(ecc_list)}_{max(ecc_list)}_N={len(ecc_list)}].npz')
+            filename = f'Straindata/Residuals/residuals_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(ecc_list)}_{max(ecc_list)}_N={len(ecc_list)}].npz'
+            load_residuals = np.load(filename)
             
             residual_dataset = load_residuals['residual']
-            self.time = load_residuals['TS']
+            self.time = load_residuals['time']
             
             print(f'Residual parameterspace dataset found for {property}')
             
@@ -84,7 +86,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             residual_dataset = self._calculate_residuals(ecc_list, hp_dataset, hc_dataset, property)
 
             # If save_dataset_to_file is True save the residuals to file in Straindata/Residuals
-            if save_dataset_to_file is True and not os.path.isfile(f'Straindata/Residuals/residuals_{property}_M={self.total_mass}_t_lower={self.time[0]}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(ecc_list)}_{max(ecc_list)}_N={len(ecc_list)}].npz'):
+            if save_dataset_to_file is True and not os.path.isfile(f'Straindata/Residuals/residuals_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(ecc_list)}_{max(ecc_list)}_N={len(ecc_list)}].npz'):
                 self._save_residual_dataset(ecc_list, property, residual_dataset)
        
         # If plot_residuals is True, plot whole residual dataset
@@ -108,21 +110,22 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             Plus polarisation data.
         hc_dataset : ndarray
             Cross polarisation data.
-        TS : ndarray
-            Time series data.
+
         """
         try:
             # Attempt to load existing polarisation dataset
-            load_polarisations = np.load(f'_Straindata/Polarisations/polarisations_M={self.total_mass}_t_lower={self.time[0]}_e=[{min(ecc_list)}_{max(ecc_list)}_N={len(ecc_list)}]_f_lower={self.f_lower}_f_ref={self.f_ref}.npz', allow_pickle=True)
+            load_polarisations = np.load(f'Straindata/Polarisations/polarisations_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(ecc_list)}_{max(ecc_list)}_N={len(ecc_list)}]_t_lower={int(self.time[0])}.npz', allow_pickle=True)
             hp_dataset = load_polarisations['hp']
             hc_dataset = load_polarisations['hc']
-            self.time = load_polarisations['TS']
+            self.time = load_polarisations['time']
 
             print('Loaded polarisations')
 
         except:
             # Get waveform size for truncated ISCO waveform of smallest waveform
-            ISCO_ecc = np.max(ecc_list) # Highest eccentricity in the list --> earliest cut-off
+            sorted_ecc_list = np.sort(ecc_list)
+
+            ISCO_ecc = sorted_ecc_list[-1] # Highest eccentricity in the list --> earliest ISCO cut-off
             hp_ISCO, hc_ISCO = self.simulate_inspiral_mass_independent(ISCO_ecc, truncate_at_ISCO=True)
 
 
@@ -136,7 +139,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
                     hc_dataset[i] = hc_ISCO
                 else:
                     hp, hc = self.simulate_inspiral_mass_independent(ecc, truncate_at_ISCO=False)
-                    print('compare 0' , len(hp), len(hp_ISCO))
 
                     hp_dataset[i] = hp[:len(hp_ISCO)]  # Ensure the waveform length matches the shortest time array
                     hc_dataset[i] = hc[:len(hp_ISCO)]  # Ensure the waveform length matches the shortest time array
@@ -147,7 +149,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
             # Ensure the directory exists, creating it if necessary and save
             os.makedirs('Straindata/Polarisations', exist_ok=True)
-            np.savez(f'Straindata/Polarisations/polarisations_M={self.total_mass}_t_lower={self.time[0]}_e=[{min(ecc_list)}_{max(ecc_list)}_N={len(ecc_list)}]_f_lower={self.f_lower}_f_ref={self.f_ref}.npz', hp=hp_dataset, hc=hc_dataset, TS=self.time)
+            np.savez(f'Straindata/Polarisations/polarisations_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(ecc_list)}_{max(ecc_list)}_N={len(ecc_list)}]_t_lower={int(self.time[0])}.npz', hp=hp_dataset, hc=hc_dataset, time=self.time)
 
         return hp_dataset, hc_dataset
 
@@ -211,12 +213,16 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             plt.tight_layout()
 
             if save_fig_eccentric_evolve is True:
-                figname = f'Residuals_eccentric_evolv_{property}_M={self.total_mass}_ecc_list=[{min(ecc_list)}_{max(ecc_list)}_N={len(self.parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}.png'
+                ISCO = '' if self.truncate_at_ISCO else 'NO_ISCO_'
+                tmin = '' if self.truncate_at_tmin else 'NO_tmin_'
+
+                figname = f'Residuals_eccentric_evolv_{property}_{ISCO}{tmin}M={self.total_mass}_ecc_list=[{round(min(ecc_list), 2)}_{round(max(ecc_list), 2)}_N={len(self.parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}.png'
+               
                 # Ensure the directory exists, creating it if necessary and save
                 os.makedirs('Images/Residuals', exist_ok=True)
                 fig_residuals_ecc.savefig('Images/Residuals/' + figname)
 
-                print('Figure is saved in Images/Residuals 1')
+                print('Figure is saved in Images/Residuals' + figname)
                 plt.close('all') # Clean up plot
 
         if plot_time_evolve is True:
@@ -236,25 +242,30 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
             plt.title(f'Residuals {property}')
             plt.grid(True)
-            plt.legend()
+            # plt.legend()
 
             plt.tight_layout()
 
             if save_fig_time_evolve is True:
-                figname = f'Residuals_time_evolv_{property}_M={self.total_mass}_ecc_list=[{min(ecc_list)}_{max(ecc_list)}_N={len(self.parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}.png'
+                ISCO = '' if self.truncate_at_ISCO else 'NO_ISCO'
+                tmin = '' if self.truncate_at_tmin else 'NO_tmin'
+
+           
+                figname = f'Residuals_time_evolv_{property}_{ISCO}_{tmin}_M={self.total_mass}_ecc_list=[{min(ecc_list)}_{max(ecc_list)}_N={len(self.parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}.png'
+           
                 # Ensure the directory exists, creating it if necessary and save
                 os.makedirs('Images/Residuals', exist_ok=True)
                 fig_residuals_t.savefig('Images/Residuals/' + figname)
 
-                print('Figure is saved in Images/Residuals')
+                print('Figure is saved in Images/Residuals' + figname)
                 plt.close('all')
     
     def _save_residual_dataset(self, ecc_list, property, residual_dataset):
         """Function to save residual dataset to file."""
 
         os.makedirs('Straindata/Residuals', exist_ok=True)
-        file_path = f'Straindata/Residuals/residuals_{property}_M={self.total_mass}_t_lower={self.time[0]}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(ecc_list)}_{max(ecc_list)}_N={len(ecc_list)}].npz'
-        np.savez(file_path, residual=residual_dataset, TS=self.time, eccentricities=ecc_list)
+        file_path = f'Straindata/Residuals/residuals_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(ecc_list)}_{max(ecc_list)}_N={len(ecc_list)}].npz'
+        np.savez(file_path, residual=residual_dataset, time=self.time, eccentricities=ecc_list)
         print('Residuals saved to Straindata/Residuals')
 
 
@@ -659,7 +670,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         fig, ax = plt.subplots()
 
         for i, idx in enumerate(self.greedy_parameters_idx):
-            ax.plot(self.time, self.residual_greedy_basis[i], label=f'e={round(self.parameter_space_input[idx], 2)}', linewidth=0.6)
+            ax.plot(self.time, self.residual_greedy_basis[i], label=f'e={round(self.parameter_space_input[idx], 3)}', linewidth=0.6)
             ax.scatter(self.time[self.empirical_nodes_idx], self.residual_greedy_basis[i][self.empirical_nodes_idx])
 
         ax.set_xlabel('t [M]')
@@ -672,25 +683,25 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             figname = f'Training_set_{property}_M={self.total_mass}_ecc_list=[{min(self.parameter_space_input)}_{max(self.parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_gN={len(self.greedy_parameters_idx)}.png'
             os.makedirs('Images/TrainingSet', exist_ok=True)
             fig.savefig(f'Images/TrainingSet/{figname}')
-            print('Figure is saved in Images/TrainingSet')
+            print(f'Figure is saved in Images/TrainingSet/{figname}')
 
-sampling_frequency = 2048 # or 4096
-duration = 4 # seconds
-time_array = np.linspace(-duration, 0.021, int(sampling_frequency * duration))  # time in seconds
-print(0, int(sampling_frequency * duration))
+# sampling_frequency = 2048 # or 4096
+# duration = 4 # seconds
+# time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
 
-gt = Generate_TrainingSet(time_array=time_array, total_mass=60, luminosity_distance=200, ecc_ref_parameterspace=np.linspace(0, 0.2, num=40), truncate_at_ISCO=True)
-# for ecc in np.linspace(0.1, 0.35, num=10):
+# gt = Generate_TrainingSet(time_array=time_array, total_mass=60, luminosity_distance=200, ecc_ref_parameterspace=np.linspace(0, 0.2, num=100))
+# for ecc in np.linspace(0, 0.2, num=20)[10:]:
+# #     print(ecc)
 #     hp, hc = gt.simulate_inspiral_mass_independent(ecc, plot_polarisations=True, save_fig=True)
-    # gt.calculate_residual(hp, hc, ecc, 'phase', plot_residual=True, save_fig=True)
-
+#     gt.calculate_residual(hp, hc, ecc, 'phase', plot_residual=True, save_fig=True)
+# print(np.linspace(0, 0.2, num=100)[-10:])
 # gt._generate_polarisation_data(np.linspace(0.01, 0.5, num=20))
-gt.get_training_set(property='phase', N_greedy_vecs=20, plot_emp_nodes_at_ecc=0.1, save_fig_emp_nodes=True, save_fig_greedy_error=True, plot_residuals_eccentric_evolve=True, plot_residuals_time_evolve=True, save_fig_residuals_eccentric=True, save_fig_residuals_time=True, save_fig_training_set=True)
+# gt.get_training_set(property='phase', N_greedy_vecs=20, plot_emp_nodes_at_ecc=0.1, save_fig_emp_nodes=True, save_fig_greedy_error=True, plot_residuals_eccentric_evolve=True, plot_residuals_time_evolve=True, save_fig_residuals_eccentric=True, save_fig_residuals_time=True, save_fig_training_set=True)
 # gt.get_training_set_test(property='phase', N_greedy_vecs=20, plot_emp_nodes_at_ecc=0.1, save_fig_emp_nodes=True)
-# gt.generate_property_dataset(ecc_list=np.linspace(0.01, 0.2, num=100), property='phase', plot_residuals_eccentric_evolv=True, plot_residuals_time_evolv=True)
-# gt.generate_property_dataset(ecc_list=np.linspace(0.01, 0.2, num=100), property='amplitude', plot_residuals_eccentric_evolv=True, plot_residuals_time_evolv=True)
+# gt.generate_property_dataset(ecc_list=np.linspace(0.01, 0.2, num=5), property='phase', plot_residuals_eccentric_evolv=True, plot_residuals_time_evolv=True)
+# gt.generate_property_dataset(ecc_list=np.linspace(0.01, 0.2, num=5), property='amplitude', plot_residuals_eccentric_evolv=True, plot_residuals_time_evolv=True)
 # gt.get_training_set(property='phase', N_greedy_vecs=20, plot_emp_nodes_at_ecc=0.1, plot_greedy_error=True, plot_residuals_eccentric_evolve=True, plot_residuals_time_evolve=True, plot_training_set=True)
-# gt.get_training_set(property='amplitude', N_greedy_vecs=20, plot_emp_nodes_at_ecc=0.1, plot_greedy_error=True, plot_residuals_eccentric_evolve=True, plot_residuals_time_evolve=True, plot_training_set=True)
+# gt.get_training_set(property='amplitude', N_greedy_vecs=20, plot_emp_nodes_at_ecc=0.1, plot_greedy_error=True, plot_residuals_eccentric_evolve=True, plot_residuals_time_evolve=True, plot_training_set=True,  save_fig_residuals_eccentric=True, save_fig_residuals_time=True, save_fig_training_set=True)
 # plt.show()
 
 

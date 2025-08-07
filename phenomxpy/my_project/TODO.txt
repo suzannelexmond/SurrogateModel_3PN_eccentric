@@ -327,3 +327,135 @@ params = np.array([35.0])
 t, amp = surrogate_predict(params)
 
 print(f"Predicted waveform amplitude shape: {amp.shape}")
+
+
+
+30/07/2025:
+Surrogate Modeling: Regression in the Online and Offline Phase
+--------------------------------------------------
+
+Offline Stage (Training)
+------------------------
+1. Generate Training Waveforms:
+   - Create many full waveforms over a parameter grid (e.g. mass ratio, eccentricity, spin, etc.).
+   - For each waveform, extract values only at selected empirical interpolation nodes 
+     (e.g., 20–50 specific time steps).
+
+2. Fit Regression Models:
+   - For each interpolation node, fit a regression model that maps from parameters (lambda) 
+     to waveform values:
+     
+       f_j(lambda) ≈ h(node_j; lambda),  for j = 1, ..., N_nodes
+     
+   - Regression models can be:
+     - Multivariate polynomials
+     - Neural networks
+     - Gaussian processes
+     - Radial basis functions
+
+Online Stage (Waveform Generation)
+----------------------------------
+1. Input new parameters (lambda).
+
+2. For each empirical interpolation node:
+   - Use the pre-trained regression model f_j(lambda) to predict waveform value at that node.
+
+3. Reconstruct the full waveform:
+   - Combine the predicted values with the reduced basis:
+     
+       h(t; lambda) ≈ sum_i=1^N [ c_i(lambda) * e_i(t) ]
+
+     where:
+       - c_i(lambda) are the predicted values at empirical nodes (from regression)
+       - e_i(t) are the basis vectors from the reduced basis
+
+4. Output the full waveform (hp, hc or real/imag).
+
+
+
+HOW TO CALL THE SURROGATE:
+import time
+import numpy as np
+
+class DummySurrogate:
+    def __init__(self, data_path):
+        # Simulate loading heavy data from disk (offline stage)
+        print("Loading surrogate data...")
+        time.sleep(2)  # pretend it takes 2 seconds to load data
+        # Let's say we load basis vectors and regression models here
+        self.basis = np.random.rand(10, 1000)  # 10 basis vectors, 1000 time samples
+        self.coeffs_data = np.random.rand(10, 5)  # regression coefficients for 5 params
+        print("Surrogate loaded!")
+
+    def generate_waveform(self, params):
+        # Online stage: evaluate regression models at params to get coefficients
+        # For simplicity, use a dot product with params (pretend regression)
+        coeffs = np.dot(self.coeffs_data, params)  # shape (10,)
+
+        # Reconstruct waveform from basis vectors weighted by coefficients
+        waveform = np.dot(coeffs, self.basis)  # shape (1000,)
+        return waveform
+
+# Usage:
+params_example = np.array([0.1, 0.2, 0.3, 0.4, 0.5])  # example parameter vector
+
+# Load surrogate once (offline)
+surrogate = DummySurrogate('path_to_surrogate_data')
+
+# Generate multiple waveforms (online) quickly
+for i in range(3):
+    start = time.time()
+    wf = surrogate.generate_waveform(params_example)
+    print(f"Waveform {i+1} generated in {time.time() - start:.4f} seconds")
+
+
+
+
+07/08/2025:
+
+Summary Table: SEOBNRE vs PhenomTE
+
++-------------------------+------------------------------+------------------------------+
+| Feature                 | SEOBNRE                      | PhenomTE                     |
++-------------------------+------------------------------+------------------------------+
+| Model Type & Domain     | Time-domain EOB with adaptive| Frequency-domain phenomenological|
+|                        | time stepping (ODE solver)    | model, analytical fits       |
++-------------------------+------------------------------+------------------------------+
+| Eccentricity Support   | High (up to ~0.9)              | Moderate (up to ~0.3)        |
++-------------------------+------------------------------+------------------------------+
+| Spin Support           | Aligned spins only             | Non-precessing spins only    |
++-------------------------+------------------------------+------------------------------+
+| Precession             | No                            | No (built on precessing      |
+|                        |                              | PhenomTPHM framework, but no |
+|                        |                              | precession in PhenomTE yet)  |
++-------------------------+------------------------------+------------------------------+
+| Higher Modes           | Yes (e.g. up to l=4)          | Yes (in PhenomTE_HM)         |
++-------------------------+------------------------------+------------------------------+
+| IMR Coverage           | Full IMR                      | Full IMR                     |
++-------------------------+------------------------------+------------------------------+
+| Speed (per waveform)   | Slow (seconds to minutes)      | Fast (milliseconds to seconds)|
++-------------------------+------------------------------+------------------------------+
+| Parameter Space        | Moderate mass ratios (q < ~5) | Wider mass ratios (q < ~15)  |
++-------------------------+------------------------------+------------------------------+
+| Calibration            | Limited NR calibration        | Fitted to SEOBNRE and NR     |
++-------------------------+------------------------------+------------------------------+
+| Waveform Representation| Time-domain, adaptive steps   | Frequency-domain with built-in|
+|                        | (non-uniform time array)       | inverse FFT and option for    |
+|                        |                              | fixed user-defined time array |
++-------------------------+------------------------------+------------------------------+
+| Surrogate Suitability  | Requires interpolation to      | Supports fixed time arrays    |
+|                        | uniform time grid (no built-in)| out of the box, easier for    |
+|                        |                              | surrogate building            |
++-------------------------+------------------------------+------------------------------+
+| Implementation         | Custom code, not in LALSuite   | Implemented in LALSuite       |
+|                        |                              | (ready for PE pipelines)      |
++-------------------------+------------------------------+------------------------------+
+
+Summary:
+- SEOBNRE excels in physics fidelity and high eccentricity but is slow and needs extra steps for surrogate modeling.
+- PhenomTE is fast, practical for parameter estimation, and convenient due to built-in time-array control, but limited in spin and eccentricity range.
+- Combining both requires careful handling but is promising for future waveform modeling improvements.
+
+
+FUTURE PROSPECTS:
+- build a surrogate that can be run with either phenomte or seobnre, so people can choose either better precission and larger parameter space (seobnre) or a faster waveform.
