@@ -49,6 +49,7 @@ class Simulate_Inspiral:
         self.truncate_at_ISCO = truncate_at_ISCO
         self.truncate_at_tmin = truncate_at_tmin
 
+
     def amplitude(self, hplus_NR, hcross_NR, geometric_units=True, distance=None, total_mass=None):
         """
         Calculate the amplitude from the plus and cross polarizations.
@@ -71,7 +72,7 @@ class Simulate_Inspiral:
         return phase
 
 
-    def polarisations(self, phase, amplitude, geometric_units=True, distance=None, total_mass=None):
+    def polarisations(self, phase, amplitude, geometric_units=True, distance=None, total_mass=None, plot_polarisations=False, save_fig=False):
         """
         Calculate the plus and cross polarizations from the phase and amplitude.
         If geometric_units is True, the polarizations are returned in geometric units.
@@ -83,6 +84,9 @@ class Simulate_Inspiral:
             hplus = AmpNRtoSI(amplitude, distance, total_mass) * np.cos(phase)
             hcross = AmpNRtoSI(amplitude, distance, total_mass) * np.sin(phase)
         
+        if plot_polarisations is True:
+            self._plot_polarisations(hplus, hcross, save_fig=save_fig)
+            
         return hplus, hcross
     
     def truncate_near_merger(self, phen):
@@ -318,32 +322,48 @@ class Simulate_Inspiral:
         print(f'time : SimInspiral_M_independent ecc = {round(ecc_ref, 3)}, M = {self.total_mass}, t=[{int(self.time[0])}, {int(self.time[-1])}, num={len(self.time)}] | computation time = {(timer()-start)} seconds')
 
         if plot_polarisations is True:
-
-            fig_simulate_inspiral = plt.figure(figsize=(12,5))
-            print(len(self.time), len(phen.hp))
-            plt.plot(self.time[:len(phen.hp)], phen.hp, label = f'$h_+$', linewidth=0.6)
-            plt.plot(self.time[:len(phen.hp)], phen.hc, label = f'$h_\times$', linewidth=0.6)
-
-            plt.legend(loc = 'upper left')
-            plt.xlabel('t [s]')
-            plt.ylabel('$h_{22}]$')
-            plt.title(f'M={self.total_mass}, e={round(ecc_ref, 3)}, f_min={self.f_lower} Hz')
-            plt.grid(True)
-
-            plt.tight_layout()
-
-            if save_fig is True:
-                figname = 'Polarisations_M={}_ecc={}.png'.format(self.total_mass, round(ecc_ref, 3))
-                
-                # Ensure the directory exists, creating it if necessary and save
-                os.makedirs('Images/Polarisations', exist_ok=True)
-                fig_simulate_inspiral.savefig('Images/Polarisations/' + figname, dpi=300, bbox_inches='tight')
-
-                print('Figure is saved in Images/Polarisations')
-
-            plt.close('all')  # Clean up plots
+            self._plot_polarisations(phen.hp, phen.hc, save_fig=save_fig)
 
         return phen.hp, phen.hc
+    
+    def _plot_polarisations(self, hp, hc, save_fig=True):
+        """
+        Plot the plus and cross polarizations of the waveform.
+        
+        Parameters:
+        ----------------
+        hp [dimensionless], np.array: Plus polarization of the waveform
+        hc [dimensionless], np.array: Cross polarization of the waveform
+        plot_polarisations, True OR False, bool: Set to True to include a plot of the polarizations
+        save_fig, True OR False, bool: Saves the figure to the directory Images/Polarisations
+        
+        Returns:
+        ----------------
+        None
+        """
+
+        fig = plt.figure(figsize=(12,5))
+        plt.plot(self.time[:len(hp)], hp, label = f'$h_+$', linewidth=0.6)
+        plt.plot(self.time[:len(hc)], hc, label = f'$h_\times$', linewidth=0.6)
+
+        plt.legend(loc = 'upper left')
+        plt.xlabel('t [s]')
+        plt.ylabel('$h_{22}]$')
+        plt.title(f'M={self.total_mass}, e={round(self.ecc_ref, 3)}, f_min={self.f_lower} Hz')
+        plt.grid(True)
+
+        plt.tight_layout()
+
+        if save_fig is True:
+            figname = 'Polarisations_M={}_ecc={}.png'.format(self.total_mass, round(self.ecc_ref, 3))
+            
+            # Ensure the directory exists, creating it if necessary and save
+            os.makedirs('Images/Polarisations', exist_ok=True)
+            fig.savefig('Images/Polarisations/' + figname, dpi=300, bbox_inches='tight')
+
+            print('Figure is saved in Images/Polarisations')
+
+        plt.close('all')
 
 
 
@@ -371,6 +391,8 @@ class Waveform_Properties(Simulate_Inspiral):
 
         self.hp_circ = None # TimeSeries object of plus polarisation for non-eccentric inspiral 
         self.hc_circ = None # TimeSeries object of cross polarisation for non-eccentric inspiral 
+        self.phase_circ = None # Phase of the non-eccentric inspiral waveform
+        self.amp_circ = None # Amplitude of the non-eccentric inspiral waveform
 
         # Inherit parameters from Simulate_Inspiral class
         Simulate_Inspiral.__init__(self, time_array, ecc_ref, total_mass, luminosity_distance, f_lower, f_ref, chi1, chi2, phiRef, rel_anomaly, inclination, truncate_at_ISCO, truncate_at_tmin)
@@ -386,23 +408,21 @@ class Waveform_Properties(Simulate_Inspiral):
         hc_circ [dimensionless], np.array: Time-domain cross polarisation of NON-ECCENTRIC waveform
 
         """
-        if self.hp_circ is None:
+        
+        if self.phase_circ is None or self.amp_circ is None:
+            print('checking if hp_circ and hc_circ are set')
+            # Generate arrays
             self.hp_circ, self.hc_circ = self.simulate_inspiral_mass_independent(ecc_ref=0)
-
             self.phase_circ = self.phase(self.hp_circ, self.hc_circ)
             self.amp_circ = self.amplitude(self.hp_circ, self.hc_circ)
 
-        elif (self.hp_circ is not None) and (len(self.hp_circ) != len(self.time)):
-                length_diff = len(self.hp_circ) - len(self.time)
-                self.hp_circ = self.hp_circ[length_diff:]
-                self.hc_circ = self.hc_circ[length_diff:]
-
-                self.phase_circ = self.phase(self.hp_circ, self.hc_circ)
-                self.amp_circ = self.amplitude(self.hp_circ, self.hc_circ)
-
-                del length_diff # clear memory
+        elif self.amp_circ is not None and len(self.amp_circ) != len(self.time):
+            # Truncate to match
+            self.phase_circ = self.phase_circ[:len(self.time)]
+            self.amp_circ = self.amp_circ[:len(self.time)]
         else:
-            pass # hp_circ and hc_circ already calculated
+            pass # self.hp_circ and self.hc_circ are already set, no need to recompute
+
 
         
 

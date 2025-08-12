@@ -21,7 +21,7 @@ faulthandler.enable()
 
 class Generate_Surrogate(Generate_TrainingSet):
 
-    def __init__(self, time_array, output_ecc_ref, ecc_ref_parameterspace_range, amount_input_wfs, amount_output_wfs, total_mass_range=None, luminosity_distance_range=None, N_greedy_vecs_amp=None, N_greedy_vecs_phase=None, min_greedy_error_amp=None, min_greedy_error_phase=None, f_lower=10, f_ref=20, chi1=0, chi2=0, phiRef=0., rel_anomaly=0., inclination=0., truncate_at_ISCO=True, truncate_at_tmin=True, waveforms_in_geom_units=True):
+    def __init__(self, time_array, ecc_ref_parameterspace_range, amount_input_wfs, amount_output_wfs, total_mass_range=None, luminosity_distance_range=None, N_greedy_vecs_amp=None, N_greedy_vecs_phase=None, min_greedy_error_amp=None, min_greedy_error_phase=None, f_lower=10, f_ref=20, chi1=0, chi2=0, phiRef=0., rel_anomaly=0., inclination=0., truncate_at_ISCO=True, truncate_at_tmin=True, waveforms_in_geom_units=True):
         
         if (waveforms_in_geom_units is True) and ((total_mass_range is None) or (luminosity_distance_range is None)):
             print('Choose waveforms either in NR or SI units. Do this by either setting total_mass_range and luminosity_distance_range OR leave total_mass_range=luminosity_distance_range=None and set waveforms_in_geom_units=True.')
