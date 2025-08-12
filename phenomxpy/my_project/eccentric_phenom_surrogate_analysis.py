@@ -1,4 +1,4 @@
-from generate_phenom_surrogate import *
+from phenomxpy.my_project.generate_phenom_surrogate_Singlewf import *
 
 from pycbc.filter import match, optimized_match
 from pycbc.psd import aLIGOZeroDetHighPower
