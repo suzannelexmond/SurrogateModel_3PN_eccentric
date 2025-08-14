@@ -156,6 +156,7 @@ class Generate_Surrogate(Generate_TrainingSet):
     
     def fit_to_training_set(self, property, min_greedy_error=None, N_greedy_vecs=None, save_fits_to_file=True, plot_kernels=False, plot_fits=False, save_fig_kernels=False, save_fig_fits=False, plot_residuals_ecc_evolve=False, save_fig_ecc_evolve=False, plot_residuals_time_evolve=False, save_fig_time_evolve=False):
         
+    
         def gaussian_process_regression(time_node, training_set, optimized_kernel=None, plot_kernels=plot_kernels, save_fig_kernels=save_fig_kernels):
             # Extract X and training data
             X = self.ecc_parameter_space_output[:, np.newaxis]
@@ -272,10 +273,6 @@ class Generate_Surrogate(Generate_TrainingSet):
 
             print(f'Interpolate {property}...')
 
-            # start1 = time.time()
-            # mean_prediction, uncertainty_region = gaussian_process_regression_all(training_set, self.greedy_parameters_idx, plot_fits)
-            # end1 = time.time()
-            # print(f'time1 = {end1 - start1}')
             start2 = time.time()
             optimized_kernel = None
             for node_i in range(len(self.empirical_nodes_idx)):
@@ -289,33 +286,59 @@ class Generate_Surrogate(Generate_TrainingSet):
             end2 = time.time()
             print(f'time full GPR = {end2 - start2}')
 
+        # If plot_fits is True, plot the GPR fits
         if plot_fits is True:
-            filename = f'Straindata/Residuals/residuals_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_parameter_space_input)}_{max(self.ecc_parameter_space_input)}_N={len(self.ecc_parameter_space_input)}].npz'
-            load_parameterspace_input = np.load(filename)
-            
+            self._plot_GPR_fits(property, gaussian_fit, training_set, lml_fits, save_fig_fits=save_fig_fits)
+
+        # If save_fits_to_file is True, save the GPR fits to a file
+        if save_fits_to_file is True:
+            # Save the GPR fits to a file
+            self._save_GPR_fits_to_file(property, gaussian_fit, training_set, lml_fits, uncertainty_region)
+        
+        # If plot_residuals_ecc_evolve or plot_residuals_time_evolve is True, plot the residuals
+        if (plot_residuals_time_evolve is True) or (plot_residuals_time_evolve is True):
+            load_parameterspace_input = np.load(f'Straindata/Residuals/residuals_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_parameter_space_input)}_{max(self.ecc_parameter_space_input)}_N={len(self.ecc_parameter_space_input)}].npz')
             residual_parameterspace_input = load_parameterspace_input['residual']
-            self.time = load_parameterspace_input['time']
+            
+            self._plot_residuals(residual_dataset=residual_parameterspace_input, ecc_list=self.ecc_parameter_space_input, property=property, plot_eccentric_evolv=plot_residuals_ecc_evolve, save_fig_eccentric_evolve=save_fig_ecc_evolve, plot_time_evolve=plot_residuals_time_evolve, save_fig_time_evolve=save_fig_time_evolve)
+   
+        return gaussian_fit, uncertainty_region
+    
+
+    def _save_GPR_fits_to_file(self, property, gaussian_fit, training_set, lml_fits, uncertainty_region):
+            filename = f'Straindata/GPRfits/GPRfits_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_parameter_space_input)}_{max(self.ecc_parameter_space_input)}_N={len(self.ecc_parameter_space_input)}]_No={len(self.ecc_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_greedy_vecs_phase}_Nga={self.N_greedy_vecs_amp}.npz'
+            if not os.path.isfile(filename):
+
+                # Ensure the directory exists, creating it if necessary and save
+                os.makedirs('Straindata/GPRfits', exist_ok=True)
+
+                np.savez(filename, GPR_fit=gaussian_fit, empirical_nodes=self.empirical_nodes_idx, residual_greedy_basis=self.residual_greedy_basis, time=self.time, lml_fits=lml_fits, training_set=training_set, greedy_parameters_idx=self.greedy_parameters_idx, uncertainty_region=np.array(uncertainty_region, dtype=object), phase_circ=self.phase_circ, amp_circ=self.amp_circ)
+                print('GPR fits saved in Straindata/GPRfits/' + filename)
+        
+
+    def _plot_GPR_fits(self, property, gaussian_fit=None, training_set=None, lml_fits=None, save_fig_fits=False):
+            
+            if gaussian_fit is None or training_set is None or lml_fits is None:
+                # Load the GPR fits from file if not provided
+                filename = filename = f'Straindata/GPRfits/GPRfits_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_parameter_space_input)}_{max(self.ecc_parameter_space_input)}_N={len(self.ecc_parameter_space_input)}]_No={len(self.ecc_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_greedy_vecs_phase}_Nga={self.N_greedy_vecs_amp}.npz'
+                load_GPR_fits = np.load(filename)
+
+                gaussian_fit = load_GPR_fits['GPR_fit']
+                training_set = load_GPR_fits['training_set']
+                lml_fits = load_GPR_fits['lml_fits']
+                self.empirical_nodes_idx = load_GPR_fits['empirical_nodes']
+                self.greedy_parameters_idx = load_GPR_fits['greedy_parameters_idx']
 
             try:
                 filename = f'Straindata/Residuals/residuals_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_parameter_space_output)}_{max(self.ecc_parameter_space_output)}_N={len(self.ecc_parameter_space_output)}].npz'
                 load_residual_output = np.load(filename)
                 residual_parameterspace_output = load_residual_output['residual']
+                self.time = load_residual_output['time']
 
             except Exception as e:
                 print(f'line {getframeinfo(f).lineno}: {e}')
                 residual_parameterspace_output = self.generate_property_dataset(ecc_list=self.ecc_parameter_space_output, property=property, save_dataset_to_file=True)
             
-            # print(0, residual_parameterspace_output.shape, len(self.time))
-            # fig_test = plt.figure()
-            # for i in range(len(self.empirical_nodes_idx)):
-            #     # print( residual_parameterspace_output.T[i])
-            #     print('emp nodes: ', self.empirical_nodes_idx[i])
-            # for i in range(len(self.time)):
-            #     plt.plot(self.ecc_parameter_space_output, residual_parameterspace_output.T[i])
-            # plt.plot(self.time, residual_parameter)
-            # plt.ylabel('residuals')
-            # plt.xlabel('eccentricity')
-            # plt.show()
 
             # Define a distinct color palette
             color_palette = plt.cm.tab10.colors 
@@ -405,73 +428,7 @@ class Generate_Surrogate(Generate_TrainingSet):
 
                 print('Figure is saved in Images/Gaussian_fits/' + figname)
 
-        filename = f'Straindata/GPRfits/GPRfits_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_parameter_space_input)}_{max(self.ecc_parameter_space_input)}_N={len(self.ecc_parameter_space_input)}]_No={len(self.ecc_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_greedy_vecs_phase}_Nga={self.N_greedy_vecs_amp}.npz'
-        if save_fits_to_file is True and not os.path.isfile(filename):
-
-            # Ensure the directory exists, creating it if necessary and save
-            os.makedirs('Straindata/GPRfits', exist_ok=True)
-            print('circs:', self.amp_circ, self.phase_circ)
-            np.savez(filename, GPR_fit=gaussian_fit, empirical_nodes=self.empirical_nodes_idx, residual_greedy_basis=self.residual_greedy_basis, time=self.time, lml_fits=lml_fits, training_set=training_set, greedy_parameters_idx=self.greedy_parameters_idx, uncertainty_region=np.array(uncertainty_region, dtype=object), phase_circ=self.phase_circ, amp_circ=self.amp_circ)
-            print('GPR fits saved in Straindata/GPRfits/' + filename)
-        
-        if (plot_residuals_time_evolve is True) or (plot_residuals_time_evolve is True):
-            load_parameterspace_input = np.load(f'Straindata/Residuals/residuals_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_parameter_space_input)}_{max(self.ecc_parameter_space_input)}_N={len(self.ecc_parameter_space_input)}].npz')
-            residual_parameterspace_input = load_parameterspace_input['residual']
-            
-            self._plot_residuals(residual_dataset=residual_parameterspace_input, ecc_list=self.ecc_parameter_space_input, property=property, plot_eccentric_evolv=plot_residuals_ecc_evolve, save_fig_eccentric_evolve=save_fig_ecc_evolve, plot_time_evolve=plot_residuals_time_evolve, save_fig_time_evolve=save_fig_time_evolve)
-        
-        #     fig_residual_training_fit, axs = plt.subplots(2, 1, figsize=(11,6), gridspec_kw={'height_ratios': [3, 1], 'hspace': 0.4}, sharex=True)
-
-        #     # Top left subplot for amplitude main plot
-        #     for i in range(len(gaussian_fit[:3])):
-        #         # Use the same color for the fit and the corresponding empirical data
-        #         axs[0].plot(self.ecc_parameter_space_output, gaussian_fit.T[:, i], color=colors[i], linewidth=0.6)
-        #         axs[0].scatter(self.ecc_parameter_space_input[self.greedy_parameters_idx], training_set[:, i], color=colors[i])
-        #         # axs[0].plot(self.ecc_parameter_space_output, residual_parameterspace_output[:, self.empirical_nodes_idx[i]], linestyle='dashed', linewidth=0.6, color=colors[i], label=f't={self.time[self.empirical_nodes_idx[i]]}')
-        #         axs[0].plot(self.ecc_parameter_space_output, residual_parameterspace_output[:, self.empirical_nodes_idx[i]], linestyle='dashed', linewidth=0.6, color=colors[i])
-
-        #         # axs[0].plot(self.ecc_parameter_space_output, residual_parameterspace_output[:, -1], linestyle='dashed', linewidth=0.6, color=colors[i], label=f't={self.time[self.empirical_nodes_idx[i]]}')
-        #         # axs[0].plot(self.ecc_parameter_space_input, residual_parameterspace_input[:, -1])
-        #         relative_error = abs(residual_parameterspace_output[:, self.empirical_nodes_idx[i]] - gaussian_fit.T[:, i]) / abs(residual_parameterspace_output[:, self.empirical_nodes_idx[i]])
-        #         axs[1].plot(self.ecc_parameter_space_output, relative_error, color=colors[i], linewidth=0.6, label=f'Error {i+1} (t={int(self.time[self.empirical_nodes_idx[i]])})')
-        #         axs[1].set_ylim(0, 2)
-        #     # Adjust legend: smaller font, inside figure, upper left
-        #     axs[0].legend(loc='upper left', ncol=3, bbox_to_anchor=(0.01, 0.99), fontsize='small')
-        #     if property == 'phase':
-        #         axs[0].set_ylabel('$\Delta \phi$ ')
-        #         axs[0].set_title(f'GPRfit $\phi$; greedy error = {min_greedy_error}')
-        #     elif property == 'amplitude':
-        #         axs[0].set_ylabel('$\Delta$ A')
-        #         axs[0].set_title(f'GPRfit A; greedy error = {min_greedy_error}')
-        #     axs[0].grid()
-
-        #     # Adjust legend: smaller font, inside figure, upper right
-        #     axs[1].set_xlabel('eccentricity')
-        #     axs[1].set_ylabel('Relative fit error')
-        #     # axs[1].set_xlim(0., 0.105)
-        #     # axs[1].set_ylim(-100, 100)
-        #     axs[1].grid()
-
-        #     # Adjust layout to prevent overlap
-        #     plt.tight_layout()
-
-        #     if save_fig_fits is True:
-        #         figname = f'GPR_fits_{property}_ecc=[{min(self.ecc_parameter_space_input)}_{max(self.ecc_parameter_space_input)}]_q={self.mass_ratio}_fmin={self.freqmin}_iN={len(self.ecc_parameter_space_input)}_oN={len(self.ecc_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}.png'
-                
-        #         # Ensure the directory exists, creating it if necessary and save
-        #         os.makedirs('Images/Gaussian_fits', exist_ok=True)
-        #         fig_residual_training_fit.savefig('Images/Gaussian_fits/' + figname)
-
-        #         print('Figure is saved in Images/Gaussian_fits')
-        
-        # if save_fits_to_file is True and not os.path.isfile(f'Straindata/GPRfits/{property}_q={self.mass_ratio}_fmin={self.freqmin}_{min(self.ecc_parameter_space_input)}_{max(self.ecc_parameter_space_input)}_Ni={len(self.ecc_parameter_space_input)}_No={len(self.ecc_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_greedy_vecs_phase}_Nga={self.N_greedy_vecs_amp}_size={self.waveform_size}.npz'):
-
-        #     # Ensure the directory exists, creating it if necessary and save
-        #     os.makedirs('Straindata/GPRfits', exist_ok=True)
-        #     np.savez(f'Straindata/GPRfits/{property}_q={self.mass_ratio}_fmin={self.freqmin}_{min(self.ecc_parameter_space_input)}_{max(self.ecc_parameter_space_input)}_Ni={len(self.ecc_parameter_space_input)}_No={len(self.ecc_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_greedy_vecs_phase}_Nga={self.N_greedy_vecs_amp}_size={self.waveform_size}.npz', GPR_fit=gaussian_fit, training_set=training_set, uncertainty_region=np.array(uncertainty_region, dtype=object), greedy_parameters=self.greedy_parameters_idx, empirical_nodes=self.empirical_nodes_idx, residual_greedy_basis=self.residual_greedy_basis)
-        #     print('GPR fits saved in Straindata/GPRfits')
-
-        return gaussian_fit, uncertainty_region
+    
 
     def compute_B_matrix(self, property, save_matrix_to_file=True):
 

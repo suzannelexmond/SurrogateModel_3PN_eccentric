@@ -81,12 +81,12 @@ class Generate_Surrogate_Offline(Generate_Surrogate):
         """Load or fit surrogate model and save all necessary offline data."""
 
         # Try to load existing amplitude GPR fit data
-        GPR_amp_data = self._load_gpr_data('amplitude')
+        GPR_amp_data = self._load_gpr_data('amplitude', plot_fits=plot_fits, save_fig_fits=save_fig_fits)
         # Load corresponding B_matrices
         B_amp_data = self._load_b_matrix('amplitude')
         
         # Try to load existing phase GPR fit data
-        GPR_phase_data = self._load_gpr_data('phase')
+        GPR_phase_data = self._load_gpr_data('phase', plot_fits=plot_fits, save_fig_fits=save_fig_fits)
         # Try loading corresponding B_matrices
         B_phase_data = self._load_b_matrix('phase')
 
@@ -139,6 +139,7 @@ class Generate_Surrogate_Offline(Generate_Surrogate):
         try:
             data = np.load(filename, allow_pickle=True)
             print(f'GPR fit data loaded: {filename}')
+
         except:
             self.surrogate.fit_to_training_set(
                 min_greedy_error=self.min_greedy_error_phase,
@@ -357,30 +358,50 @@ online = Generate_Surrogate_Online(
 
 # Generate the surrogate model with the specified output eccentricity reference
 start1 = time.time()
-online.generate_PhenomTE_surrogate(output_ecc_ref=0.1, geometric_units=True)
+online.generate_PhenomTE_surrogate(output_ecc_ref=0.1, geometric_units=True, plot_GPRfit=True)
 print(f"Surrogate loading took {time.time() - start1:.4f} seconds.")
+online.fit_to_training_set(property='amplitude', plot_fits=True, save_fig_fits=True, save_fits_to_file=True, N_greedy_vecs=40)
+online.fit_to_training_set(property='phase', plot_fits=True, save_fig_fits=True, save_fits_to_file=True, N_greedy_vecs=40)
 
-start2 = time.time()
-online.generate_PhenomTE_surrogate(output_ecc_ref=0.15, geometric_units=True)
-print(f"Surrogate generation took {time.time() - start2:.4f} seconds.")
+# start3 = time.time()
+# online.generate_PhenomTE_surrogate(output_ecc_ref=0.1, geometric_units=True, plot_GPRfit=True)
+# end3 = time.time()
+# print(f"Surrogate generation took {time.time() - start3:.4f} seconds.")
 
 
 
 
 # online.generate_PhenomTE_surrogate(output_ecc_ref=0.1, plot_surr_datapiece=True, save_fig_datapiece=True, plot_surr_wf=True, save_fig_surr=True, plot_GPRfit=True, save_fig_fits=True, geometric_units=True)
-hplus, hcross = online.get_surrogate_polarisations(geometric_units=True)
+# hplus, hcross = online.get_surrogate_polarisations(geometric_units=True)
 
-start2 = time.time()
-si = Simulate_Inspiral(
-    time_array=time_array,
-    luminosity_distance=300,
-    total_mass=80,
-    ecc_ref=0.15,
 
-)
-print(f"Simulation took {time.time() - start2:.4f} seconds.")
+# phen = phenomt.PhenomTE(
+#             mode=[2,2],
+#             times=time_array,
+#             eccentricity=0.14,                
+#             f_ref=20,                   
+#             f_lower=10,
+#             phiRef=0,
+#             inclination=0)
+        
+# phen.compute_polarizations(times=time_array)
+# start2 = time.time()
+# phen = phenomt.PhenomTE(
+#             mode=[2,2],
+#             times=time_array,
+#             eccentricity=0.1,                
+#             f_ref=20,                   
+#             f_lower=10,
+#             phiRef=0,
+#             inclination=0)
+        
+# phen.compute_polarizations(times=time_array)
 
-si.simulate_inspiral_mass_independent(0.15)
+# end2 = time.time()
+# print(f"Simulation took {end2 - start2:.4f} seconds.")
+
+# print(f'Total surrogate improvement speed: {(end2 - start2)/(end3 - start3)}')
+
 # sp = Simulate_Inspiral(
 #     time_array=time_array,
 #     luminosity_distance=300,
