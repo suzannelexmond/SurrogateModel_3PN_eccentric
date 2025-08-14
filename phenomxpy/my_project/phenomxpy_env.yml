@@ -1,0 +1,5 @@
+name: phenomxpy
+channels:
+  - defaults
+prefix: /home/suzanne/anaconda3/envs/phenomxpy
+
