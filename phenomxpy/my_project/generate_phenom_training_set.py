@@ -129,8 +129,8 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             hp_ISCO, hc_ISCO = self.simulate_inspiral_mass_independent(ISCO_ecc, truncate_at_ISCO=True)
 
 
-            hp_dataset = np.zeros((len(ecc_list), len(self.time)), dtype=np.float32)  # float32 to save memory storage
-            hc_dataset = np.zeros((len(ecc_list), len(self.time)), dtype=np.float32)
+            hp_dataset = np.zeros((len(ecc_list), len(self.time))) 
+            hc_dataset = np.zeros((len(ecc_list), len(self.time)))
 
             for i, ecc in enumerate(ecc_list):
                 if ecc == ISCO_ecc:
@@ -223,7 +223,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
                 fig_residuals_ecc.savefig('Images/Residuals/' + figname)
 
                 print('Figure is saved in Images/Residuals' + figname)
-                plt.close('all') # Clean up plot
+                # plt.close('all') # Clean up plot
 
         if plot_time_evolve is True:
             fig_residuals_t = plt.figure()
@@ -242,7 +242,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
             plt.title(f'Residuals {property}')
             plt.grid(True)
-            # plt.legend()
+            plt.legend()
 
             plt.tight_layout()
 
@@ -258,7 +258,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
                 fig_residuals_t.savefig('Images/Residuals/' + figname)
 
                 print('Figure is saved in Images/Residuals' + figname)
-                plt.close('all')
+                # plt.close('all')
     
     def _save_residual_dataset(self, ecc_list, property, residual_dataset):
         """Function to save residual dataset to file."""
@@ -269,110 +269,291 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         print('Residuals saved to Straindata/Residuals')
 
 
-    def get_greedy_parameters(self, U, property, min_greedy_error=None, N_greedy_vecs=None, reg=1e-6, 
-                            plot_greedy_error=True, plot_validation_errors=False, save_validation_fig=False, 
-                            save_greedy_fig=True):
-        """
-        Perform strong greedy algorithm to select the basis vectors with highest uniqueness. 
-        The process stops when either convergence is reached or when a specified number of 
-        basis vectors is reached.
+    from sklearn.preprocessing import normalize
 
-        Parameters:
+
+    def get_greedy_parameters(self, U, property, min_greedy_error=None, N_greedy_vecs=None, reg=1e-6, plot_greedy_error=False, save_greedy_error_fig=False, plot_greedy_vectors=False, save_greedy_vecs_fig=False):
+        """
+        Greedy algorithm to select representative vectors from U using an orthonormal basis.
+
+        Parameters
         ----------
-        U : numpy.ndarray
-            Non-normalized training set where each row represents a data point.
-        property : str
-            Specifies which property ('phase', 'amplitude') to compute.
-        min_greedy_error : float, optional
-            Stop the algorithm once the minimum greedy error is reached.
+        U : ndarray, shape (num_vectors, vector_length)
+            Dataset of vectors to build the greedy basis from.
         N_greedy_vecs : int, optional
-            Stop the algorithm once a specified number of basis vectors is reached.
-        reg : float, optional
-            Regularization parameter to stabilize computation, default is 1e-6.
-        plot_greedy_error : bool, optional
-            If True, plots the greedy error for each added basis vector.
-        plot_validation_errors : bool, optional
-            If True, plots the validation errors comparing greedy and trivial bases.
-        save_validation_fig : bool, optional
-            If True, saves the validation error plot to file.
-        save_greedy_fig : bool, optional
-            If True, saves the greedy error plot to file.
+            Maximum number of vectors to include in the greedy basis.
+        tol : float, optional
+            Stop when the maximum residual norm falls below this tolerance.
 
-        Returns:
+        Returns
         -------
-        greedy_parameters_idx : list
-            Indices of the selected greedy basis vectors.
-        greedy_basis : numpy.ndarray
-            Selected basis vectors based on highest uniqueness.
+        greedy_basis : ndarray
+            Orthonormal greedy basis vectors.
+        greedy_indices : list
+            Indices of the vectors chosen from U.
+        residuals : list
+            Maximum residual norm at each iteration.
         """
+        # Make a copy of U and normalize each vector to avoid scale issues
+        U = U.copy()
+        # U_norms = np.linalg.norm(U, axis=1)
+        # U_normalized = U / U_norms[:, np.newaxis]  # shape: (num_vectors, vector_length)
 
-        def calc_validation_vectors(num_vectors):
-            """Randomly samples validation vectors from parameter space."""
-            parameter_space = np.linspace(min(self.parameter_space_input), max(self.parameter_space_input), num=5000).round(4)
-            validation_set = random.sample(list(parameter_space), num_vectors)
-            validation_vecs = self.generate_property_dataset(property=property, ecc_list=validation_set)
-            return validation_vecs
+        U_normalized = normalize(U, axis=1)[1:]  # Skip the first row (zero vector of ecc=0) to prevent false uniqueness due to inner product of zero vectors
 
-        # Argument checks and initial setup
-        if (min_greedy_error is None) == (N_greedy_vecs is None):
-            raise ValueError("Specify either min_greedy_error (float) or N_greedy_vecs (int), not both.")
+        num_vectors = U.shape[0]
+        greedy_basis_orthonormal = []
+        greedy_basis = []
+        greedy_indices = []
+        greedy_errors = []
 
-       # Normalize the dataset U
-        U_copy = U.copy()
-        U_normalised = normalize(U_copy, axis=1) 
-        U_copy = None # Free memory
+        for step in range(num_vectors):
+            # Compute residuals: h - sum_i <h, e_i> e_i for all vectors h in U
+            if len(greedy_basis_orthonormal) == 0:
+                # First iteration: residuals are just the norms of U
+                residual_norms = np.linalg.norm(U_normalized, axis=1)
 
-        normalised_basis = np.empty((0, U.shape[1]))  # Initialize an empty array for the basis
-        greedy_basis = np.empty((0, U.shape[1]))  # Initialize an empty array for the basis
-        
-        greedy_parameters_idx = []
-        errors = [1]
-        greedy_errors=[1]
+            else:
+                # Stack basis for matrix operations
+                B = np.vstack(greedy_basis_orthonormal)  # shape: (m, vector_length)
+                # Compute inner products <h, e_i> for all h in U
+                coeffs = U_normalized @ B.T      # shape: (num_vectors, m)
+                # Reconstruct projections
+                U_proj = coeffs @ B              # shape: (num_vectors, vector_length)
+                # Residuals
+                residual_norms = np.linalg.norm(U_normalized - U_proj, axis=1)
 
-        while True:
-            # Either break the loop when minimum greedy error is reached or when the specified amount of vectors in the greedy basis is reached.
-            if min_greedy_error is not None:
-                if np.max(errors) <= min_greedy_error or len(greedy_basis) == len(U):
-                    break
-            if N_greedy_vecs is not None or len(greedy_basis) == len(U):
-                if len(greedy_basis) >= N_greedy_vecs:
-                    break
+                if len(B) > 0:
+                    projections = U_normalized @ np.array(B).T       # shape: (n_vectors, n_basis)
+                    proj_sums = np.sum(projections**2, axis=1)      # sum of squared projections per vector
+                else:
+                    proj_sums = np.zeros(U_normalized.shape[0])     # first iteration: all zeros
 
-            # Compute projection errors using normalized U
-            G = np.dot(normalised_basis, normalised_basis.T) + reg * np.eye(normalised_basis.shape[0]) if normalised_basis.size > 0 else np.zeros((0, 0))  # Compute Gramian
-            R = np.dot(normalised_basis, U_normalised.T)  # Compute inner product
-            lambdas = np.linalg.lstsq(G, R, rcond=None)[0] if normalised_basis.size > 0 else np.zeros((0, U_normalised.shape[0]))  # Use pseudoinverse
-            U_proj = np.dot(lambdas.T, normalised_basis) if normalised_basis.size > 0 else np.zeros_like(U_normalised)  # Compute projection
+                 # Choose next vector
+                next_idx = np.argmin(proj_sums)
+                # print("Projection sums:", proj_sums)
+                # print("Next greedy basis vector index:", next_idx)
+                # print('greedy basis, coeffs, U_proj, res_norms, arg_max_resnorms: ', B, B.shape, coeffs, coeffs.shape, U_proj, U_proj.shape, res_norms)
+
             
-            errors = np.linalg.norm(U_normalised - U_proj, axis=1)  # Calculate errors
-            max_error_idx = np.argmax(errors)
+            # Find the vector with the largest residual
+            max_idx = np.argmax(residual_norms)
+            max_res = residual_norms[max_idx]
 
-            # Extend basis with non-normalized U
-            normalised_basis = np.vstack([normalised_basis, U_normalised[max_error_idx]])
-            greedy_basis = np.vstack([greedy_basis, U[max_error_idx]])
+            # Save highest residual --> greedy error
+            greedy_errors.append(round(float(max_res), 6)) 
+            greedy_indices.append(int(max_idx) + 1)  # +1 to account for the zero vector at index 0
+            greedy_basis.append(U[max_idx + 1])  # Store the original vector from U
 
-            greedy_parameters_idx.append(int(max_error_idx))
-            greedy_errors.append(np.max(errors))
+            # --- Check stopping conditions ---
+            if min_greedy_error is not None and (np.max(greedy_errors) <= min_greedy_error or len(greedy_basis) == len(U)):
+                break
+            if N_greedy_vecs is not None and len(greedy_basis) >= N_greedy_vecs:
+                break
 
-        # Plot greedy errors if requested
+            # Add new vector to the orthonormal basis
+            new_vec = U_normalized[max_idx].copy()
+
+            for b in greedy_basis_orthonormal:   # use the orthonormal vectors
+                new_vec -= np.dot(new_vec, b) * b
+
+            norm = np.linalg.norm(new_vec)
+            if norm > 1e-12:                     # avoid division by zero
+                new_vec /= norm
+                greedy_basis_orthonormal.append(new_vec)
+
+
+        # Stack basis for convenience
+        greedy_basis = np.vstack(greedy_basis)
+
+        #  Plot greedy errors if requested
         if plot_greedy_error:
-            self._plot_greedy_errors(greedy_errors, property, save_greedy_fig)
+            self._plot_greedy_errors(greedy_errors, property, save_greedy_error_fig)
 
-        # Plot validation errors
-        if plot_validation_errors:
-            validation_vecs = calc_validation_vectors(15)
-            trivial_basis = U[:len(greedy_basis)]
-            self._plot_validation_errors(validation_vecs, greedy_basis, trivial_basis, property, save_validation_fig)
+        if plot_greedy_vectors:
+            self._plot_greedy_vectors(U, greedy_basis, greedy_indices, property, save_greedy_vecs_fig)
 
         print(f'Highest error of best approximation of the basis: {round(np.min(greedy_errors), 5)} | {len(greedy_basis)} basis vectors')
-        print(greedy_parameters_idx)
-        return greedy_parameters_idx, greedy_basis
+        print(greedy_indices, greedy_errors)
+
+        return greedy_indices, greedy_basis
+
+
+    # def get_greedy_parameters(self, U, property, min_greedy_error=None, N_greedy_vecs=None, reg=1e-6, 
+    #                         plot_greedy_error=True, plot_validation_errors=False, save_validation_fig=False, 
+    #                         save_greedy_fig=True):
+    #     """
+    #     Perform strong greedy algorithm to select the basis vectors with highest uniqueness. 
+    #     The process stops when either convergence is reached or when a specified number of 
+    #     basis vectors is reached.
+
+    #     Parameters:
+    #     ----------
+    #     U : numpy.ndarray
+    #         Non-normalized training set where each row represents a data point.
+    #     property : str
+    #         Specifies which property ('phase', 'amplitude') to compute.
+    #     min_greedy_error : float, optional
+    #         Stop the algorithm once the minimum greedy error is reached.
+    #     N_greedy_vecs : int, optional
+    #         Stop the algorithm once a specified number of basis vectors is reached.
+    #     reg : float, optional
+    #         Regularization parameter to stabilize computation, default is 1e-6.
+    #     plot_greedy_error : bool, optional
+    #         If True, plots the greedy error for each added basis vector.
+    #     plot_validation_errors : bool, optional
+    #         If True, plots the validation errors comparing greedy and trivial bases.
+    #     save_validation_fig : bool, optional
+    #         If True, saves the validation error plot to file.
+    #     save_greedy_fig : bool, optional
+    #         If True, saves the greedy error plot to file.
+
+    #     Returns:
+    #     -------
+    #     greedy_parameters_idx : list
+    #         Indices of the selected greedy basis vectors.
+    #     greedy_basis : numpy.ndarray
+    #         Selected basis vectors based on highest uniqueness.
+    #     """
+
+    #     def calc_validation_vectors(num_vectors):
+    #         """Randomly samples validation vectors from parameter space."""
+    #         parameter_space = np.linspace(min(self.parameter_space_input), max(self.parameter_space_input), num=5000).round(4)
+    #         validation_set = random.sample(list(parameter_space), num_vectors)
+    #         validation_vecs = self.generate_property_dataset(property=property, ecc_list=validation_set)
+    #         return validation_vecs
+
+
+    #     # Argument checks and initial setup
+    #     if (min_greedy_error is None) == (N_greedy_vecs is None):
+    #         raise ValueError("Specify either min_greedy_error (float) or N_greedy_vecs (int), not both.")
+
+    #    # Normalize the dataset U
+    #     U_copy = U.copy()
+    #     U_normalised = normalize(U_copy, axis=1) 
+    #     U_copy = None # Free memory
+
+    #     normalised_basis = np.empty((0, U.shape[1]))  # Initialize an empty array for the basis
+    #     greedy_basis = np.empty((0, U.shape[1]))  # Initialize an empty array for the basis
+        
+    #     greedy_parameters_idx = []
+    #     errors = [1]
+    #     greedy_errors=[1]
+    #     step=0
+
+    #     while True:
+    #         step += 1
+    #         # Either break the loop when minimum greedy error is reached or when the specified amount of vectors in the greedy basis is reached.
+    #         if min_greedy_error is not None:
+    #             if np.max(errors) <= min_greedy_error or len(greedy_basis) == len(U):
+    #                 break
+    #         if N_greedy_vecs is not None or len(greedy_basis) == len(U):
+    #             if len(greedy_basis) >= N_greedy_vecs:
+    #                 break
+
+    #         # Compute projection errors using normalized U
+    #         G = np.dot(normalised_basis, normalised_basis.T) + reg * np.eye(normalised_basis.shape[0]) if normalised_basis.size > 0 else np.zeros((0, 0))  # Compute Gramian
+    #         print('G shape: ', G.shape)
+    #         R = np.dot(normalised_basis, U_normalised.T)  # Compute inner product
+    #         print('Inner product: ', R)
+    #         lambdas = np.linalg.lstsq(G, R, rcond=None)[0] if normalised_basis.size > 0 else np.zeros((0, U_normalised.shape[0]))  # Use pseudoinverse
+    #         U_proj = np.dot(lambdas.T, normalised_basis) if normalised_basis.size > 0 else np.zeros_like(U_normalised)  # Compute projection
+            
+    #         errors = np.linalg.norm(U_normalised - U_proj, axis=1)  # Calculate errors
+    #         max_error_idx = np.argmax(errors)
+
+    #         print(f'{step} : {U_proj} \n  max error idx: {max_error_idx}')
+
+    #         # Extend basis with non-normalized U
+    #         normalised_basis = np.vstack([normalised_basis, U_normalised[max_error_idx]])
+    #         greedy_basis = np.vstack([greedy_basis, U[max_error_idx]])
+
+    #         greedy_parameters_idx.append(int(max_error_idx))
+    #         greedy_errors.append(np.max(errors))
+
+
+
+    #         # --- Break conditions as in your original code ---
+    #         if min_greedy_error is not None:
+    #             if np.max(errors) <= min_greedy_error or len(greedy_basis) == len(U):
+    #                 break
+    #         if N_greedy_vecs is not None:
+    #             if len(greedy_basis) >= N_greedy_vecs:
+    #                 break
+
+    #     # Plot greedy errors if requested
+    #     if plot_greedy_error:
+    #         self._plot_greedy_errors(greedy_errors, property, save_greedy_fig)
+
+    #     print(f'Highest error of best approximation of the basis: {round(np.min(greedy_errors), 5)} | {len(greedy_basis)} basis vectors')
+    #     print(greedy_parameters_idx)
+
+
+    #     # Plot validation errors
+    #     if plot_validation_errors:
+    #         validation_vecs = calc_validation_vectors(15)
+    #         trivial_basis = U[:len(greedy_basis)]
+    #         self._plot_validation_errors(validation_vecs, greedy_basis, trivial_basis, property, save_validation_fig)
+
+    #     print(f'Highest error of best approximation of the basis: {round(np.min(greedy_errors), 5)} | {len(greedy_basis)} basis vectors')
+    #     print(greedy_parameters_idx)
+
+    #     return greedy_parameters_idx, greedy_basis
+    
+
+    def _plot_greedy_vectors(self, U, greedy_basis, greedy_parameters_idx, property, save_greedy_vecs_fig):
+        """Function to plot and option to save the greedy basis vectors."""
+
+        num_vectors = len(U)
+        colors = plt.cm.viridis(np.linspace(0, 1, num_vectors))
+
+        fig_greedy_vecs, (ax_main, ax_bottom) = plt.subplots(
+            2, 1, figsize=(12, 6),
+            gridspec_kw={'height_ratios': [4, 0.5]}
+        )
+
+        # --- Top plot: dataset and greedy basis vectors ---
+        for i, vec in enumerate(U):
+            ax_main.plot(vec, color='grey', alpha=0.3, label='Vector dataset' if i == 0 else None)
+
+        for i, vec in enumerate(greedy_basis):
+            ax_main.plot(vec, color='red', linewidth=2.5, label=f'Greedy vector idx {greedy_parameters_idx[i]}')
+
+        ax_main.set_ylabel('Vector Value')
+        ax_main.set_title(f'Greedy Basis Vectors ({len(greedy_basis)} vectors) for {property}')
+        ax_main.legend()
+        ax_main.grid(True)
+
+        # --- Bottom plot: eccentric points and greedy indices ---
+        ecc_values = self.parameter_space_input # assuming first component = eccentricity
+        y = np.zeros(num_vectors)
+
+        # All dataset points
+        ax_bottom.plot(ecc_values, y, color='grey', alpha=0.6, label='Dataset points')
+
+        # Greedy-selected points
+        ax_bottom.scatter(ecc_values[greedy_parameters_idx], y[greedy_parameters_idx], color='red', s=50, label='Greedy parameters')
+
+        ax_bottom.set_yticks([])
+        ax_bottom.set_xlabel('Vector index / parameter')
+        ax_bottom.legend(loc='upper right')
+        ax_bottom.grid(True, axis='x', linestyle='--', alpha=0.5)
+
+        plt.tight_layout()
+        fig_greedy_vecs.show()
+
+
+        if save_greedy_vecs_fig:
+            os.makedirs('Images/Greedy_vectors', exist_ok=True)
+            plt.savefig(f'Images/Greedy_vectors/Greedy_vectors_{property}_M={self.total_mass}_ecc=[{min(self.parameter_space_input)}_{max(self.parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.parameter_space_input)}.png')
+            print('Greedy vectors fig saved to Images/Greedy_vectors')
+            # plt.close('all')
 
     def _plot_greedy_errors(self, greedy_errors, property, save_greedy_fig):
         """Function to plot and option to save the greedy errors."""
         N_basis_vectors = np.arange(1, len(greedy_errors) + 1)
 
-        plt.figure(figsize=(7, 5))
+        fig_greedy_errors = plt.figure(figsize=(7, 5))
         plt.plot(N_basis_vectors, greedy_errors, label='Greedy Errors')
         plt.scatter(N_basis_vectors, greedy_errors, s=4)
         # for i, label in enumerate(self.parameter_space_input[greedy_parameters_idx]):
@@ -385,13 +566,15 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         plt.yscale('log')
         # plt.title('Greedy errors of residual {} for N = {}'.format(property, len(greedy_errors)-1))
         plt.grid(True)
+        fig_greedy_errors.show()
 
         if save_greedy_fig:
             os.makedirs('Images/Greedy_errors', exist_ok=True)
-            plt.savefig(f'Images/Greedy_errors/Greedy_error_{property}_M={self.total_mass}_ecc=[{min(self.parameter_space_input)}_{max(self.parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.parameter_space_input)}_gerr={min(greedy_errors).round(4)}.png')
+            plt.savefig(f'Images/Greedy_errors/Greedy_error_{property}_M={self.total_mass}_ecc=[{min(self.parameter_space_input)}_{max(self.parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.parameter_space_input)}_gerr={min(greedy_errors)}.png')
             
             print('Greedy error fig saved to Images/Greedy_errors')
-            plt.close('all')
+            # plt.close('all')
+        
 
     def _plot_validation_errors(self, validation_vecs, greedy_basis, trivial_basis, property, save_validation_fig):
         """Function to plot and option to save validation errors."""
@@ -428,7 +611,8 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         if save_validation_fig:
             os.makedirs('Images/Validation_errors', exist_ok=True)
             plt.savefig(f'Images/Validation_errors/Validation_error_{property}_M={self.total_mass}_ecc=[{min(self.parameter_space_input)}_{max(self.parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.parameter_space_input)}.png')
-            plt.close('all')
+        
+        # plt.close('all')
 
     
     def get_empirical_nodes(self, reduced_basis, property, plot_emp_nodes_at_ecc=True, save_fig=True):
@@ -597,7 +781,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
     
     def get_training_set(self, property, min_greedy_error=None, N_greedy_vecs=None, plot_training_set=False, 
                         plot_greedy_error=False, save_fig_greedy_error=False, plot_emp_nodes_at_ecc=False, save_fig_emp_nodes=False, save_fig_training_set=False, 
-                        save_dataset_to_file=True, plot_residuals_eccentric_evolve=False, plot_residuals_time_evolve=False, save_fig_residuals_eccentric=False, save_fig_residuals_time=False):
+                        save_dataset_to_file=True, plot_residuals_eccentric_evolve=False, plot_residuals_time_evolve=False, save_fig_residuals_eccentric=False, save_fig_residuals_time=False, plot_greedy_vecs=False, save_fig_greedy_vecs=False):
         """
         Generate a training set for the surrogate model by calculating residuals, selecting greedy parameters, and determining empirical nodes.
         
@@ -635,8 +819,19 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             N_greedy_vecs=N_greedy_vecs,
             property=property,
             plot_greedy_error=plot_greedy_error,
-            save_greedy_fig=save_fig_greedy_error
+            save_greedy_error_fig=save_fig_greedy_error,
+            plot_greedy_vectors=plot_greedy_vecs,
+            save_greedy_vecs_fig=save_fig_greedy_vecs
         )
+
+        # self.greedy_parameters_idx, self.residual_greedy_basis = self.get_greedy_parameters(
+        #     U=residual_parameterspace_input,
+        #     min_greedy_error=min_greedy_error,
+        #     N_greedy_vecs=N_greedy_vecs,
+        #     property=property,
+        #     plot_greedy_error=plot_greedy_error,
+        #     save_greedy_fig=save_fig_greedy_error,
+        # )
         
         # Step 3: Calculate empirical nodes of the greedy basis
         print('Calculating empirical nodes...')
@@ -689,7 +884,14 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 # duration = 4 # seconds
 # time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
 
-# gt = Generate_TrainingSet(time_array=time_array, total_mass=60, luminosity_distance=200, ecc_ref_parameterspace=np.linspace(0, 0.2, num=100))
+# gt = Generate_TrainingSet(time_array=time_array, total_mass=60, luminosity_distance=200, ecc_ref_parameterspace=np.linspace(0, 0.2, num=50))
+# res_ds = gt.generate_property_dataset(np.linspace(0, 0.2, num=50), 'phase', plot_residuals_time_evolv=True, save_fig_time_evolve=True)
+# hp, hc = gt.simulate_inspiral_mass_independent(0.0)
+
+
+# residual = gt.calculate_residual(hp, hc, 0.0, 'phase', plot_residual=True, save_fig=True)
+# gt.calculate_residual(hp, hc, 0.0, 'amplitude', plot_residual=True, save_fig=True)
+# gt.get_greedy_parameters(res_ds, 'phase', N_greedy_vecs=20, plot_greedy_error=True, save_greedy_error_fig=True, plot_greedy_vectors=True, save_greedy_vecs_fig=True)
 # for ecc in np.linspace(0, 0.2, num=20)[10:]:
 # #     print(ecc)
 #     hp, hc = gt.simulate_inspiral_mass_independent(ecc, plot_polarisations=True, save_fig=True)
