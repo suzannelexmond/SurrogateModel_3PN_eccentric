@@ -1,5 +1,5 @@
 from generate_PhenomTE import *
-import random
+
 from sklearn.preprocessing import normalize
 
 plt.switch_backend('WebAgg')
@@ -269,9 +269,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         print('Residuals saved to Straindata/Residuals')
 
 
-    from sklearn.preprocessing import normalize
-
-
     def get_greedy_parameters(self, U, property, min_greedy_error=None, N_greedy_vecs=None, reg=1e-6, plot_greedy_error=False, save_greedy_error_fig=False, plot_greedy_vectors=False, save_greedy_vecs_fig=False):
         """
         Greedy algorithm to select representative vectors from U using an orthonormal basis.
@@ -323,18 +320,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
                 # Residuals
                 residual_norms = np.linalg.norm(U_normalized - U_proj, axis=1)
 
-                if len(B) > 0:
-                    projections = U_normalized @ np.array(B).T       # shape: (n_vectors, n_basis)
-                    proj_sums = np.sum(projections**2, axis=1)      # sum of squared projections per vector
-                else:
-                    proj_sums = np.zeros(U_normalized.shape[0])     # first iteration: all zeros
-
-                 # Choose next vector
-                next_idx = np.argmin(proj_sums)
-                # print("Projection sums:", proj_sums)
-                # print("Next greedy basis vector index:", next_idx)
-                # print('greedy basis, coeffs, U_proj, res_norms, arg_max_resnorms: ', B, B.shape, coeffs, coeffs.shape, U_proj, U_proj.shape, res_norms)
-
             
             # Find the vector with the largest residual
             max_idx = np.argmax(residual_norms)
@@ -344,12 +329,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             greedy_errors.append(round(float(max_res), 6)) 
             greedy_indices.append(int(max_idx) + 1)  # +1 to account for the zero vector at index 0
             greedy_basis.append(U[max_idx + 1])  # Store the original vector from U
-
-            # --- Check stopping conditions ---
-            if min_greedy_error is not None and (np.max(greedy_errors) <= min_greedy_error or len(greedy_basis) == len(U)):
-                break
-            if N_greedy_vecs is not None and len(greedy_basis) >= N_greedy_vecs:
-                break
 
             # Add new vector to the orthonormal basis
             new_vec = U_normalized[max_idx].copy()
@@ -362,21 +341,43 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
                 new_vec /= norm
                 greedy_basis_orthonormal.append(new_vec)
 
+             # --- Check stopping conditions ---
+            if min_greedy_error is not None and (max_res <= min_greedy_error or len(greedy_basis) == len(U)):
+                break
+            if N_greedy_vecs is not None and len(greedy_basis) >= N_greedy_vecs:
+                break
+
+            # B = np.vstack(greedy_basis_orthonormal)
+            # orth_error = np.linalg.norm(B @ B.T - np.eye(len(B)), 'fro')
+            # print(f"Orthogonality error: {orth_error:.2e}")  # Should be ~1e-15
+
+            # S = np.linalg.svd(np.vstack(greedy_basis_orthonormal), compute_uv=False)
+            # print("Singular values:", S) # should be ~< 1e-6
 
         # Stack basis for convenience
+
         greedy_basis = np.vstack(greedy_basis)
+        greedy_basis_orthonormal = np.vstack(greedy_basis_orthonormal)
+
+        # fig_greedy_basis_ortho = plt.figure()
+        # # greedy_basis_ortho = greedy_basis / np.linalg.norm(greedy_basis, axis=1, keepdims=True)
+        # greedy_basis_ortho = normalize(greedy_basis, axis=1)[1:]
+        # for i, vec in enumerate(greedy_basis_ortho):
+        #     plt.plot(vec, linewidth=0.6, label=f'Greedy vector idx {self.parameter_space_input[greedy_indices[i]]}')
+        # plt.show()
 
         #  Plot greedy errors if requested
         if plot_greedy_error:
             self._plot_greedy_errors(greedy_errors, property, save_greedy_error_fig)
 
         if plot_greedy_vectors:
+            # self._plot_greedy_vectors(U, greedy_basis_orthonormal, greedy_indices, property, save_greedy_vecs_fig)
             self._plot_greedy_vectors(U, greedy_basis, greedy_indices, property, save_greedy_vecs_fig)
 
         print(f'Highest error of best approximation of the basis: {round(np.min(greedy_errors), 5)} | {len(greedy_basis)} basis vectors')
         print(greedy_indices, greedy_errors)
 
-        return greedy_indices, greedy_basis
+        return greedy_indices, greedy_basis_orthonormal
 
 
     # def get_greedy_parameters(self, U, property, min_greedy_error=None, N_greedy_vecs=None, reg=1e-6, 
@@ -517,7 +518,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             ax_main.plot(vec, color='grey', alpha=0.3, label='Vector dataset' if i == 0 else None)
 
         for i, vec in enumerate(greedy_basis):
-            ax_main.plot(vec, color='red', linewidth=2.5, label=f'Greedy vector idx {greedy_parameters_idx[i]}')
+            ax_main.plot(vec, color='red', linewidth=0.6, label=f'Greedy vector idx {greedy_parameters_idx[i]}')
 
         ax_main.set_ylabel('Vector Value')
         ax_main.set_title(f'Greedy Basis Vectors ({len(greedy_basis)} vectors) for {property}')
@@ -614,6 +615,167 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         
         # plt.close('all')
 
+    # def get_empirical_nodes(self, reduced_basis, property, plot_emp_nodes_at_ecc=True, save_fig=True):
+    #     """
+    #     Perform the Empirical Interpolation Method (EIM).
+        
+    #     Parameters
+    #     ----------
+    #     reduced_basis : ndarray, shape (m, L)
+    #         The reduced basis vectors (m basis functions, each of length L).
+    #     grid_points : ndarray, shape (L,)
+    #         The discrete grid points (t_l values).
+
+    #     Returns
+    #     -------
+    #     emp_nodes_idx : list of int
+    #         Indices of empirical nodes in the grid.
+    #     emp_nodes : list of float
+    #         The actual grid point locations.
+    #     """
+    #     m, L = reduced_basis.shape
+    #     emp_nodes_idx = []
+    #     emp_nodes = []
+
+    #     U, S, VT = np.linalg.svd(reduced_basis)
+    #     plt.semilogy(S, 'o-')
+    #     plt.title("Singular Values of Reduced Basis")
+    #     plt.show()
+
+    #     # Step 1 — first node: pick the max abs value from first basis vector
+    #     i = np.argmax(np.abs(reduced_basis[0]))
+    #     emp_nodes_idx.append(i)
+
+    #     # Loop for j = 2 ... m
+    #     for j in range(1, m):
+    #         # Build V matrix (j-1 x j-1) from previous basis vectors at previous nodes
+    #         V = reduced_basis[:j, emp_nodes_idx]
+    #         print(f"Iteration {j}:")
+    #         print(f"Rank of V:", np.linalg.matrix_rank(V), ' should be smaller than {j}')
+    #         print("Condition number of V:", np.linalg.cond(V), ' should be > 1e10')
+    #         # print('V: ', V)
+    #         # # Solve for coefficients that interpolate e_j at previous nodes
+    #         # coeffs = np.linalg.solve(V, reduced_basis[j, emp_nodes_idx])
+
+    #         coeffs = np.linalg.pinv(V) @ reduced_basis[j, emp_nodes_idx]
+    #         # Build interpolant on whole grid
+    #         interpolant = np.dot(coeffs, reduced_basis[:j])
+
+    #         # Compute residual
+    #         residual = reduced_basis[j] - interpolant
+
+    #         # Pick next node as location of max abs residual
+    #         i = np.argmax(np.abs(residual))
+    #         emp_nodes_idx.append(i)
+
+    #     emp_nodes = self.time[emp_nodes_idx]
+    #     # print(emp_nodes_idx, emp_nodes)
+
+    #     # Optional: Plot the empirical nodes if plot_emp_nodes_at_ecc is set
+    #     if plot_emp_nodes_at_ecc:
+    #         self._plot_empirical_nodes(emp_nodes_idx, property, plot_emp_nodes_at_ecc, save_fig)
+
+    #     return emp_nodes_idx, emp_nodes
+    
+    # def get_empirical_nodes(self, reduced_basis, property, plot_emp_nodes_at_ecc=True, save_fig=True):
+    #     """
+    #     Reduced basis needs to be orthonormal!
+    #     """
+        
+    #     m, L = reduced_basis.shape
+
+    #     emp_nodes_idx = []
+    #     emp_nodes = []
+    #     time_grid = self.time  # Assuming this is your grid points
+
+    #     # # Initial SVD check
+    #     # U, S, VT = np.linalg.svd(reduced_basis)
+    #     # plt.semilogy(S, 'o-')
+    #     # plt.title("Singular Values of Reduced Basis")
+    #     # plt.show()
+
+    #     # First node selection
+    #     i = np.argmax(np.abs(reduced_basis[0]))
+    #     emp_nodes_idx.append(int(i))
+
+    #     for j in range(1, reduced_basis.shape[0]):
+    #         V = reduced_basis[:j, emp_nodes_idx]
+    #         coeffs = np.linalg.pinv(V) @ reduced_basis[j, emp_nodes_idx]
+    #         interpolant = np.dot(coeffs, reduced_basis[:j])
+    #         residual = reduced_basis[j] - interpolant
+
+    #         # # --- Enhanced Residual Visualization ---
+    #         # plt.figure(figsize=(15, 10))
+            
+    #         # # Plot 1: Current basis vector being approximated
+    #         # plt.subplot(3, 1, 1)
+    #         # plt.plot(time_grid, reduced_basis[j], 'b-', label=f'Basis Vector {j}')
+    #         # plt.scatter(time_grid[emp_nodes_idx], reduced_basis[j, emp_nodes_idx], 
+    #         #         c='blue', marker='o', label='Node Values')
+    #         # plt.title(f'Target Basis Vector {j} to Approximate')
+    #         # plt.legend()
+            
+    #         # Plot 2: Interpolant construction
+    #         # plt.subplot(3, 1, 2)
+    #         # for k in range(j):
+    #         #     plt.plot(time_grid, coeffs[k] * reduced_basis[k], '--', alpha=0.5, 
+    #         #             label=f'{coeffs[k]:.2f}×Basis{k}')
+    #         # plt.plot(time_grid, interpolant, 'r-', linewidth=2, label='Interpolant Sum')
+    #         # plt.scatter(time_grid[emp_nodes_idx], interpolant[emp_nodes_idx], 
+    #         #         c='red', marker='x', label='Interpolant at Nodes')
+    #         # plt.title('Interpolant Construction (Weighted Sum of Previous Basis)')
+    #         # plt.legend()
+            
+    #         # # Plot 3: Residual calculation
+    #         # plt.subplot(3, 1, 3)
+    #         # plt.plot(time_grid, reduced_basis[j], 'b-', label='Original Vector')
+    #         # plt.plot(time_grid, interpolant, 'r-', label='Interpolant')
+    #         # plt.plot(time_grid, residual, 'g-', label='Residual')
+    #         # plt.scatter(time_grid[emp_nodes_idx], np.zeros_like(emp_nodes_idx),
+    #         #         c='black', marker='x', label='Existing Nodes')
+    #         # new_node = np.argmax(np.abs(residual))
+    #         # plt.scatter(time_grid[new_node], residual[new_node], 
+    #         #         c='magenta', s=100, label='New Node Candidate')
+    #         # plt.title(f'Residual Calculation (Max at {time_grid[new_node]:.2f})')
+    #         # plt.legend()
+            
+    #         # plt.tight_layout()
+    #         # plt.show()
+
+    #         i = np.argmax(np.abs(residual))
+    #         emp_nodes_idx.append(int(i))
+
+    #     # --- Final Plots ---
+    #     emp_nodes = self.time[emp_nodes_idx]
+    #     print(emp_nodes_idx, emp_nodes)
+        
+    #     # Plot 5: All Basis Vectors with Final Nodes
+    #     plt.figure(figsize=(12, 6))
+    #     # for k in range(m):
+    #         # plt.plot(self.time, reduced_basis[k], alpha=0.5, label=f"Basis {k}" if k < 5 else None)
+    #     plt.scatter(emp_nodes, np.zeros_like(emp_nodes), c='red', marker='x', s=100, label="EIM Nodes")
+    #     plt.title(f"Final Basis Vectors and Selected Nodes for {property}")
+    #     plt.xlabel("Time")
+    #     plt.ylabel("Basis Value")
+    #     plt.legend(ncol=2)
+    #     plt.grid(True)
+    #     plt.show()
+
+    #     # Plot 6: Node Distribution Histogram
+    #     # if len(emp_nodes_idx) > 1:
+    #         # distances = np.diff(np.sort(emp_nodes_idx))
+    #         # plt.figure(figsize=(8, 4))
+    #         # plt.hist(distances, bins=20)
+    #         # plt.title("Distance Between Consecutive Nodes")
+    #         # plt.xlabel("Grid Points")
+    #         # plt.ylabel("Frequency")
+    #         # plt.show()
+
+    #     if plot_emp_nodes_at_ecc:
+    #         self._plot_empirical_nodes(emp_nodes_idx, property, plot_emp_nodes_at_ecc, save_fig)
+
+    #     return emp_nodes_idx
+    
     
     def get_empirical_nodes(self, reduced_basis, property, plot_emp_nodes_at_ecc=True, save_fig=True):
         """
@@ -630,7 +792,8 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         ----------------
         - emp_nodes_idx (list): Indices of empirical nodes for the given dataset.
         """
-        
+
+
         def calc_empirical_interpolant(waveform_property, reduced_basis, emp_nodes_idx):
             """
             Calculates the empirical interpolant for a specific waveform property using a reduced basis.
@@ -717,67 +880,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             fig.savefig(fig_path)
             print(f'Figure is saved in {fig_path}')
 
-    # def get_training_set_test(self, property, min_greedy_error=None, N_greedy_vecs=None, plot_training_set=True, 
-    #                         plot_greedy_error=False, save_fig_greedy_error=False, plot_emp_nodes_at_ecc=False, save_fig_emp_nodes=False, save_fig_training_set=False, 
-    #                         save_dataset_to_file=True, plot_residuals_eccentric_evolve=False, plot_residuals_time_evolve=True, save_fig_residuals_eccentric=False, save_fig_residuals_time=False):
-    #         """
-    #         Generate a training set for the surrogate model by calculating residuals, selecting greedy parameters, and determining empirical nodes.
-            
-    #         Parameters:
-    #         ----------------
-    #         - property (str): Waveform property (e.g., 'phase' or 'amplitude') for generating the dataset.
-    #         - min_greedy_error (float, optional): Minimum greedy error threshold for stopping criterion in greedy selection.
-    #         - N_greedy_vecs (int, optional): Number of greedy vectors to select.
-    #         - plot_training_set (bool, optional): If True, plots the training set.
-    #         - plot_greedy_error (bool, optional): If True, plots greedy error.
-    #         - plot_emp_nodes_at_ecc (float or bool, optional): If True, plots empirical nodes at specified eccentricity.
-    #         - save_fig (bool, optional): If True, saves the plot of the training set.
-    #         - save_dataset_to_file (bool, optional): If True, saves the generated dataset.
-
-    #         Returns:
-    #         ----------------
-    #         - residual_training_set (numpy.ndarray): Training set of residuals at empirical nodes.
-    #         """
-    #         # Step 1: Generate residuals for the full parameter space
-    #         residual_parameterspace_input = self.generate_property_dataset(
-    #             ecc_list=self.parameter_space_input,
-    #             property=property,
-    #             save_dataset_to_file=save_dataset_to_file,
-    #             plot_residuals_eccentric_evolv=plot_residuals_eccentric_evolve,
-    #             plot_residuals_time_evolv=plot_residuals_time_evolve,
-    #             save_fig_eccentric_evolv=save_fig_residuals_eccentric,
-    #             save_fig_time_evolve=save_fig_residuals_time
-    #         )
-            
-    #         # Step 2: Select the best representative parameters using a greedy algorithm
-    #         print('Calculating greedy parameters...')
-    #         self.greedy_parameters_idx, self.residual_greedy_basis = self.get_greedy_parameters(
-    #             U=residual_parameterspace_input,
-    #             min_greedy_error=min_greedy_error,
-    #             N_greedy_vecs=N_greedy_vecs,
-    #             property=property,
-    #             plot_greedy_error=plot_greedy_error,
-    #             save_greedy_fig=save_fig_greedy_error
-    #         )
-            
-    #         # Step 3: Calculate empirical nodes of the greedy basis
-    #         print('Calculating empirical nodes...')
-    #         self.empirical_nodes_idx = self.get_empirical_nodes_test(
-    #             reduced_basis=self.residual_greedy_basis,
-    #             property=property,
-    #             plot_emp_nodes_at_ecc=plot_emp_nodes_at_ecc,
-    #             save_fig=save_fig_emp_nodes
-    #         )
-            
-    #         # Step 4: Generate the training set at empirical nodes
-    #         residual_training_set = self.residual_greedy_basis[:, self.empirical_nodes_idx]
-    #         self.time_training = self.time[self.empirical_nodes_idx]
-
-    #         # Optionally plot the training set
-    #         if plot_training_set:
-    #             self._plot_training_set(residual_training_set, property, save_fig_training_set)
-
-    #         return residual_training_set
+  
     
     def get_training_set(self, property, min_greedy_error=None, N_greedy_vecs=None, plot_training_set=False, 
                         plot_greedy_error=False, save_fig_greedy_error=False, plot_emp_nodes_at_ecc=False, save_fig_emp_nodes=False, save_fig_training_set=False, 
@@ -810,10 +913,11 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             save_fig_eccentric_evolv=save_fig_residuals_eccentric,
             save_fig_time_evolve=save_fig_residuals_time
         )
+
         
         # Step 2: Select the best representative parameters using a greedy algorithm
         print('Calculating greedy parameters...')
-        self.greedy_parameters_idx, self.residual_greedy_basis = self.get_greedy_parameters(
+        self.greedy_parameters_idx, residual_greedy_basis_orthonormal = self.get_greedy_parameters(
             U=residual_parameterspace_input,
             min_greedy_error=min_greedy_error,
             N_greedy_vecs=N_greedy_vecs,
@@ -824,6 +928,8 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             save_greedy_vecs_fig=save_fig_greedy_vecs
         )
 
+        self.residual_greedy_basis = residual_parameterspace_input[self.greedy_parameters_idx]
+        print(self.residual_greedy_basis.shape)
         # self.greedy_parameters_idx, self.residual_greedy_basis = self.get_greedy_parameters(
         #     U=residual_parameterspace_input,
         #     min_greedy_error=min_greedy_error,
@@ -836,13 +942,14 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         # Step 3: Calculate empirical nodes of the greedy basis
         print('Calculating empirical nodes...')
         self.empirical_nodes_idx = self.get_empirical_nodes(
-            reduced_basis=self.residual_greedy_basis,
+            reduced_basis=residual_greedy_basis_orthonormal,
             property=property,
             plot_emp_nodes_at_ecc=plot_emp_nodes_at_ecc,
             save_fig=save_fig_emp_nodes
         )
         
         # Step 4: Generate the training set at empirical nodes
+        print('emp nodes: ' , self.empirical_nodes_idx)
         residual_training_set = self.residual_greedy_basis[:, self.empirical_nodes_idx]
         self.time_training = self.time[self.empirical_nodes_idx]
 
