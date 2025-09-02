@@ -459,3 +459,119 @@ Summary:
 
 FUTURE PROSPECTS:
 - build a surrogate that can be run with either phenomte or seobnre, so people can choose either better precission and larger parameter space (seobnre) or a faster waveform.
+
+
+
+02/09/2025:
+
+Juan's paper on hyperparameter optimisation (a r X i v : 2 4 1 0 . 1 6 2 4 8 v 1):
+
+Traditional hyperparameter tuning:
+1. Train lots of models with different hyperparameters.
+2. Pick the single best one (e.g. lowest validation loss).
+
+New method (from the paper):
+1. Train lots of models with different hyperparameters (same as before).
+2. Compute statistics across the ensemble (averages, variances, correlations, etc.).
+3. Look for hyperparameter regions that give both good performance AND stability.
+   - Not just one lucky winner, but consistent strong results across the ensemble.
+4. Select or average over those stable hyperparameters to reduce sensitivity.
+
+Key difference:
+- Old way = “find the winner.”
+- New way = “find robust and trustworthy hyperparameters.”
+- This gives more reliable models and meaningful uncertainty estimates, instead of results depending too much on one arbitrary choice.
+
+So the method isn’t about “finding the winner” but about “finding hyperparameter regions that are robust and trustworthy.”
+
+
+
+Juan's paper on Neutrino Structure Functions from GeV to EeV Energies:
+Traditional approach to neutrino predictions:
+1. Use perturbative QCD (pQCD) to calculate structure functions at high energies.
+2. At low energies (low Q²), rely on models with large uncertainties (e.g. Bodek–Yang).
+3. This leads to inaccurate event rate predictions across a wide energy range.
+
+New NNSFν method:
+1. Use machine learning to parametrize experimental data directly.
+2. Combine this with pQCD calculations where theory is reliable.
+3. Build a surrogate-like model that smoothly covers the full energy range:
+   - From a few GeV (oscillation experiments)
+   - Up to EeV (neutrino telescopes).
+4. Provide results as fast interpolation grids (LHAPDF), usable in simulations
+   like GENIE or LHC neutrino experiments (FASERν, SND@LHC).
+
+Key difference:
+- Old way = “separate models for different regimes, big uncertainties at low Q².”
+- New way = “one unified, data+theory-driven model valid across all energies.”
+- Result = more accurate, stable, and efficient neutrino–nucleus predictions.
+
+
+
+Combine both and apply to eccentric surrogate:
+How to apply this to your eccentric-GW surrogate:
+
+Traditional GW-surrogate workflow (typical):
+1. Choose a single waveform family (PN/EOB/Phenom) and a fixed hyperparameter set.
+2. Train on a limited set of NR/accurate waveforms and interpolate.
+3. Evaluate with a single metric and select the single “best” model.
+
+NNSFν-inspired workflow (recommended):
+1. Hybrid physics+data:
+   - Use PN/EOB/Phenom where reliable (early inspiral / low v).
+   - Use NR or high-fidelity data where analytics struggle (high e, near merger).
+2. Train an ensemble:
+   - Sample hyperparameters broadly (architecture, loss weights, basis size, rank).
+   - Train many surrogate candidates in parallel (GPU-friendly).
+3. Statistical selection:
+   - Compute ensemble statistics (mean/variance of mismatch, amp/phase errors, stability vs seed).
+   - Select hyperparameter regions that are both accurate and stable (not just a lucky winner).
+4. Unified coverage:
+   - Ensure smooth transitions across regimes (low→high frequency, low→high eccentricity).
+   - Enforce physical constraints (e.g., energy/angular-momentum balance, monotone φ).
+5. Fast deployment:
+   - Export as interpolation grids/bases (e.g., reduced-order coefficients over {masses, e, spins}).
+   - Provide a thin driver that maps {params} → (amp, phase) quickly (like LHAPDF grids).
+6. Uncertainty quantification:
+   - Use ensemble spread to attach per-parameter error bars on amp/phase or mismatch.
+   - Surface these uncertainties in downstream inference (likelihood tempering, priors).
+
+Practical checklist:
+- Dataset: curate a training/validation set spanning (mass, mass ratio, e, spins, f-range).
+- Targets: minimize weighted amp/phase errors + physical penalties (e.g., dφ/dt > 0, Keplerian limits).
+- Slicing: train piecewise (early/transition/late) with overlap and continuity losses.
+- Gridding: store learned coefficients on a moderate grid; use barycentric/kriging interpolation.
+- Validation: injection tests across the space; compare to “true” model; report mismatch + σ_ensemble.
+
+
+
+
+SURROGATE MODEL STRATEGY:
+A. Workflow (high level — what to run)
+
+1. Define an ensemble of surrogate builds.
+
+2. Vary hyperparameters you care about (basis/greedy tolerances, network arch, regularization, sample seeds, training schedule).
+
+3. Use a grid or randomized sampling (Latin hypercube or uniform random) over the hyperparameter space.
+
+4. Train the ensemble in parallel (one model per GPU if possible).
+
+5. For each trained surrogate, compute the same validation metrics you already compute:
+   - relative_errors_amp[ecc_idx,mass_idx,ld_idx]
+   - relative_errors_phase[...]
+   - relative_errors_hp[...], relative_errors_hc[...] or mismatches.
+
+6. Aggregate statistics across the ensemble (per point in parameter space and per hyperparameter configuration):
+   - Compute mean, standard deviation, percentiles of errors and mismatches across ensemble members.
+
+7. Find stable hyperparameter regions:
+   - Prefer hyperparameter choices that deliver low mean error and low variance across seeds/replicates.
+   - Optionally, prefer hyperparameters that yield small worst-case error (low high-percentile).
+
+8. Choose final model(s) using rules below (single best, robust region centroid, or ensemble averaging/weighting):
+   - Option A: pick the hyperparameter set that minimizes a stability metric (mean + λ·std).
+   - Option B: average / BMA across several top stable models (weighted by inverse variance or likelihood).
+
+9. Export surrogate + uncertainty info:
+   - Save final surrogate and an uncertainty grid (e.g. mean ± std or mean + 90% quantiles) as interpolation grids used by downstream code.

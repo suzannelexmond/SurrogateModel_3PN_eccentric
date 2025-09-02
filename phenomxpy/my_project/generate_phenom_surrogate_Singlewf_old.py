@@ -1,5 +1,6 @@
 from fileinput import filename
-from generate_phenom_training_set import *
+from generate_phenom_training_set_old import *
+
 from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, Product, ConstantKernel as C
 from sklearn.gaussian_process.kernels import RBF, Matern, RationalQuadratic, WhiteKernel, ExpSineSquared, DotProduct, ConstantKernel as C
@@ -14,7 +15,6 @@ from matplotlib.lines import Line2D
 from inspect import currentframe, getframeinfo
 from sklearn.preprocessing import StandardScaler
 from pathlib import Path
-
 
 f = currentframe()
 plt.switch_backend('WebAgg')
@@ -35,10 +35,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
 
         self.ecc_parameter_space_input = np.linspace(ecc_ref_parameterspace_range[0], ecc_ref_parameterspace_range[1], amount_input_wfs).round(4)
         self.ecc_parameter_space_output = np.linspace(ecc_ref_parameterspace_range[0], ecc_ref_parameterspace_range[1], amount_output_wfs).round(4)
-        self.ecc_ref_parameterspace_range = ecc_ref_parameterspace_range
-        self.amount_input_wfs = amount_input_wfs
-        self.amount_output_wfs = amount_output_wfs
-
+        
         self.min_greedy_error_amp = min_greedy_error_amp
         self.min_greedy_error_phase = min_greedy_error_phase
         self.N_greedy_vecs_amp = N_greedy_vecs_amp
@@ -48,7 +45,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         self.reference_luminosity_distance = reference_luminosity_distance
         self.surrogate_amp = None
         self.surrogate_phase = None
-        self.geometric_units = geometric_units
+        self.waveforms_in_geom_units = geometric_units
 
         self.gaussian_fit_amp = None
         self.gaussian_fit_phase = None
@@ -57,7 +54,6 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
 
         
         Generate_TrainingSet.__init__(self, time_array, self.ecc_parameter_space_input, self.reference_total_mass, self.reference_luminosity_distance, f_lower, f_ref, chi1, chi2, phiRef, rel_anomaly, inclination, truncate_at_ISCO, truncate_at_tmin)
-
 
     
     def simulate_inspiral_mass_dependent(self, total_mass, distance, ecc_ref=None, plot_polarisations=False, save_fig=False):
@@ -489,353 +485,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
 
         return B_matrix
     
-    # def residual_to_original(self, residual_waveform, property):
-    #     """
-    #     Converts the residual waveform back to the original waveform by adding or subtracting the circular waveform depending on the property.
-    #     """
-    #     self.circulair_wf()  # ensure circular wf is updated
-        
-    #     if property == 'phase':
-    #         circ = self.phase_circ
-    #         original_waveform = circ - residual_waveform
-    #     elif property == 'amplitude':
-    #         circ = self.amp_circ
-    #         original_waveform = residual_waveform + circ
-    #     else:
-    #         raise ValueError('property must be "phase" or "amplitude"')
-        
-    #     return original_waveform
 
-    # def reconstruct_surrogate_datapiece(self, property, B_matrix, fit_matrix, plot_surr_datapiece=False, save_fig_datapiece=False):
-    #     """
-    #     Reconstructs the surrogate model for a given parameter using different empirical nodes for amplitude and phase.
-        
-    #     Parameters:
-    #     ------------------
-    #     B_matrix (numpy.ndarray), shape (m, time_samples): Empricial interpolant matrix
-    #     fit_matrix (numpy.ndarray), shape (m, lambda): Array of fitted greedy parameters at time nodes with lambda as the number of parameters in parameter_space.
-    #     time_samples (numpy.ndarray), shape (time_samples, 1): Array representing the time-domain samples.
-    #     plot_surr_datapiece (bool) : Set this to True for plot of surrogate datapiece as comparison with real estimated value at given output_ecc_ref.
-        
-    #     Returns:
-    #     ------------------
-    #     surrogate_datapiece (numpy.ndarray), shape (time_samples, lambda): Array representing the reconstructed surrogate waveform datapiece (amplitude or phase).
-    #     """
-        
-    #     computation_time = None
-    #     m, _ = B_matrix.shape
-
-    #     # fit_vector2 = np.zeros(m)
-
-    #     # for i in range(m):
-    #     #     fit_vector2[i] = fit_matrix[i].predict(self.ecc_parameter_space_output)[0]
-
-
-    #     fit_vector = fit_matrix.T[self.output_ecc_ref_idx]  # Get the fit vector for the specific output eccentricity reference
-    #     reconstructed_residual = np.sum(B_matrix * fit_vector[:, None], axis=0)
-
-    #     # Change back from residual to original (+ circulair)
-    #     surrogate_datapiece = self.residual_to_original(residual_waveform=reconstructed_residual, property=property)
-
-    #     if plot_surr_datapiece is True:
-    #         self._plot_surr_datapieces(property, surrogate_datapiece, save_fig_datapiece)
-
-    #     return surrogate_datapiece, computation_time
-    
-    # def _plot_surr_datapieces(self, property, surrogate_datapiece, save_fig_datapiece=False, geometric_units=True, total_mass=None, luminosity_distance=None):
-            
-    #     # Create a 2x1 subplot grid with height ratios 3:1
-    #     fig_surrogate_datapieces, axs = plt.subplots(2, 1, figsize=(6, 6), gridspec_kw={'height_ratios': [3, 1], 'hspace': 0.1}, sharex=True)
-
-    #     if geometric_units is True:
-    #         # Simulate the real waveform datapiece
-    #         real_hp, real_hc = self.simulate_inspiral_mass_independent(self.output_ecc_ref)
-    #     else:
-    #         real_hp, real_hc = self.simulate_inspiral_mass_dependent(total_mass=total_mass, distance=luminosity_distance, ecc_ref=self.output_ecc_ref)
-
-    #     if property == 'amplitude':
-    #         true_datapiece = self.amplitude(real_hp, real_hc)
-    #         units = ''
-    #     elif property == 'phase':
-    #         true_datapiece = self.phase(real_hp, real_hc)
-    #         units = ' [radians]'
-
-    #     # Plot Surrogate and Real Amplitude (Top Left)
-    #     # axs[0].plot(self.ecc_parameter_space_output, surrogate_datapiece[index_ecc_ref], label='surr')
-    #     axs[0].plot(self.time, surrogate_datapiece, linewidth=0.6, label=f'surrogate e = {self.output_ecc_ref}')
-    #     # axs[0].plot(self.time, true_phase[index_ecc_ref], linewidth=0.6, label=f'Surrogate: e = {plot_surr_datapiece}')
-    #     axs[0].plot(self.time, true_datapiece, linewidth=0.6, linestyle='dashed', label=f'true {property} e = {self.output_ecc_ref}')
-    #     # axs[0].plot(self.ecc_parameter_space_output, true_phase[:, index_ecc_ref], label='real')
-    #     # axs[0].set_xlabel('t [M]')
-    #     if property == 'phase':
-    #         axs[0].set_ylabel('$\phi$' + units)
-    #     else:
-    #         axs[0].set_ylabel('A' + units)
-    #     axs[0].grid(True)
-    #     # axs[0].set_title(f'Surrogate vs Real {property}, ga={self.min_greedy_error_amp}, gp={self.min_greedy_error_phase}')
-    #     axs[0].legend(loc='upper left')
-
-    #     # Calculate and Plot Phase Error (Bottom Right)
-    #     # Define a small threshold value to handle small or zero values in real_datapiece
-    #     threshold = 1e-30  # You can adjust this value based on the scale of your data
-
-    #     # Avoid division by very small numbers by using np.maximum to set a lower limit
-    #     relative_error = abs(surrogate_datapiece - true_datapiece) / abs(true_datapiece)
-    #     axs[1].plot(self.time, relative_error, linewidth=0.6)
-    #     if property == 'phase':
-    #         axs[1].set_ylabel('|($\phi_S$ - $\phi$) / $\phi$|')
-    #     else:
-    #         axs[1].set_ylabel('|($A_S$ - A) / A|')
-    #     axs[1].set_xlabel('t [M]')
-    #     axs[1].ticklabel_format(style='sci', axis='y', scilimits=(0, 0), useMathText=True)
-    #     axs[1].grid(True)
-
-    #     # axs[1].set_title('Relative error')
-
-    #     # Adjust layout to prevent overlap
-    #     plt.tight_layout()
-
-    #     if save_fig_datapiece is True:
-    #         figname = f'Surrogate_{property}_ecc_ref={self.output_ecc_ref}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_parameter_space_input)}_{max(self.ecc_parameter_space_input)}_Ni={len(self.ecc_parameter_space_input)}]_No={len(self.ecc_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_greedy_vecs_phase}_Nga={self.N_greedy_vecs_amp}.png'
-            
-    #         # Ensure the directory exists, creating it if necessary and save
-    #         os.makedirs('Images/Surrogate_datapieces_Single', exist_ok=True)
-    #         fig_surrogate_datapieces.savefig('Images/Surrogate_datapieces_Single/' + figname)
-
-    #         print('Figure is saved in Images/Surrogate_datapieces_Single/' + figname)
-
-    #     return surrogate_datapiece, true_datapiece, relative_error
-        
-
-    # def generate_surrogate_waveform(self, output_ecc_ref, plot_surr_datapiece=False, save_fig_datapiece=False, plot_surr_wf=None, save_fig_surr=False, plot_GPRfit=False, save_fits_to_file=True, save_fig_fits=False, save_matrix_to_file=True):
-
-    #     if isinstance(output_ecc_ref, float):
-    #         try:
-    #             self.output_ecc_ref_idx = np.where(self.ecc_parameter_space_output == output_ecc_ref)[0][0]
-    #             self.output_ecc_ref = output_ecc_ref
-    #         except:
-    #             output_ecc_ref_asked = output_ecc_ref
-    #             self.output_ecc_ref = self.ecc_parameter_space_output[np.abs(self.ecc_parameter_space_output - output_ecc_ref).argmin()]
-    #             self.output_ecc_ref_idx = np.where(self.ecc_parameter_space_output == self.output_ecc_ref)[0][0]
-    #             print(f'Eccentricity value for output_ecc_ref={output_ecc_ref_asked} not in ouput parameterspace. Eccentricity calculated for closest existing value at e={self.output_ecc_ref}.')
-
-        
-    #     if self.gaussian_fit_amp is None:
-    #         print('Loading surrogate amplitude...')
-    #         # Set timer for computational time of the surrogate model
-    #         # start_time_amp = time.time()
-
-    #         # Get matrix with interpolated fits and B_matrix
-    #         self.gaussian_fit_amp = self.fit_to_training_set(min_greedy_error=self.min_greedy_error_amp, N_greedy_vecs=self.N_greedy_vecs_amp, property='amplitude', plot_fits=plot_GPRfit, save_fig_fits=save_fig_fits, save_fits_to_file=save_fits_to_file)[0]
-    #         # Get empirical nodes for amplitude
-    #         self.empirical_nodes_idx_amp = self.empirical_nodes_idx
-    #         # Get residual greedy basis of amplitude
-    #         self.residual_greedy_basis_amp = self.residual_greedy_basis
-            
-    #     if self.B_matrix_amp is None:
-    #         # Get B_matrix for amplitude
-    #         self.B_matrix_amp = self.compute_B_matrix(property='amplitude', save_matrix_to_file=save_matrix_to_file)
-    #         print('B_matrix: ', self.B_matrix_amp)
-    #         # Reconstruct amplitude datapiece
-    #         self.surrogate_amp, computation_time_amp = self.reconstruct_surrogate_datapiece(property='amplitude', B_matrix=self.B_matrix_amp, fit_matrix=self.gaussian_fit_amp, plot_surr_datapiece=plot_surr_datapiece, save_fig_datapiece=save_fig_datapiece)
-
-    #     else:
-    #         print('Reconstruct surrogate datapiece...')
-    #         self.surrogate_amp, computation_time_amp = self.reconstruct_surrogate_datapiece(property='amplitude', B_matrix=self.B_matrix_amp, fit_matrix=self.gaussian_fit_amp, plot_surr_datapiece=plot_surr_datapiece, save_fig_datapiece=save_fig_datapiece)
-    #         if plot_GPRfit is True:
-    #             self._plot_GPR_fits('amplitude', save_fig_fits=save_fig_fits)
-
-    #     # # End timer for computation of surrogate model
-    #     # end_time_amp = time.time()
-
-    #     if self.gaussian_fit_phase is None:
-    #         print('Loading surrogate phase...')
-    #         # Set timer for computational time of the surrogate model
-    #         # start_time_phase = time.time()
-
-    #         # Get matrix with interpolated fits and B_matrix
-    #         start1 = time.time()
-    #         self.gaussian_fit_phase = self.fit_to_training_set(min_greedy_error=self.min_greedy_error_phase, N_greedy_vecs=self.N_greedy_vecs_phase, property='phase', plot_fits=plot_GPRfit, save_fig_fits=save_fig_fits, save_fits_to_file=save_fits_to_file)[0]
-    #         print(f'GPR fit phase took {time.time() - start1:.4f}s')
-    #         # Get empirical nodes of phase
-    #         start2 = time.time()
-    #         self.empirical_nodes_idx_phase = self.empirical_nodes_idx
-    #         # Get residual greedy basis of phase
-    #         self.residual_greedy_basis_phase = self.residual_greedy_basis
-            
-    #         print(f'Setting self took {time.time() - start2:.4f}s')
-    #         start3 = time.time()
-
-    #     if self.B_matrix_phase is None:
-    #         # Get B_matrix for phase
-    #         self.B_matrix_phase = self.compute_B_matrix(property='phase', save_matrix_to_file=save_matrix_to_file)
-    #         print(f'B_matrix took {time.time() - start3:.4f}s')
-    #         # Reconstruct phase datapiece
-    #         self.surrogate_phase, computation_time_phase = self.reconstruct_surrogate_datapiece(property='phase', B_matrix=self.B_matrix_phase, fit_matrix=self.gaussian_fit_phase, plot_surr_datapiece=plot_surr_datapiece, save_fig_datapiece=save_fig_datapiece)
-    #     else:
-    #         self.surrogate_phase, computation_time_phase = self.reconstruct_surrogate_datapiece(property='phase', B_matrix=self.B_matrix_phase, fit_matrix=self.gaussian_fit_phase, plot_surr_datapiece=plot_surr_datapiece, save_fig_datapiece=save_fig_datapiece)
-    #         if plot_GPRfit is True:
-    #             self._plot_GPR_fits('phase', save_fig_fits=save_fig_fits)
-
-    #     # # End timer for computation of surrogate model
-    #     # end_time_phase = time.time()
-
-    #     # # Compute total computational time of the surrogate datapieces
-    #     # if computation_time_phase is None:
-    #     #     computation_time_amp = end_time_amp - start_time_amp
-    #     #     computation_time_phase = end_time_phase - start_time_phase
-
-    #     # filename = f'Straindata/Surrogate_datapieces/Surrogate_datapieces_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_parameter_space_input)}_{max(self.ecc_parameter_space_input)}_N={len(self.ecc_parameter_space_input)}]_No={len(self.ecc_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_greedy_vecs_phase}_Nga={self.N_greedy_vecs_amp}.npz'
-    #     # if save_surr_to_file is True and not os.path.isfile(filename):
-    #     #     # Ensure the directory exists, creating it if necessary and save
-    #     #     os.makedirs('Straindata/Surrogate_datapieces', exist_ok=True)
-    #     #     np.savez(filename, surrogate_amp=self.surrogate_amp, surrogate_phase=self.surrogate_phase, computation_t_amp=computation_time_amp, computation_t_phase=computation_time_phase, time=self.time)
-    #     #     print('Surrogate datapieces saved in ' + filename)
-
-        
-    #     if self.waveforms_in_geom_units is False:
-    #         # Convert mass-independent waveforms to a 3 dimensional mass-dependent grid of (total_mass x ecc_ref x time)
-    #         surrogate_amp_SI, surrogate_phase_SI = self.surrogate_datapieces_from_NR_to_SI()
-
-    #         h_surrogate = surrogate_amp_SI * np.exp(1j * surrogate_phase_SI)
-
-    #     else:
-    #         h_surrogate = self.surrogate_amp * np.exp(1j * self.surrogate_phase)
-
-
-    #     if plot_surr_wf is True:
-    #         self.plot_surrogate_waveform(h_surrogate, save_fig_surr=save_fig_surr, geometric_units=self.waveforms_in_geom_units)
-
-    #     return self.surrogate_amp, self.surrogate_phase
-
-
-    # def plot_surrogate_waveform(self, surrogate_h, save_fig_surr=False, geometric_units=True):
-    #         # Plot surrogate waveform
-    #     fig_surrogate, axs = plt.subplots(4, 1, figsize=(12, 6), gridspec_kw={'height_ratios': [3, 1, 3, 1], 'hspace': 0.2}, sharex=True)
-
-    #     if self.waveforms_in_geom_units is True:
-    #         true_hp, true_hc = self.simulate_inspiral_mass_independent(self.output_ecc_ref)
-    #     else:
-    #         true_hp, true_hc = self.simulate_inspiral_mass_dependent(total_mass=self.total_mass, distance=self.luminosity_distance, ecc_ref=self.output_ecc_ref)
-
-
-    #     phase = self.phase(true_hp, true_hc)
-    #     amp = self.amplitude(true_hp, true_hc)
-    #     true_h = amp * np.exp(1j * phase)
-
-
-    #     axs[0].plot(self.time, np.real(true_h), linewidth=0.6, label=f'true waveform e = {self.output_ecc_ref}')
-    #     axs[0].plot(self.time, np.real(surrogate_h), linewidth=0.6, label=f'surrogate e = {self.output_ecc_ref}')
-    #     axs[0].set_ylabel('$h_+$')
-    #     axs[0].grid(True)
-    #     axs[0].legend()
-
-    #     # Calculate and Plot plus polarisation error 
-    #     relative_error_hp = abs(np.real(surrogate_h) - np.real(true_h)) / abs(np.real(true_h))
-    #     relative_error_hp[relative_error_hp > 1] = 0
-
-    #     axs[1].plot(self.time, abs(np.real(surrogate_h) - np.real(true_h)), linewidth=0.6)
-    #     axs[1].set_ylabel('|$h_{+, S} - h_+$|')
-    #     axs[1].grid(True)
-    #     # axs[1].set_ylim(0, 10)
-    #     # axs[1].set_title('Relative error $h_x$')
-
-    #     # axs[2].plot(self.time, true_hc[length_diff:], linewidth=0.6, label='True waveform before')
-    #     axs[2].plot(self.time, np.imag(true_h), linewidth=0.6, label=f'true waveform e = {self.output_ecc_ref}')
-    #     axs[2].plot(self.time, np.imag(surrogate_h), linewidth=0.6, label=f'surrogate e = {self.output_ecc_ref}')
-    #     axs[2].grid(True)
-    #     axs[2].set_ylabel('$h_x$')
-    #     axs[2].legend()
-
-    #     # # axs[2].plot(self.time, true_hc[length_diff:], linewidth=0.6, label='True waveform before')
-    #     # axs[1].plot(self.time, np.imag(true_h)[length_diff:], linewidth=0.6, label='True waveform after')
-    #     # axs[1].plot(self.time, np.imag(h_surrogate[:, index_ecc_ref]), linewidth=0.6, label='Surrogate')
-    #     # axs[1].grid(True)
-    #     # axs[1].set_ylabel('$h_x$')
-    #     # axs[1].legend()
-
-    #     # Calculate and Plot cross polarisation error
-    #     relative_error_hc = abs(np.imag(surrogate_h) - np.imag(true_h)) / abs(np.imag(true_h))
-    #     relative_error_hc[relative_error_hc > 1] = 0
-    #     axs[3].plot(self.time, abs(np.imag(surrogate_h) - np.imag(true_h)), linewidth=0.6)
-    #     axs[3].set_ylabel('|$h_{x, S} - h_x$|')
-    #     axs[3].set_xlabel('t [M]')
-    #     axs[3].grid(True)
-    #     # axs[3].set_ylim(0, 10)
-
-    #     # axs[4].plot(np.arange(len(relative_error_hc)), relative_error_hc, linewidth=0.6, label='rel err')
-    #     # axs[5].plot(np.arange(len(relative_error_hc)), abs(np.imag(true_h)[length_diff:]), linewidth=0.6, label='abs')
-    #     # axs[4].set_ylabel(f'Rel. Error in $h_x$')
-    #     # axs[4].set_xlabel('t [M]')
-    #     # axs[4].grid(True)
-    #     # axs[4].legend()
-
-
-    #     if save_fig_surr is True:
-    #         figname = f'Surrogate_wf_ecc_ref={self.output_ecc_ref}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_parameter_space_input)}_{max(self.ecc_parameter_space_input)}_Ni={len(self.ecc_parameter_space_input)}]_No={len(self.ecc_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_greedy_vecs_phase}_Nga={self.N_greedy_vecs_amp}.png'
-            
-    #         # Ensure the directory exists, creating it if necessary and save
-    #         os.makedirs('Images/Surrogate_wf', exist_ok=True)
-    #         fig_surrogate.savefig('Images/Surrogate_wf/' + figname)
-
-    #         print('Figure is saved in Images/Surrogate_wf/' + figname)
-
-    #     return surrogate_h, true_h, relative_error_hp, relative_error_hc
-
-        
-    
-    # def surrogate_datapieces_from_NR_to_SI(self):
-    #     # Phase is already unitless so doesn't need converting
-    #     surrogate_amp_SI = np.zeros((len(self.total_mass_range), len(self.ecc_parameter_space_output), len(self.time))) #
-    #     surrogate_phase_SI = np.zeros((len(self.total_mass_range), len(self.ecc_parameter_space_output), len(self.time))) #
-
-    #     for total_mass, distance in zip(self.total_mass_range, self.luminosity_distance_range):
-    #         self.time = MasstoSecond(self.time, total_mass)
-    #         for ecc_ref in self.ecc_parameter_space_output:
-    #             surrogate_amp_SI[total_mass, ecc_ref, :] = AmpNRtoSI(self.surrogate_amp.T[ecc_ref], distance, total_mass)
-    #             surrogate_phase_SI[total_mass, ecc_ref, :] = self.surrogate_phase.t[ecc_ref]
-
-
-    #     return surrogate_amp_SI, surrogate_phase_SI
-
-
-
-
-
-# sampling_frequency = 2048 # or 4096
-# duration = 6 # seconds
-# time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
-
-# gs = Generate_Surrogate(time_array=time_array, output_ecc_ref=0.2, ecc_ref_parameterspace_range=[0, 0.2], total_mass_range=[60, 100], luminosity_distance_range=[200, 500], amount_input_wfs=80, amount_output_wfs=200, N_greedy_vecs_amp=40, N_greedy_vecs_phase=40)
-# gs.fit_to_training_set(property='phase', N_greedy_vecs=40, plot_fits=True, save_fig_fits=True, save_fits_to_file=True, plot_residuals_time_evolve=True, plot_residuals_ecc_evolve=True)
-# gs.fit_to_training_set(property='amplitude', N_greedy_vecs=40, plot_fits=True, save_fig_fits=True, save_fits_to_file=True, plot_residuals_ecc_evolve=True, plot_kernels=True)
-# gs.generate_surrogate_model(plot_surr_datapiece=True, plot_surr_wf=True, plot_GPRfit=True, save_fig_datapiece=True, save_fig_surr=True, save_fits_to_file=True, save_surr_to_file=True, save_fig_fits=True)
-
-# plt.show()
-# print(gs.parameter_space_output)
-# gs.generate_property_dataset(eccmin_list=ecc_list1, property='phase', plot_residuals=True, save_dataset_to_file='test1.npz')
-# ecc_list2 = np.linspace(0.01, 0.3, num=500).round(5)
-# gs.generate_property_dataset(eccmin_list=ecc_list2, property='phase', plot_residuals=True, save_dataset_to_file='test2.npz')
-
-# gs.generate_property_dataset(eccmin_list=ecc_list, property='amplitude', plot_residuals=True)
-# plt.show()
-
-# fig__ = plt.figure
-# plt.plot(ecc_list1, test1)
-# plt.plot(ecc_list2, test2)
-
-
-# gs.fit_to_training_set(property='phase', min_greedy_error=3e-4, plot_fits=True, save_fits_to_file='GPRfits_0.01_0.3')
-# gs.fit_to_training_set(property='amplitude', min_greedy_error=1e-2, plot_fits=True, save_fits_to_file='GPRfits_0.01_0.2')
-
-
-# fig1 = plt.figure()
-# 'residual_phase_full_parameterspace_0.1_0.2.npz'
-
-# gs.generate_surrogate_model(plot_surr_datapiece=0.1905, plot_surr_wf=0.1905, plot_GPRfit=True)
-# gs.generate_surrogate_model(plot_surr_datapiece=0.0336, plot_surr_wf=0.0336, plot_GPRfit=True)
-
-# plt.show()
 
 
 class Load_Offline_Surrogate(Generate_Offline_Surrogate):
@@ -860,33 +510,31 @@ class Load_Offline_Surrogate(Generate_Offline_Surrogate):
         inclination=0.,
         truncate_at_ISCO=True,
         truncate_at_tmin=True,
-        waveforms_in_geom_units=True,
-        **kwargs
+        waveforms_in_geom_units=True
     ):
+        self.time_array = time_array
+        self.chi1 = chi1
+        self.chi2 = chi2
+        self.phiRef = phiRef
+        self.rel_anomaly = rel_anomaly
+        self.inclination = inclination
+        self.f_lower = f_lower
+        self.f_ref = f_ref
+        self.reference_total_mass = reference_total_mass
+        self.reference_luminosity_distance = reference_luminosity_distance
+        self.N_greedy_vecs_amp = N_greedy_vecs_amp
+        self.N_greedy_vecs_phase = N_greedy_vecs_phase
+        self.min_greedy_error_amp = min_greedy_error_amp
+        self.min_greedy_error_phase = min_greedy_error_phase
+        self.ecc_ref_parameterspace_range = ecc_ref_parameterspace_range
+        self.amount_input_wfs = amount_input_wfs
+        self.amount_output_wfs = amount_output_wfs
+        self.truncate_at_ISCO = truncate_at_ISCO
+        self.truncate_at_tmin = truncate_at_tmin
+        self.waveforms_in_geom_units = waveforms_in_geom_units
+        
 
-        Generate_Offline_Surrogate.__init__(
-        self,
-        time_array,
-        ecc_ref_parameterspace_range,
-        amount_input_wfs,
-        amount_output_wfs,
-        reference_total_mass,
-        reference_luminosity_distance,
-        N_greedy_vecs_amp,
-        N_greedy_vecs_phase,
-        min_greedy_error_amp,
-        min_greedy_error_phase,
-        f_lower,
-        f_ref,
-        chi1,
-        chi2,
-        phiRef,
-        rel_anomaly,
-        inclination,
-        truncate_at_ISCO,
-        truncate_at_tmin,
-        waveforms_in_geom_units
-    )
+        Generate_Offline_Surrogate.__init__(self, time_array=time_array, ecc_ref_parameterspace_range=ecc_ref_parameterspace_range, reference_total_mass=self.reference_total_mass, reference_luminosity_distance=self.reference_luminosity_distance, amount_input_wfs=amount_input_wfs, amount_output_wfs=amount_output_wfs, N_greedy_vecs_amp=N_greedy_vecs_amp, N_greedy_vecs_phase=N_greedy_vecs_phase, min_greedy_error_amp=min_greedy_error_amp, min_greedy_error_phase=min_greedy_error_phase, f_lower=f_lower, f_ref=f_ref, chi1=chi1, chi2=chi2, phiRef=phiRef, rel_anomaly=rel_anomaly, inclination=inclination, truncate_at_ISCO=truncate_at_ISCO, truncate_at_tmin=truncate_at_tmin, geometric_units=self.waveforms_in_geom_units)
 
 
 
@@ -967,7 +615,7 @@ class Load_Offline_Surrogate(Generate_Offline_Surrogate):
             print(f'GPR fit data loaded: {filename}')
 
         except:
-            self.surrogate.fit_to_training_set(
+            self.fit_to_training_set(
                 min_greedy_error=self.min_greedy_error_phase,
                 N_greedy_vecs=self.N_greedy_vecs_phase,
                 property=property,
@@ -1008,10 +656,10 @@ class Load_Offline_Surrogate(Generate_Offline_Surrogate):
             print(f'B_matrix file for {property} not found: {filename} .\n Calculate B_matrix...')
             
             data = self._load_gpr_data(property)
-            self.surrogate.residual_greedy_basis = data['residual_greedy_basis']
-            self.surrogate.empirical_nodes_idx = data['empirical_nodes']
+            self.residual_greedy_basis = data['residual_greedy_basis']
+            self.empirical_nodes_idx = data['empirical_nodes']
 
-            self.surrogate.compute_B_matrix(
+            self.compute_B_matrix(
                     property=property,
                     save_matrix_to_file=True
                 )
@@ -1020,3 +668,44 @@ class Load_Offline_Surrogate(Generate_Offline_Surrogate):
         return {
             'B_matrix': data['B_matrix']
         }
+
+
+
+
+
+
+
+# sampling_frequency = 2048 # or 4096
+# duration = 6 # seconds
+# time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
+
+# gs = Generate_Surrogate(time_array=time_array, output_ecc_ref=0.2, ecc_ref_parameterspace_range=[0, 0.2], total_mass_range=[60, 100], luminosity_distance_range=[200, 500], amount_input_wfs=80, amount_output_wfs=200, N_greedy_vecs_amp=40, N_greedy_vecs_phase=40)
+# gs.fit_to_training_set(property='phase', N_greedy_vecs=40, plot_fits=True, save_fig_fits=True, save_fits_to_file=True, plot_residuals_time_evolve=True, plot_residuals_ecc_evolve=True)
+# gs.fit_to_training_set(property='amplitude', N_greedy_vecs=40, plot_fits=True, save_fig_fits=True, save_fits_to_file=True, plot_residuals_ecc_evolve=True, plot_kernels=True)
+# gs.generate_surrogate_model(plot_surr_datapiece=True, plot_surr_wf=True, plot_GPRfit=True, save_fig_datapiece=True, save_fig_surr=True, save_fits_to_file=True, save_surr_to_file=True, save_fig_fits=True)
+
+# plt.show()
+# print(gs.parameter_space_output)
+# gs.generate_property_dataset(eccmin_list=ecc_list1, property='phase', plot_residuals=True, save_dataset_to_file='test1.npz')
+# ecc_list2 = np.linspace(0.01, 0.3, num=500).round(5)
+# gs.generate_property_dataset(eccmin_list=ecc_list2, property='phase', plot_residuals=True, save_dataset_to_file='test2.npz')
+
+# gs.generate_property_dataset(eccmin_list=ecc_list, property='amplitude', plot_residuals=True)
+# plt.show()
+
+# fig__ = plt.figure
+# plt.plot(ecc_list1, test1)
+# plt.plot(ecc_list2, test2)
+
+
+# gs.fit_to_training_set(property='phase', min_greedy_error=3e-4, plot_fits=True, save_fits_to_file='GPRfits_0.01_0.3')
+# gs.fit_to_training_set(property='amplitude', min_greedy_error=1e-2, plot_fits=True, save_fits_to_file='GPRfits_0.01_0.2')
+
+
+# fig1 = plt.figure()
+# 'residual_phase_full_parameterspace_0.1_0.2.npz'
+
+# gs.generate_surrogate_model(plot_surr_datapiece=0.1905, plot_surr_wf=0.1905, plot_GPRfit=True)
+# gs.generate_surrogate_model(plot_surr_datapiece=0.0336, plot_surr_wf=0.0336, plot_GPRfit=True)
+
+# plt.show()

@@ -1,23 +1,34 @@
-from call_surrogate import *
+from call_surrogate_old import *
 
 class AnalyseSurrogate(Generate_Online_Surrogate):
 
     def __init__(self, time_array, mass_paramspace, eccentric_paramspace, mass_ratio_paramspace, luminosity_distance_paramspace, chi_range, N_greedy_vecs_amp, N_greedy_vecs_phase, f_ref, f_lower):
-        
         self.mass_paramspace = mass_paramspace
         self.eccentric_paramspace = eccentric_paramspace
-        self.mass_ratio_paramspace = mass_ratio_paramspace
         self.luminosity_distance_paramspace = luminosity_distance_paramspace
+        self.mass_ratio_paramspace = mass_ratio_paramspace
         self.chi_range = chi_range
+        self.N_greedy_vecs_amp = N_greedy_vecs_amp
+        self.N_greedy_vecs_phase = N_greedy_vecs_phase
+        self.f_ref = f_ref
+        self.f_lower = f_lower
 
-        super().__init__(
-            self,
-            time=time_array,
-            N_greedy_vecs_amp=N_greedy_vecs_amp,
-            N_greedy_vecs_phase=N_greedy_vecs_phase,
-            f_ref=f_ref,
-            f_lower=f_lower,
+        Generate_Online_Surrogate.__init__(self,
+            time_array=time_array,
+            ecc_ref=None,
+            total_mass=None,
+            luminosity_distance=None,
+            f_lower=self.f_lower,
+            f_ref=self.f_ref,
+            chi1=0,
+            chi2=0,
+            phiRef=0.,
+            rel_anomaly=0.,
+            inclination=0.,
+            truncate_at_ISCO=True,
+            truncate_at_tmin=True,
         )
+
         
     def analyse_eccentric_mass_indepedent_accuracy(self, time_array, plot_GRP_fit=False, save_fig_fits=False, plot_surr_datapieces=False, save_fig_datapieces=False, plot_surr_wf=False, save_fig_surr=False):
 
@@ -26,7 +37,7 @@ class AnalyseSurrogate(Generate_Online_Surrogate):
         relative_errors_amp = np.zeros((len(self.eccentric_paramspace), len(self.mass_paramspace), len(self.luminosity_distance_paramspace)))
         relative_errors_phase = np.zeros((len(self.eccentric_paramspace), len(self.mass_paramspace), len(self.luminosity_distance_paramspace)))
 
-        surrogate_generator = Generate_Online_Surrogate(
+        surrogate_generator = Call_Surrogate(
             time_array,
             ecc_ref=None,
             total_mass=None,
@@ -56,7 +67,7 @@ class AnalyseSurrogate(Generate_Online_Surrogate):
                             plot_surr_wf=plot_surr_wf,
                             save_fig_surr=save_fig_surr
                         )
-
+                        print(1, surrogate_generator.output_ecc_ref, surrogate_generator.ecc_ref)
                         surrogate_amp, true_amp, relative_error_amp = self._plot_surr_datapieces(
                             property='amplitude',
                             surrogate_datapiece=surrogate_amp,

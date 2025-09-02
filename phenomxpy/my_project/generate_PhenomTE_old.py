@@ -134,6 +134,7 @@ class Simulate_Inspiral:
 
         # Compute instantaneous phase frequency Mf = dϕ/dt / 2π
         phase = self.phase(phen.hp, phen.hc)  # Calculate phase from plus and cross polarizations
+        print(len(phase), len(self.time))
         dphi_dt = np.gradient(phase, time_array)
         Mf = dphi_dt / (2 * np.pi)
 
@@ -296,7 +297,7 @@ class Simulate_Inspiral:
             os.makedirs('Images/Polarisations', exist_ok=True)
             fig.savefig('Images/Polarisations/' + figname, dpi=300, bbox_inches='tight')
 
-            print(f'Figure is saved in Images/Polarisations/{figname}')
+            print('Figure is saved in Images/Polarisations')
 
         plt.close('all')
 
@@ -475,7 +476,7 @@ class Waveform_Properties(Simulate_Inspiral):
     Calculates and plots residuals (residual = eccentric - non-eccentric) of waveform properties: amplitude, phase and frequency.
     """
 
-    def __init__(self, time_array, ecc_ref, total_mass, luminosity_distance, f_lower=10, f_ref=20, chi1=0, chi2=0, phiRef=0., rel_anomaly=0., inclination=0., truncate_at_ISCO=True, truncate_at_tmin=True, **kwargs):
+    def __init__(self, time_array, ecc_ref, total_mass, luminosity_distance, f_lower=10, f_ref=20, chi1=0, chi2=0, phiRef=0., rel_anomaly=0., inclination=0., truncate_at_ISCO=True, truncate_at_tmin=True):
         """
         Parameters:
         ----------------
@@ -493,22 +494,8 @@ class Waveform_Properties(Simulate_Inspiral):
         self.amp_circ = None # Amplitude of the non-eccentric inspiral waveform
 
         # Inherit parameters from Simulate_Inspiral class
-        super().__init__(
-            time_array=time_array,
-            ecc_ref=ecc_ref,
-            total_mass=total_mass,
-            luminosity_distance=luminosity_distance,
-            f_lower=f_lower,
-            f_ref=f_ref,
-            chi1=chi1,
-            chi2=chi2,
-            phiRef=phiRef,
-            rel_anomaly=rel_anomaly,
-            inclination=inclination,
-            truncate_at_ISCO=truncate_at_ISCO,
-            truncate_at_tmin=truncate_at_tmin
-        )
-
+        Simulate_Inspiral.__init__(self, time_array, ecc_ref, total_mass, luminosity_distance, f_lower, f_ref, chi1, chi2, phiRef, rel_anomaly, inclination, truncate_at_ISCO, truncate_at_tmin)
+        
     def circulair_wf(self):
         """
         Simulate plus and cross polarisations of NON-ECCENTRIC waveform Inspiral for t in units [M]. 
