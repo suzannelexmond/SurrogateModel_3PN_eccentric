@@ -1,4 +1,4 @@
-from generate_PhenomTE import *
+from generate_PhenomTE_old import *
 
 from sklearn.preprocessing import normalize
 
@@ -44,7 +44,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         # Inherit parameters from all previously defined classes
         super().__init__(time_array, None, total_mass, luminosity_distance, f_lower, f_ref, chi1, chi2, phiRef, rel_anomaly, inclination, truncate_at_ISCO, truncate_at_tmin)
     
-
     def generate_property_dataset(self, ecc_list, property, save_dataset_to_file=None, plot_residuals_time_evolv=False, plot_residuals_eccentric_evolv=False, save_fig_eccentric_evolv=False, save_fig_time_evolve=False):
         """
         Generates a dataset of waveform residuals based on the specified property for a certain range of eccentricities (ecc).
