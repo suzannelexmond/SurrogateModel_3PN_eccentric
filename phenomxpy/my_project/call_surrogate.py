@@ -10,8 +10,8 @@ class Generate_Surrogate_Offline(Generate_Surrogate):
         ecc_ref_parameterspace_range,
         amount_input_wfs,
         amount_output_wfs,
-        total_mass_range=None,
-        luminosity_distance_range=None,
+        reference_total_mass=60,
+        reference_luminosity_distance=200,
         N_greedy_vecs_amp=None,
         N_greedy_vecs_phase=None,
         min_greedy_error_amp=None,
@@ -28,8 +28,6 @@ class Generate_Surrogate_Offline(Generate_Surrogate):
         waveforms_in_geom_units=True
     ):
         self.time_array = time_array
-        self.total_mass_range = total_mass_range
-        self.luminosity_distance_range = luminosity_distance_range
         self.chi1 = chi1
         self.chi2 = chi2
         self.phiRef = phiRef
@@ -37,6 +35,8 @@ class Generate_Surrogate_Offline(Generate_Surrogate):
         self.inclination = inclination
         self.f_lower = f_lower
         self.f_ref = f_ref
+        self.reference_total_mass = reference_total_mass
+        self.reference_luminosity_distance = reference_luminosity_distance
         self.N_greedy_vecs_amp = N_greedy_vecs_amp
         self.N_greedy_vecs_phase = N_greedy_vecs_phase
         self.min_greedy_error_amp = min_greedy_error_amp
@@ -55,8 +55,8 @@ class Generate_Surrogate_Offline(Generate_Surrogate):
             self.ecc_ref_parameterspace_range,
             self.amount_input_wfs,
             self.amount_output_wfs,
-            self.total_mass_range,
-            self.luminosity_distance_range,
+            self.reference_total_mass,
+            self.reference_luminosity_distance,
             self.N_greedy_vecs_amp,
             self.N_greedy_vecs_phase,
             self.min_greedy_error_amp,
@@ -73,7 +73,7 @@ class Generate_Surrogate_Offline(Generate_Surrogate):
             self.waveforms_in_geom_units
         )
 
-        Generate_Surrogate.__init__(self, time_array=time_array, ecc_ref_parameterspace_range=ecc_ref_parameterspace_range, amount_input_wfs=amount_input_wfs, amount_output_wfs=amount_output_wfs, total_mass_range=total_mass_range, luminosity_distance_range=luminosity_distance_range, N_greedy_vecs_amp=N_greedy_vecs_amp, N_greedy_vecs_phase=N_greedy_vecs_phase, min_greedy_error_amp=min_greedy_error_amp, min_greedy_error_phase=min_greedy_error_phase, f_lower=f_lower, f_ref=f_ref, chi1=chi1, chi2=chi2, phiRef=phiRef, rel_anomaly=rel_anomaly, inclination=inclination, truncate_at_ISCO=truncate_at_ISCO, truncate_at_tmin=truncate_at_tmin, waveforms_in_geom_units=waveforms_in_geom_units)
+        Generate_Surrogate.__init__(self, time_array=time_array, ecc_ref_parameterspace_range=ecc_ref_parameterspace_range, reference_total_mass=self.reference_total_mass, reference_luminosity_distance=self.reference_luminosity_distance, amount_input_wfs=amount_input_wfs, amount_output_wfs=amount_output_wfs, N_greedy_vecs_amp=N_greedy_vecs_amp, N_greedy_vecs_phase=N_greedy_vecs_phase, min_greedy_error_amp=min_greedy_error_amp, min_greedy_error_phase=min_greedy_error_phase, f_lower=f_lower, f_ref=f_ref, chi1=chi1, chi2=chi2, phiRef=phiRef, rel_anomaly=rel_anomaly, inclination=inclination, truncate_at_ISCO=truncate_at_ISCO, truncate_at_tmin=truncate_at_tmin, geometric_units=self.waveforms_in_geom_units)
 
         # self._fit_and_save()
 
@@ -94,7 +94,20 @@ class Generate_Surrogate_Offline(Generate_Surrogate):
 
         # Save everything in one compressed file
         os.makedirs('Straindata/Offline_data', exist_ok=True)
-        output_path = Path('Straindata/Offline_data/Surrogate_OfflineData.npz')
+        output_path = Path(
+            f"Straindata/Offline_data/"
+            f"Surrogate_OfflineData_"
+            f"f_lower={self.f_lower}_"
+            f"f_ref={self.f_ref}_"
+            f"e=[{min(self.ecc_parameter_space_output)}_{max(self.ecc_parameter_space_output)}]_"
+            f"Ni={self.amount_input_wfs}_"
+            f"No={self.amount_output_wfs}_"
+            f"gp={self.min_greedy_error_phase}_"
+            f"ga={self.min_greedy_error_amp}_"
+            f"Ngp={self.N_greedy_vecs_phase}_"
+            f"Nga={self.N_greedy_vecs_amp}.npz"
+        )
+
         np.savez_compressed(
             output_path,
             gaussian_fit_amp=GPR_amp_data['GPR_fit'],
@@ -204,6 +217,7 @@ class Generate_Surrogate_Online(Generate_Surrogate_Offline):
     def __init__(
         self,
         time_array,
+        ecc_ref=None,
         total_mass=None,
         luminosity_distance=None,
         f_lower=10,
@@ -216,8 +230,9 @@ class Generate_Surrogate_Online(Generate_Surrogate_Offline):
         truncate_at_ISCO=True,
         truncate_at_tmin=True,
     ):
-        self.time_array = time_array
+
         self.total_mass = total_mass
+        self.ecc_ref = ecc_ref
         self.luminosity_distance = luminosity_distance
         self.f_lower = f_lower
         self.f_ref = f_ref
@@ -234,10 +249,10 @@ class Generate_Surrogate_Online(Generate_Surrogate_Offline):
 
         Generate_Surrogate_Offline.__init__(
             self,
-            time_array=self.time_array,
+            time_array=time_array,
             ecc_ref_parameterspace_range=[0.0, 0.3],
-            total_mass_range=[60, 100],
-            luminosity_distance_range=[200, 500],
+            reference_total_mass=60,
+            reference_luminosity_distance=200,
             amount_input_wfs=60,
             amount_output_wfs=500,
             N_greedy_vecs_amp=40,
@@ -254,13 +269,27 @@ class Generate_Surrogate_Online(Generate_Surrogate_Offline):
 
         )
 
-    def load_offline_surrogate(self, plot_surr_datapiece=False, plot_GPRfit=False, save_fig_fits=False):
+
+        
+    def load_offline_surrogate(self, plot_GPRfit=False, save_fig_fits=False):
         """Load precomputed surrogate data and assign it to self.surrogate."""
 
         try:
             start = time.time()
             # Load the precomputed surrogate data
-            data = np.load('Straindata/Offline_data/Surrogate_OfflineData.npz', allow_pickle=True)
+            data = np.load( 
+            f"Straindata/Offline_data/"
+            f"Surrogate_OfflineData_"
+            f"f_lower={self.f_lower}_"
+            f"f_ref={self.f_ref}_"
+            f"e=[{min(self.ecc_parameter_space_output)}_{max(self.ecc_parameter_space_output)}]_"
+            f"Ni={self.amount_input_wfs}_"
+            f"No={self.amount_output_wfs}_"
+            f"gp={self.min_greedy_error_phase}_"
+            f"ga={self.min_greedy_error_amp}_"
+            f"Ngp={self.N_greedy_vecs_phase}_"
+            f"Nga={self.N_greedy_vecs_amp}.npz", allow_pickle=True)
+
 
             # Amplitude data
             self.surrogate.gaussian_fit_amp = data['gaussian_fit_amp']
@@ -279,38 +308,51 @@ class Generate_Surrogate_Online(Generate_Surrogate_Offline):
             self.surrogate.greedy_parameters_idx_phase = data['greedy_parameters_idx_phase']
             self.surrogate.time = data['time']
 
+
             # Circular waveform properties
             self.surrogate.amp_circ = data['amp_circ']
             self.surrogate.phase_circ = data['phase_circ']
 
             print("Surrogate model loaded successfully. Time taken:", time.time() - start)
+
+            if plot_GPRfit is True:
+                self._plot_GPR_fits('phase', save_fig_fits=save_fig_fits)
+                self._plot_GPR_fits('amplitude', save_fig_fits=save_fig_fits)
+
+
         except:
             print("Surrogate model not found. Generating new surrogate data...")
             # Generate surrogate data and save it
-            self.create_offline_surrogate(plot_fits=plot_GPRfit, save_fig_fits=save_fig_fits)
+            self.create_offline_surrogate()
             # Try loading again
-            self.load_offline_surrogate(plot_surr_datapiece=plot_surr_datapiece, plot_GPRfit=plot_GPRfit, save_fig_fits=save_fig_fits)
+            self.load_offline_surrogate(plot_GPRfit=plot_GPRfit, save_fig_fits=save_fig_fits)
 
 
 
     
-    def generate_PhenomTE_surrogate(self, output_ecc_ref, plot_surr_datapiece=False, save_fig_datapiece=False, plot_surr_wf=False, save_fig_surr=False, plot_GPRfit=False, save_fig_fits=False, geometric_units=False):
+    def generate_PhenomTE_surrogate(self, ecc_ref=None, plot_surr_datapiece=None, save_fig_datapiece=False, plot_surr_wf=None, save_fig_surr=False, plot_GPRfit=False, save_fig_fits=False):
         """
         Call the surrogate model with the given output eccentricity reference.
         If plot_surr_wf is True, it will plot the surrogate waveform against the real waveform.
         If plot_surr_datapiece is True, it will plot the surrogate datapiece against the real datapiece.
         """
+        # Either set in class object or in function specific
+        if ecc_ref is None:
+            ecc_ref = self.ecc_ref
+        else:
+            self.ecc_ref = ecc_ref
+
         if self.surrogate.surrogate_amp is None or self.surrogate.surrogate_phase is None:
             print('Load surrogate ...')
             start = time.time()
-            self.load_offline_surrogate(plot_surr_datapiece=plot_surr_datapiece, plot_GPRfit=plot_GPRfit, save_fig_fits=save_fig_fits)
+            self.load_offline_surrogate()
             print('Load offline surrogate. Time taken:', time.time() - start)
         else:
             print('Surrogate already loaded, skipping loading step.')
         
         start = time.time()
         self.surrogate_amp, self.surrogate_phase = self.surrogate.generate_surrogate_waveform(
-            output_ecc_ref=output_ecc_ref,
+            output_ecc_ref=self.ecc_ref,
             plot_surr_datapiece=plot_surr_datapiece,
             save_fig_datapiece=save_fig_datapiece,
             plot_surr_wf=plot_surr_wf,
@@ -319,55 +361,128 @@ class Generate_Surrogate_Online(Generate_Surrogate_Offline):
             save_fits_to_file=False,
             save_fig_fits=save_fig_fits
         )
-        print('Load online surrogate. Time taken:', time.time() - start)
-
-        if geometric_units is not True:
-            self.surrogate_amp, self.surrogate_phase = self.surrogate.surrogate_datapieces_from_NR_to_SI()
+        print('Surrogate calculated. Time taken:', time.time() - start)
 
         return self.surrogate_amp, self.surrogate_phase
 
-    def get_surrogate_polarisations(self, geometric_units=False, plot_polarisations=False, save_fig=False):
-        """        Get the polarisation amplitudes for the surrogate waveform.
+    def get_surrogate_polarisations(self, total_mass=None, luminosity_distance=None, geometric_units=False, plot_polarisations=False, save_fig=False):
+        """ Get the polarisation amplitudes for the surrogate waveform.
         If geometric_units is True, it will return the polarisation amplitudes in geometric units.
         If geometric_units is False, it will return the polarisation amplitudes in SI units.
         """ 
+        if (geometric_units is False) and ((total_mass is None) or (luminosity_distance is None)):
+            raise ValueError("For SI units, please provide total_mass and luminosity_distance.")
+        elif geometric_units is True:
+            total_mass = None
+            luminosity_distance = None
+            raise ValueError("For geometric units, please do not provide total_mass and luminosity_distance. Parameters are automatically set to total_mass=None and luminosity_distance=None.")
+        
+        if geometric_units is False:
+            # If SI units are requested, ensure total_mass and luminosity_distance are set. 
+            # Use class attributes if not provided in function call.
+            if total_mass is None:
+                total_mass = self.total_mass
+            if luminosity_distance is None:
+                luminosity_distance = self.luminosity_distance
+            else:
+                # Update class attributes if provided in function call
+                self.luminosity_distance = luminosity_distance
+                self.total_mass = total_mass
+        print(total_mass, luminosity_distance, self.surrogate_amp)
         # Convert the surrogate amplitude and phase to polarisation amplitudes
-        self.hplus, self.hcross = self.surrogate.polarisations(phase=self.surrogate_phase, amplitude=self.surrogate_amp, geometric_units=geometric_units, distance=self.surrogate.luminosity_distance, total_mass=self.surrogate.total_mass, plot_polarisations=plot_polarisations, save_fig=save_fig)
+        self.hplus, self.hcross = self.polarisations(phase=self.surrogate_phase, amplitude=self.surrogate_amp, geometric_units=geometric_units, distance=luminosity_distance, total_mass=total_mass, plot_polarisations=plot_polarisations, save_fig=save_fig)
         
         return self.hplus, self.hcross
     
-sampling_frequency = 2048 # or 4096
-duration = 4 # seconds
-time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
+# sampling_frequency = 2048 # or 4096
+# duration = 4 # seconds
+# time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
 
 
-online = Generate_Surrogate_Online(
-        time_array,
-        total_mass=None,
-        luminosity_distance=None,
-        f_lower=10,
-        f_ref=20,
-        chi1=0,
-        chi2=0,
-        phiRef=0.,
-        rel_anomaly=0.,
-        inclination=0.,
-        truncate_at_ISCO=True,
-        truncate_at_tmin=True,
-    )
+# online = Generate_Surrogate_Online(
+#         time_array,
+#         total_mass=50,
+#         luminosity_distance=200,
+#         f_lower=11,
+#         f_ref=20,
+#         chi1=0,
+#         chi2=0,
+#         phiRef=0.,
+#         rel_anomaly=0.,
+#         inclination=0.,
+#         truncate_at_ISCO=True,
+#         truncate_at_tmin=True,
+#     )
+
 
 # Generate the surrogate model with the specified output eccentricity reference
-start1 = time.time()
-online.generate_PhenomTE_surrogate(output_ecc_ref=0.1, geometric_units=True, plot_GPRfit=True)
-print(f"Surrogate loading took {time.time() - start1:.4f} seconds.")
-online.fit_to_training_set(property='amplitude', plot_fits=True, save_fig_fits=True, save_fits_to_file=True, N_greedy_vecs=40)
-online.fit_to_training_set(property='phase', plot_fits=True, save_fig_fits=True, save_fits_to_file=True, N_greedy_vecs=40)
+# start1 = time.time()
 
+# for ecc in np.linspace(0.01, 0.2, 5):
+#     if ecc==0.01:
+#         online.generate_PhenomTE_surrogate(ecc_ref=ecc, plot_GPRfit=True, plot_surr_datapiece=True, plot_surr_wf=True, save_fig_datapiece=True, save_fig_fits=True, save_fig_surr=True)
+#     else:
+#         online.generate_PhenomTE_surrogate(ecc_ref=ecc, plot_surr_datapiece=True, plot_surr_wf=True, save_fig_datapiece=True, save_fig_fits=True, save_fig_surr=True)
+
+# plt.show()
+# print(1, online.time)
+# hp, hc = online.get_surrogate_polarisations(geometric_units=False)
+# print(2, len(online.time), len(online.hplus))
+
+# online_true = Generate_Surrogate_Online(
+#         time_array,
+#         total_mass=50,
+#         luminosity_distance=200,
+#         f_lower=10,
+#         f_ref=20,
+#         chi1=0,
+#         chi2=0,
+#         phiRef=0.,
+#         rel_anomaly=0.,
+#         inclination=0.,
+#         truncate_at_ISCO=True,
+#         truncate_at_tmin=True,
+#     )
+
+# hp_true, hc_true, time_true = online_true.simulate_inspiral_mass_independent(ecc_ref=0.1, custom_time_array=SecondtoMass(time_array, 50))
+# print(20, time_true, hp_true)
+# print(21, online.time[-len(hp):], hp)
+# fig_20, ax = plt.subplots()
+# ax.plot(online.time[-len(hp):], hp, label='surr')
+# # ax.plot(MasstoSecond(time_true, 50), AmpNRtoSI(hp_true, 200, 50), label='true')
+# ax.legend()
+# plt.show()
+
+
+# print(f"Surrogate loading took {time.time() - start1:.4f} seconds.")
+# offline = Generate_Surrogate_Offline(time_array=time_array,
+#             ecc_ref_parameterspace_range=[0.0, 0.3],
+#             total_mass_range=[60, 100],
+#             luminosity_distance_range=[200, 500],
+#             amount_input_wfs=60,
+#             amount_output_wfs=500,
+#             N_greedy_vecs_amp=30,
+#             N_greedy_vecs_phase=30,
+#             f_lower=10,
+#             f_ref=20,
+#             chi1=0,
+#             chi2=0,
+#             phiRef=0,
+#             rel_anomaly=0,
+#             inclination=0,
+#             truncate_at_ISCO=True,
+#             truncate_at_tmin=True)
+
+# offline.fit_to_training_set(property='amplitude', plot_fits=True, save_fig_fits=True, save_fits_to_file=True, N_greedy_vecs=30)
+# offline.fit_to_training_set(property='phase', plot_fits=True, save_fig_fits=True, save_fits_to_file=True, N_greedy_vecs=30)
+
+# online.get_training_set('phase', N_greedy_vecs=40, plot_emp_nodes_at_ecc=0.2, plot_training_set=True, save_fig_emp_nodes=True, save_fig_training_set=True, plot_greedy_vecs=True)
+# online.get_training_set('amplitude', N_greedy_vecs=40, plot_emp_nodes_at_ecc=0.2, plot_training_set=True, save_fig_emp_nodes=True, save_fig_training_set=True, plot_greedy_vecs=True)
 # start3 = time.time()
 # online.generate_PhenomTE_surrogate(output_ecc_ref=0.1, geometric_units=True, plot_GPRfit=True)
 # end3 = time.time()
 # print(f"Surrogate generation took {time.time() - start3:.4f} seconds.")
-
+# plt.show()
 
 
 

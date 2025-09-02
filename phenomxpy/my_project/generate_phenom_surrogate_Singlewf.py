@@ -22,10 +22,9 @@ faulthandler.enable()
 
 class Generate_Surrogate(Generate_TrainingSet):
 
-    def __init__(self, time_array, ecc_ref_parameterspace_range, amount_input_wfs, amount_output_wfs, total_mass_range=None, luminosity_distance_range=None, N_greedy_vecs_amp=None, N_greedy_vecs_phase=None, min_greedy_error_amp=None, min_greedy_error_phase=None, f_lower=10, f_ref=20, chi1=0, chi2=0, phiRef=0., rel_anomaly=0., inclination=0., truncate_at_ISCO=True, truncate_at_tmin=True, waveforms_in_geom_units=True):
+    def __init__(self, time_array, ecc_ref_parameterspace_range, amount_input_wfs, amount_output_wfs, reference_total_mass=60, reference_luminosity_distance=200, N_greedy_vecs_amp=None, N_greedy_vecs_phase=None, min_greedy_error_amp=None, min_greedy_error_phase=None, f_lower=10, f_ref=20, chi1=0, chi2=0, phiRef=0., rel_anomaly=0., inclination=0., truncate_at_ISCO=True, truncate_at_tmin=True, geometric_units=True):
         
-        if (waveforms_in_geom_units is True) and ((total_mass_range is None) or (luminosity_distance_range is None)):
-            print('Choose waveforms either in NR or SI units. Do this by either setting total_mass_range and luminosity_distance_range OR leave total_mass_range=luminosity_distance_range=None and set waveforms_in_geom_units=True.')
+        
         if (N_greedy_vecs_amp is None and N_greedy_vecs_phase is None) and \
             (min_greedy_error_amp is None and min_greedy_error_phase is None):
                 print('Choose either settings for the amount of greedy_vecs OR the minimum greedy error.')
@@ -39,22 +38,23 @@ class Generate_Surrogate(Generate_TrainingSet):
         self.min_greedy_error_phase = min_greedy_error_phase
         self.N_greedy_vecs_amp = N_greedy_vecs_amp
         self.N_greedy_vecs_phase = N_greedy_vecs_phase
-        self.reference_total_mass = total_mass_range[0]
-        self.reference_luminosity_distance = luminosity_distance_range[0]
-        self.total_mass_range = total_mass_range
-        self.luminosity_distance_range = luminosity_distance_range
+        
+        self.reference_total_mass = reference_total_mass
+        self.reference_luminosity_distance = reference_luminosity_distance
         self.surrogate_amp = None
         self.surrogate_phase = None
-        self.waveforms_in_geom_units = waveforms_in_geom_units
+        self.waveforms_in_geom_units = geometric_units
 
         self.gaussian_fit_amp = None
         self.gaussian_fit_phase = None
+        self.greedy_parameters_idx_amp = None
+        self.greedy_parameters_idx_phase = None
 
         
         Generate_TrainingSet.__init__(self, time_array, self.ecc_parameter_space_input, self.reference_total_mass, self.reference_luminosity_distance, f_lower, f_ref, chi1, chi2, phiRef, rel_anomaly, inclination, truncate_at_ISCO, truncate_at_tmin)
 
     
-    def simulate_inspiral_mass_dependent(self, total_mass, distance, ecc_ref=None, plot_polarisations=False, save_fig=False, truncate_at_ISCO=False):
+    def simulate_inspiral_mass_dependent(self, total_mass, distance, ecc_ref=None, plot_polarisations=False, save_fig=False):
         """
         Simulate mass-independent plus and cross polarisations of the eccentric eob waveform (pyseobnr) (2,2) mode from f_start till t0 (waveform peak at t=0).
         
@@ -118,7 +118,7 @@ class Generate_Surrogate(Generate_TrainingSet):
                 del mask # clear memory
 
         # True because it's smallest truncated waveform AND true because the surrogate is called with the ISCO cut-off.
-        if (truncate_at_ISCO is True) and (self.truncate_at_ISCO is True):
+        if (self.truncate_at_ISCO is True) :
             # Truncate the waveform at ISCO frequency
             idx_cut = self.truncate_waveform_at_isco(phen)
             self.time = self.time[:idx_cut]
@@ -129,7 +129,7 @@ class Generate_Surrogate(Generate_TrainingSet):
         if plot_polarisations is True:
 
             fig_simulate_inspiral = plt.figure(figsize=(12,5))
-            print(len(self.time), len(phen.hp))
+
             plt.plot(self.time[:len(phen.hp)], phen.hp, label = f'$h_+$', linewidth=0.6)
             plt.plot(self.time[:len(phen.hp)], phen.hc, label = f'$h_\times$', linewidth=0.6)
 
@@ -155,7 +155,6 @@ class Generate_Surrogate(Generate_TrainingSet):
         return phen.hp, phen.hc
     
     def fit_to_training_set(self, property, min_greedy_error=None, N_greedy_vecs=None, save_fits_to_file=True, plot_kernels=False, plot_fits=False, save_fig_kernels=False, save_fig_fits=False, plot_residuals_ecc_evolve=False, save_fig_ecc_evolve=False, plot_residuals_time_evolve=False, save_fig_time_evolve=False):
-        
     
         def gaussian_process_regression(time_node, training_set, optimized_kernel=None, plot_kernels=plot_kernels, save_fig_kernels=save_fig_kernels):
             # Extract X and training data
@@ -290,6 +289,12 @@ class Generate_Surrogate(Generate_TrainingSet):
         if plot_fits is True:
             self._plot_GPR_fits(property, gaussian_fit, training_set, lml_fits, save_fig_fits=save_fig_fits)
 
+            fig_greedy_params = plt.figure()
+            plt.scatter(self.parameter_space_input[self.greedy_parameters_idx], np.zeros(len(self.greedy_parameters_idx)))
+            plt.plot(self.parameter_space_input, np.zeros(len(self.parameter_space_input)))
+            plt.xlabel('eccentricity')
+            plt.title(f'Chosen greedy parameters {property}')
+            
         # If save_fits_to_file is True, save the GPR fits to a file
         if save_fits_to_file is True:
             # Save the GPR fits to a file
@@ -317,7 +322,7 @@ class Generate_Surrogate(Generate_TrainingSet):
         
 
     def _plot_GPR_fits(self, property, gaussian_fit=None, training_set=None, lml_fits=None, save_fig_fits=False):
-            
+
             if gaussian_fit is None or training_set is None or lml_fits is None:
                 # Load the GPR fits from file if not provided
                 filename = filename = f'Straindata/GPRfits/GPRfits_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_parameter_space_input)}_{max(self.ecc_parameter_space_input)}_N={len(self.ecc_parameter_space_input)}]_No={len(self.ecc_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_greedy_vecs_phase}_Nga={self.N_greedy_vecs_amp}.npz'
@@ -495,7 +500,7 @@ class Generate_Surrogate(Generate_TrainingSet):
         
         return original_waveform
 
-    def reconstruct_surrogate_datapiece(self, property, B_matrix, fit_matrix, plot_surr_datapiece=True, save_fig_datapiece=False):
+    def reconstruct_surrogate_datapiece(self, property, B_matrix, fit_matrix, plot_surr_datapiece=False, save_fig_datapiece=False):
         """
         Reconstructs the surrogate model for a given parameter using different empirical nodes for amplitude and phase.
         
@@ -525,69 +530,78 @@ class Generate_Surrogate(Generate_TrainingSet):
 
         # Change back from residual to original (+ circulair)
         surrogate_datapiece = self.residual_to_original(residual_waveform=reconstructed_residual, property=property)
-        
+
         if plot_surr_datapiece is True:
-            print(0)
-            # Create a 2x1 subplot grid with height ratios 3:1
-            fig_surrogate_datapieces, axs = plt.subplots(2, 1, figsize=(6, 6), gridspec_kw={'height_ratios': [3, 1], 'hspace': 0.1}, sharex=True)
-
-            # Simulate the real waveform datapiece
-            real_hp, real_hc = self.simulate_inspiral_mass_independent(self.output_ecc_ref)
-
-            if property == 'amplitude':
-                real_datapiece = self.amplitude(real_hp, real_hc)
-                units = ''
-            elif property == 'phase':
-                real_datapiece = self.phase(real_hp, real_hc)
-                units = ' [radians]'
-            print('real_datapiece, surrogate_datapiece: ', real_datapiece, surrogate_datapiece)
-            # Plot Surrogate and Real Amplitude (Top Left)
-            # axs[0].plot(self.ecc_parameter_space_output, surrogate_datapiece[index_ecc_ref], label='surr')
-            axs[0].plot(self.time, surrogate_datapiece, linewidth=0.6, label=f'surrogate e = {plot_surr_datapiece}')
-            # axs[0].plot(self.time, true_phase[index_ecc_ref], linewidth=0.6, label=f'Surrogate: e = {plot_surr_datapiece}')
-            axs[0].plot(self.time, real_datapiece, linewidth=0.6, linestyle='dashed', label=f'true {property} e = {plot_surr_datapiece}')
-            # axs[0].plot(self.ecc_parameter_space_output, true_phase[:, index_ecc_ref], label='real')
-            # axs[0].set_xlabel('t [M]')
-            if property == 'phase':
-                axs[0].set_ylabel('$\phi$' + units)
-            else:
-                axs[0].set_ylabel('A' + units)
-            axs[0].grid(True)
-            # axs[0].set_title(f'Surrogate vs Real {property}, ga={self.min_greedy_error_amp}, gp={self.min_greedy_error_phase}')
-            axs[0].legend(loc='upper left')
-
-            # Calculate and Plot Phase Error (Bottom Right)
-            # Define a small threshold value to handle small or zero values in real_datapiece
-            threshold = 1e-30  # You can adjust this value based on the scale of your data
-
-            # Avoid division by very small numbers by using np.maximum to set a lower limit
-            relative_error = abs(surrogate_datapiece - real_datapiece) / abs(real_datapiece)
-            axs[1].plot(self.time, relative_error, linewidth=0.6)
-            if property == 'phase':
-                axs[1].set_ylabel('|($\phi_S$ - $\phi$) / $\phi$|')
-            else:
-                axs[1].set_ylabel('|($A_S$ - A) / A|')
-            axs[1].set_xlabel('t [M]')
-            axs[1].ticklabel_format(style='sci', axis='y', scilimits=(0, 0), useMathText=True)
-            axs[1].grid(True)
-
-            # axs[1].set_title('Relative error')
-
-            # Adjust layout to prevent overlap
-            plt.tight_layout()
-
-            if save_fig_datapiece is True:
-                figname = f'Surrogate_{property}_ecc_ref={plot_surr_datapiece}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_parameter_space_input)}_{max(self.ecc_parameter_space_input)}_Ni={len(self.ecc_parameter_space_input)}]_No={len(self.ecc_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_greedy_vecs_phase}_Nga={self.N_greedy_vecs_amp}.png'
-                
-                # Ensure the directory exists, creating it if necessary and save
-                os.makedirs('Images/Surrogate_datapieces_Single', exist_ok=True)
-                fig_surrogate_datapieces.savefig('Images/Surrogate_datapieces_Single/' + figname)
-
-                print('Figure is saved in Images/Surrogate_datapieces_Single/' + figname)
+            self._plot_surr_datapieces(property, surrogate_datapiece, save_fig_datapiece)
 
         return surrogate_datapiece, computation_time
+    
+    def _plot_surr_datapieces(self, property, surrogate_datapiece, save_fig_datapiece=False, geometric_units=True, total_mass=None, luminosity_distance=None):
+            
+        # Create a 2x1 subplot grid with height ratios 3:1
+        fig_surrogate_datapieces, axs = plt.subplots(2, 1, figsize=(6, 6), gridspec_kw={'height_ratios': [3, 1], 'hspace': 0.1}, sharex=True)
 
-    def generate_surrogate_waveform(self, output_ecc_ref, plot_surr_datapiece=None, save_fig_datapiece=False, plot_surr_wf=None, save_fig_surr=False, plot_GPRfit=False, save_fits_to_file=True, save_fig_fits=False, save_matrix_to_file=True):
+        if geometric_units is True:
+            # Simulate the real waveform datapiece
+            real_hp, real_hc = self.simulate_inspiral_mass_independent(self.output_ecc_ref)
+        else:
+            real_hp, real_hc = self.simulate_inspiral_mass_dependent(total_mass=total_mass, distance=luminosity_distance, ecc_ref=self.output_ecc_ref)
+
+        if property == 'amplitude':
+            true_datapiece = self.amplitude(real_hp, real_hc)
+            units = ''
+        elif property == 'phase':
+            true_datapiece = self.phase(real_hp, real_hc)
+            units = ' [radians]'
+
+        # Plot Surrogate and Real Amplitude (Top Left)
+        # axs[0].plot(self.ecc_parameter_space_output, surrogate_datapiece[index_ecc_ref], label='surr')
+        axs[0].plot(self.time, surrogate_datapiece, linewidth=0.6, label=f'surrogate e = {self.output_ecc_ref}')
+        # axs[0].plot(self.time, true_phase[index_ecc_ref], linewidth=0.6, label=f'Surrogate: e = {plot_surr_datapiece}')
+        axs[0].plot(self.time, true_datapiece, linewidth=0.6, linestyle='dashed', label=f'true {property} e = {self.output_ecc_ref}')
+        # axs[0].plot(self.ecc_parameter_space_output, true_phase[:, index_ecc_ref], label='real')
+        # axs[0].set_xlabel('t [M]')
+        if property == 'phase':
+            axs[0].set_ylabel('$\phi$' + units)
+        else:
+            axs[0].set_ylabel('A' + units)
+        axs[0].grid(True)
+        # axs[0].set_title(f'Surrogate vs Real {property}, ga={self.min_greedy_error_amp}, gp={self.min_greedy_error_phase}')
+        axs[0].legend(loc='upper left')
+
+        # Calculate and Plot Phase Error (Bottom Right)
+        # Define a small threshold value to handle small or zero values in real_datapiece
+        threshold = 1e-30  # You can adjust this value based on the scale of your data
+
+        # Avoid division by very small numbers by using np.maximum to set a lower limit
+        relative_error = abs(surrogate_datapiece - true_datapiece) / abs(true_datapiece)
+        axs[1].plot(self.time, relative_error, linewidth=0.6)
+        if property == 'phase':
+            axs[1].set_ylabel('|($\phi_S$ - $\phi$) / $\phi$|')
+        else:
+            axs[1].set_ylabel('|($A_S$ - A) / A|')
+        axs[1].set_xlabel('t [M]')
+        axs[1].ticklabel_format(style='sci', axis='y', scilimits=(0, 0), useMathText=True)
+        axs[1].grid(True)
+
+        # axs[1].set_title('Relative error')
+
+        # Adjust layout to prevent overlap
+        plt.tight_layout()
+
+        if save_fig_datapiece is True:
+            figname = f'Surrogate_{property}_ecc_ref={self.output_ecc_ref}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_parameter_space_input)}_{max(self.ecc_parameter_space_input)}_Ni={len(self.ecc_parameter_space_input)}]_No={len(self.ecc_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_greedy_vecs_phase}_Nga={self.N_greedy_vecs_amp}.png'
+            
+            # Ensure the directory exists, creating it if necessary and save
+            os.makedirs('Images/Surrogate_datapieces_Single', exist_ok=True)
+            fig_surrogate_datapieces.savefig('Images/Surrogate_datapieces_Single/' + figname)
+
+            print('Figure is saved in Images/Surrogate_datapieces_Single/' + figname)
+
+        return surrogate_datapiece, true_datapiece, relative_error
+        
+
+    def generate_surrogate_waveform(self, output_ecc_ref, plot_surr_datapiece=False, save_fig_datapiece=False, plot_surr_wf=None, save_fig_surr=False, plot_GPRfit=False, save_fits_to_file=True, save_fig_fits=False, save_matrix_to_file=True):
 
         if isinstance(output_ecc_ref, float):
             try:
@@ -622,10 +636,11 @@ class Generate_Surrogate(Generate_TrainingSet):
         else:
             print('Reconstruct surrogate datapiece...')
             self.surrogate_amp, computation_time_amp = self.reconstruct_surrogate_datapiece(property='amplitude', B_matrix=self.B_matrix_amp, fit_matrix=self.gaussian_fit_amp, plot_surr_datapiece=plot_surr_datapiece, save_fig_datapiece=save_fig_datapiece)
+            if plot_GPRfit is True:
+                self._plot_GPR_fits('amplitude', save_fig_fits=save_fig_fits)
 
         # # End timer for computation of surrogate model
         # end_time_amp = time.time()
-
 
         if self.gaussian_fit_phase is None:
             print('Loading surrogate phase...')
@@ -649,12 +664,13 @@ class Generate_Surrogate(Generate_TrainingSet):
             # Get B_matrix for phase
             self.B_matrix_phase = self.compute_B_matrix(property='phase', save_matrix_to_file=save_matrix_to_file)
             print(f'B_matrix took {time.time() - start3:.4f}s')
-            print('B_matrix: ', self.B_matrix_phase)
             # Reconstruct phase datapiece
-            self.surrogate_phase, computation_time_phase = self.reconstruct_surrogate_datapiece(property='phase', B_matrix=self.B_matrix_phase, fit_matrix=self.gaussian_fit_phase, plot_surr_datapiece=plot_surr_datapiece)
+            self.surrogate_phase, computation_time_phase = self.reconstruct_surrogate_datapiece(property='phase', B_matrix=self.B_matrix_phase, fit_matrix=self.gaussian_fit_phase, plot_surr_datapiece=plot_surr_datapiece, save_fig_datapiece=save_fig_datapiece)
         else:
-            self.surrogate_phase, computation_time_phase = self.reconstruct_surrogate_datapiece(property='phase', B_matrix=self.B_matrix_phase, fit_matrix=self.gaussian_fit_phase, plot_surr_datapiece=plot_surr_datapiece)
-        
+            self.surrogate_phase, computation_time_phase = self.reconstruct_surrogate_datapiece(property='phase', B_matrix=self.B_matrix_phase, fit_matrix=self.gaussian_fit_phase, plot_surr_datapiece=plot_surr_datapiece, save_fig_datapiece=save_fig_datapiece)
+            if plot_GPRfit is True:
+                self._plot_GPR_fits('phase', save_fig_fits=save_fig_fits)
+
         # # End timer for computation of surrogate model
         # end_time_phase = time.time()
 
@@ -682,75 +698,85 @@ class Generate_Surrogate(Generate_TrainingSet):
 
 
         if plot_surr_wf is True:
-            # Plot surrogate waveform
-            fig_surrogate, axs = plt.subplots(4, 1, figsize=(12, 6), gridspec_kw={'height_ratios': [3, 1, 3, 1], 'hspace': 0.2}, sharex=True)
-
-            if self.waveforms_in_geom_units is True:
-                true_hp, true_hc = self.simulate_inspiral_mass_independent(self.output_ecc_ref)
-
-
-            phase = self.phase(true_hp, true_hc)
-            amp = self.amplitude(true_hp, true_hc)
-            true_h = amp * np.exp(1j * phase)
-
-
-            axs[0].plot(self.time, np.real(true_h), linewidth=0.6, label=f'true waveform e = {plot_surr_wf}')
-            axs[0].plot(self.time, np.real(h_surrogate), linewidth=0.6, label=f'surrogate e = {plot_surr_wf}')
-            axs[0].set_ylabel('$h_+$')
-            axs[0].grid(True)
-            axs[0].legend()
-
-            # Calculate and Plot plus polarisation error 
-            relative_error_hp = abs(np.real(h_surrogate) - np.real(true_h)) / abs(np.real(true_h))
-            relative_error_hp[relative_error_hp > 1] = 0
-
-            axs[1].plot(self.time, abs(np.real(h_surrogate) - np.real(true_h)), linewidth=0.6)
-            axs[1].set_ylabel('|$h_{+, S} - h_+$|')
-            axs[1].grid(True)
-            # axs[1].set_ylim(0, 10)
-            # axs[1].set_title('Relative error $h_x$')
-
-            # axs[2].plot(self.time, true_hc[length_diff:], linewidth=0.6, label='True waveform before')
-            axs[2].plot(self.time, np.imag(true_h), linewidth=0.6, label=f'true waveform e = {plot_surr_wf}')
-            axs[2].plot(self.time, np.imag(h_surrogate), linewidth=0.6, label=f'surrogate e = {plot_surr_wf}')
-            axs[2].grid(True)
-            axs[2].set_ylabel('$h_x$')
-            axs[2].legend()
-
-            # # axs[2].plot(self.time, true_hc[length_diff:], linewidth=0.6, label='True waveform before')
-            # axs[1].plot(self.time, np.imag(true_h)[length_diff:], linewidth=0.6, label='True waveform after')
-            # axs[1].plot(self.time, np.imag(h_surrogate[:, index_ecc_ref]), linewidth=0.6, label='Surrogate')
-            # axs[1].grid(True)
-            # axs[1].set_ylabel('$h_x$')
-            # axs[1].legend()
-
-            # Calculate and Plot cross polarisation error
-            relative_error_hc = abs(np.imag(h_surrogate) - np.imag(true_h)) / abs(np.imag(true_h))
-            relative_error_hc[relative_error_hc > 1] = 0
-            axs[3].plot(self.time, abs(np.imag(h_surrogate) - np.imag(true_h)), linewidth=0.6)
-            axs[3].set_ylabel('|$h_{x, S} - h_x$|')
-            axs[3].set_xlabel('t [M]')
-            axs[3].grid(True)
-            # axs[3].set_ylim(0, 10)
-
-            # axs[4].plot(np.arange(len(relative_error_hc)), relative_error_hc, linewidth=0.6, label='rel err')
-            # axs[5].plot(np.arange(len(relative_error_hc)), abs(np.imag(true_h)[length_diff:]), linewidth=0.6, label='abs')
-            # axs[4].set_ylabel(f'Rel. Error in $h_x$')
-            # axs[4].set_xlabel('t [M]')
-            # axs[4].grid(True)
-            # axs[4].legend()
-
-
-            if save_fig_surr is True:
-                figname = f'Surrogate_wf_ecc_ref={plot_surr_wf}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_parameter_space_input)}_{max(self.ecc_parameter_space_input)}_Ni={len(self.ecc_parameter_space_input)}]_No={len(self.ecc_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_greedy_vecs_phase}_Nga={self.N_greedy_vecs_amp}.png'
-                
-                # Ensure the directory exists, creating it if necessary and save
-                os.makedirs('Images/Surrogate_wf', exist_ok=True)
-                fig_surrogate.savefig('Images/Surrogate_wf/' + figname)
-
-                print('Figure is saved in Images/Surrogate_wf/' + figname)
+            self.plot_surrogate_waveform(h_surrogate, save_fig_surr=save_fig_surr, geometric_units=self.waveforms_in_geom_units)
 
         return self.surrogate_amp, self.surrogate_phase
+
+
+    def plot_surrogate_waveform(self, surrogate_h, save_fig_surr=False, geometric_units=True):
+            # Plot surrogate waveform
+        fig_surrogate, axs = plt.subplots(4, 1, figsize=(12, 6), gridspec_kw={'height_ratios': [3, 1, 3, 1], 'hspace': 0.2}, sharex=True)
+
+        if self.waveforms_in_geom_units is True:
+            true_hp, true_hc = self.simulate_inspiral_mass_independent(self.output_ecc_ref)
+        else:
+            true_hp, true_hc = self.simulate_inspiral_mass_dependent(total_mass=self.total_mass, distance=self.luminosity_distance, ecc_ref=self.output_ecc_ref)
+
+
+        phase = self.phase(true_hp, true_hc)
+        amp = self.amplitude(true_hp, true_hc)
+        true_h = amp * np.exp(1j * phase)
+
+
+        axs[0].plot(self.time, np.real(true_h), linewidth=0.6, label=f'true waveform e = {self.output_ecc_ref}')
+        axs[0].plot(self.time, np.real(surrogate_h), linewidth=0.6, label=f'surrogate e = {self.output_ecc_ref}')
+        axs[0].set_ylabel('$h_+$')
+        axs[0].grid(True)
+        axs[0].legend()
+
+        # Calculate and Plot plus polarisation error 
+        relative_error_hp = abs(np.real(surrogate_h) - np.real(true_h)) / abs(np.real(true_h))
+        relative_error_hp[relative_error_hp > 1] = 0
+
+        axs[1].plot(self.time, abs(np.real(surrogate_h) - np.real(true_h)), linewidth=0.6)
+        axs[1].set_ylabel('|$h_{+, S} - h_+$|')
+        axs[1].grid(True)
+        # axs[1].set_ylim(0, 10)
+        # axs[1].set_title('Relative error $h_x$')
+
+        # axs[2].plot(self.time, true_hc[length_diff:], linewidth=0.6, label='True waveform before')
+        axs[2].plot(self.time, np.imag(true_h), linewidth=0.6, label=f'true waveform e = {self.output_ecc_ref}')
+        axs[2].plot(self.time, np.imag(surrogate_h), linewidth=0.6, label=f'surrogate e = {self.output_ecc_ref}')
+        axs[2].grid(True)
+        axs[2].set_ylabel('$h_x$')
+        axs[2].legend()
+
+        # # axs[2].plot(self.time, true_hc[length_diff:], linewidth=0.6, label='True waveform before')
+        # axs[1].plot(self.time, np.imag(true_h)[length_diff:], linewidth=0.6, label='True waveform after')
+        # axs[1].plot(self.time, np.imag(h_surrogate[:, index_ecc_ref]), linewidth=0.6, label='Surrogate')
+        # axs[1].grid(True)
+        # axs[1].set_ylabel('$h_x$')
+        # axs[1].legend()
+
+        # Calculate and Plot cross polarisation error
+        relative_error_hc = abs(np.imag(surrogate_h) - np.imag(true_h)) / abs(np.imag(true_h))
+        relative_error_hc[relative_error_hc > 1] = 0
+        axs[3].plot(self.time, abs(np.imag(surrogate_h) - np.imag(true_h)), linewidth=0.6)
+        axs[3].set_ylabel('|$h_{x, S} - h_x$|')
+        axs[3].set_xlabel('t [M]')
+        axs[3].grid(True)
+        # axs[3].set_ylim(0, 10)
+
+        # axs[4].plot(np.arange(len(relative_error_hc)), relative_error_hc, linewidth=0.6, label='rel err')
+        # axs[5].plot(np.arange(len(relative_error_hc)), abs(np.imag(true_h)[length_diff:]), linewidth=0.6, label='abs')
+        # axs[4].set_ylabel(f'Rel. Error in $h_x$')
+        # axs[4].set_xlabel('t [M]')
+        # axs[4].grid(True)
+        # axs[4].legend()
+
+
+        if save_fig_surr is True:
+            figname = f'Surrogate_wf_ecc_ref={self.output_ecc_ref}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_parameter_space_input)}_{max(self.ecc_parameter_space_input)}_Ni={len(self.ecc_parameter_space_input)}]_No={len(self.ecc_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_greedy_vecs_phase}_Nga={self.N_greedy_vecs_amp}.png'
+            
+            # Ensure the directory exists, creating it if necessary and save
+            os.makedirs('Images/Surrogate_wf', exist_ok=True)
+            fig_surrogate.savefig('Images/Surrogate_wf/' + figname)
+
+            print('Figure is saved in Images/Surrogate_wf/' + figname)
+
+        return surrogate_h, true_h, relative_error_hp, relative_error_hc
+
+        
     
     def surrogate_datapieces_from_NR_to_SI(self):
         # Phase is already unitless so doesn't need converting
