@@ -575,3 +575,19 @@ A. Workflow (high level — what to run)
 
 9. Export surrogate + uncertainty info:
    - Save final surrogate and an uncertainty grid (e.g. mean ± std or mean + 90% quantiles) as interpolation grids used by downstream code.
+
+
+
+03/09/2025:
+If generate_property_dataset keep looping. It is because:
+def _save_GPR_fits_to_file(self, property, gaussian_fit, training_set, lml_fits, uncertainty_region):
+            filename = f'Straindata/GPRfits/GPRfits_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_parameter_space_input)}_{max(self.ecc_parameter_space_input)}_N={len(self.ecc_parameter_space_input)}]_No={len(self.ecc_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_greedy_vecs_phase}_Nga={self.N_greedy_vecs_amp}.npz'
+            if not os.path.isfile(filename):
+
+                # Ensure the directory exists, creating it if necessary and save
+                os.makedirs('Straindata/GPRfits', exist_ok=True)
+                
+                np.savez(filename, GPR_fit=gaussian_fit, empirical_nodes=self.empirical_nodes_idx, residual_greedy_basis=self.residual_greedy_basis, time=self.time, lml_fits=lml_fits, training_set=training_set, greedy_parameters_idx=self.greedy_parameters_idx, uncertainty_region=np.array(uncertainty_region, dtype=object), phase_circ=self.phase_circ, amp_circ=self.amp_circ)
+                print('GPR fits saved in Straindata/GPRfits/' + filename)
+
+self.phase_circ is None but a None array because it loads like None from a file, so it never calculates self.phase_circ in the self.circulair() function! Add a call to generate circulair() before saving the file.

@@ -35,15 +35,14 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         self.parameter_space_input = ecc_ref_parameterspace
     
         # To be stored parameters
-        self.time = None
         self.residual_greedy_basis = None
         self.greedy_parameters_idx = None
         self.empirical_nodes_idx = None
         self.highest_tmin_value = None
 
         # Inherit parameters from all previously defined classes
-        super().__init__(time_array, None, total_mass, luminosity_distance, f_lower, f_ref, chi1, chi2, phiRef, rel_anomaly, inclination, truncate_at_ISCO, truncate_at_tmin)
-    
+        Waveform_Properties.__init__(self, time_array=time_array, ecc_ref=None, total_mass=total_mass, luminosity_distance=luminosity_distance, f_lower=f_lower, f_ref=f_ref, chi1=chi1, chi2=chi2, phiRef=phiRef, rel_anomaly=rel_anomaly, inclination=inclination, truncate_at_ISCO=truncate_at_ISCO, truncate_at_tmin=truncate_at_tmin)
+
     def generate_property_dataset(self, ecc_list, property, save_dataset_to_file=None, plot_residuals_time_evolv=False, plot_residuals_eccentric_evolv=False, save_fig_eccentric_evolv=False, save_fig_time_evolve=False):
         """
         Generates a dataset of waveform residuals based on the specified property for a certain range of eccentricities (ecc).
@@ -83,12 +82,15 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
             # If attempt to load residuals failed, generate polarisations and calculate residuals
             hp_dataset, hc_dataset = self._generate_polarisation_data(ecc_list)
+            print(0, 'Generated polarisation dataset ', len(ecc_list), ' waveforms')
             residual_dataset = self._calculate_residuals(ecc_list, hp_dataset, hc_dataset, property)
+            del hp_dataset, hc_dataset  # Free memory
 
+            print(f'Generated residual parameterspace dataset for {property} ', len(ecc_list), ' waveforms')
             # If save_dataset_to_file is True save the residuals to file in Straindata/Residuals
             if save_dataset_to_file is True and not os.path.isfile(f'Straindata/Residuals/residuals_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(ecc_list)}_{max(ecc_list)}_N={len(ecc_list)}].npz'):
                 self._save_residual_dataset(ecc_list, property, residual_dataset)
-       
+
         # If plot_residuals is True, plot whole residual dataset
         if (plot_residuals_eccentric_evolv is True) or (plot_residuals_time_evolv is True):
             self._plot_residuals(residual_dataset, ecc_list, property, plot_residuals_eccentric_evolv, plot_residuals_time_evolv, save_fig_eccentric_evolv, save_fig_time_evolve )
@@ -126,8 +128,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             sorted_ecc_list = np.sort(ecc_list)
 
             ISCO_ecc = sorted_ecc_list[-1] # Highest eccentricity in the list --> earliest ISCO cut-off
-            hp_ISCO, hc_ISCO = self.simulate_inspiral_mass_independent(ISCO_ecc, truncate_at_ISCO=True)
-
+            hp_ISCO, hc_ISCO = self.simulate_inspiral_mass_independent(ecc_ref=ISCO_ecc, truncate_at_ISCO=True, truncate_at_tmin=True)
 
             hp_dataset = np.zeros((len(ecc_list), len(self.time))) 
             hc_dataset = np.zeros((len(ecc_list), len(self.time)))
@@ -138,7 +139,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
                     hp_dataset[i] = hp_ISCO
                     hc_dataset[i] = hc_ISCO
                 else:
-                    hp, hc = self.simulate_inspiral_mass_independent(ecc, truncate_at_ISCO=False)
+                    hp, hc = self.simulate_inspiral_mass_independent(ecc_ref=ecc, truncate_at_ISCO=False)
 
                     hp_dataset[i] = hp[:len(hp_ISCO)]  # Ensure the waveform length matches the shortest time array
                     hc_dataset[i] = hc[:len(hp_ISCO)]  # Ensure the waveform length matches the shortest time array
@@ -174,7 +175,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             Array of residuals for each eccentricity.
             
         """
-        
+        print(1, 'Calculating residuals for property:', property)
         self.circulair_wf()
 
         # Create empty residual dataset
@@ -186,7 +187,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             residual_dataset[i] = residual
 
             del residual
-
+        print(2, 'Calculated residuals for property:', property)
         return residual_dataset
     
     def _plot_residuals(self, residual_dataset, ecc_list, property, plot_eccentric_evolv=False, plot_time_evolve=False, save_fig_eccentric_evolve=False, save_fig_time_evolve=False):
@@ -295,7 +296,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         U = U.copy()
         # U_norms = np.linalg.norm(U, axis=1)
         # U_normalized = U / U_norms[:, np.newaxis]  # shape: (num_vectors, vector_length)
-
+        print(8, U)
         U_normalized = normalize(U, axis=1)[1:]  # Skip the first row (zero vector of ecc=0) to prevent false uniqueness due to inner product of zero vectors
 
         num_vectors = U.shape[0]
@@ -917,6 +918,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         
         # Step 2: Select the best representative parameters using a greedy algorithm
         print('Calculating greedy parameters...')
+        print(9, residual_parameterspace_input)
         self.greedy_parameters_idx, residual_greedy_basis_orthonormal = self.get_greedy_parameters(
             U=residual_parameterspace_input,
             min_greedy_error=min_greedy_error,
@@ -929,7 +931,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         )
 
         self.residual_greedy_basis = residual_parameterspace_input[self.greedy_parameters_idx]
-        print(self.residual_greedy_basis.shape)
         # self.greedy_parameters_idx, self.residual_greedy_basis = self.get_greedy_parameters(
         #     U=residual_parameterspace_input,
         #     min_greedy_error=min_greedy_error,
