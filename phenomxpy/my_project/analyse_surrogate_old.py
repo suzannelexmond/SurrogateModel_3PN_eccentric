@@ -1,6 +1,6 @@
 from call_surrogate_old import *
 
-class AnalyseSurrogate(Generate_Online_Surrogate):
+class AnalyseSurrogate(Call_Surrogate):
 
     def __init__(self, time_array, mass_paramspace, eccentric_paramspace, mass_ratio_paramspace, luminosity_distance_paramspace, chi_range, N_greedy_vecs_amp, N_greedy_vecs_phase, f_ref, f_lower):
         self.mass_paramspace = mass_paramspace
@@ -13,11 +13,11 @@ class AnalyseSurrogate(Generate_Online_Surrogate):
         self.f_ref = f_ref
         self.f_lower = f_lower
 
-        Generate_Online_Surrogate.__init__(self,
+        Call_Surrogate.__init__(self,
             time_array=time_array,
             ecc_ref=None,
-            total_mass=None,
-            luminosity_distance=None,
+            total_mass=50,
+            luminosity_distance=200,
             f_lower=self.f_lower,
             f_ref=self.f_ref,
             chi1=0,
@@ -32,63 +32,57 @@ class AnalyseSurrogate(Generate_Online_Surrogate):
         
     def analyse_eccentric_mass_indepedent_accuracy(self, time_array, plot_GRP_fit=False, save_fig_fits=False, plot_surr_datapieces=False, save_fig_datapieces=False, plot_surr_wf=False, save_fig_surr=False):
 
-        relative_errors_hp = np.zeros((len(self.eccentric_paramspace), len(self.mass_paramspace), len(self.luminosity_distance_paramspace)))
-        relative_errors_hc = np.zeros((len(self.eccentric_paramspace), len(self.mass_paramspace), len(self.luminosity_distance_paramspace)))
-        relative_errors_amp = np.zeros((len(self.eccentric_paramspace), len(self.mass_paramspace), len(self.luminosity_distance_paramspace)))
-        relative_errors_phase = np.zeros((len(self.eccentric_paramspace), len(self.mass_paramspace), len(self.luminosity_distance_paramspace)))
+        mean_relative_errors_hp = np.zeros((len(self.eccentric_paramspace), len(self.mass_paramspace), len(self.luminosity_distance_paramspace)))
+        mean_relative_errors_hc = np.zeros((len(self.eccentric_paramspace), len(self.mass_paramspace), len(self.luminosity_distance_paramspace)))
+        mean_relative_errors_amp = np.zeros((len(self.eccentric_paramspace), len(self.mass_paramspace), len(self.luminosity_distance_paramspace)))
+        mean_relative_errors_phase = np.zeros((len(self.eccentric_paramspace), len(self.mass_paramspace), len(self.luminosity_distance_paramspace)))
 
-        surrogate_generator = Call_Surrogate(
-            time_array,
-            ecc_ref=None,
-            total_mass=None,
-            luminosity_distance=None,
-            f_lower=self.f_lower,
-            f_ref=self.f_ref,
-            chi1=0,
-            chi2=0,
-            phiRef=0.,
-            rel_anomaly=0.,
-            inclination=0.,
-            truncate_at_ISCO=True,
-            truncate_at_tmin=True,
-        )
+        worst_relative_errors_hp = np.zeros((len(self.eccentric_paramspace), len(self.mass_paramspace), len(self.luminosity_distance_paramspace)))
+        worst_relative_errors_hc = np.zeros((len(self.eccentric_paramspace), len(self.mass_paramspace), len(self.luminosity_distance_paramspace)))
+        worst_relative_errors_amp = np.zeros((len(self.eccentric_paramspace), len(self.mass_paramspace), len(self.luminosity_distance_paramspace)))
+        worst_relative_errors_phase = np.zeros((len(self.eccentric_paramspace), len(self.mass_paramspace), len(self.luminosity_distance_paramspace)))
 
-        surrogate_generator.load_offline_surrogate(plot_GPRfit=plot_GRP_fit, save_fig_fits=save_fig_fits)
+        self.load_offline_surrogate(plot_GPRfit=plot_GRP_fit, save_fig_fits=save_fig_fits)
 
         for ecc_idx, ecc in enumerate(self.eccentric_paramspace):
             for mass_idx, mass in enumerate(self.mass_paramspace):
-                    for ld_idx, luminosity_distance in enumerate(self.luminosity_distance_paramspace):
-                        
+                # for ld_idx, luminosity_distance in enumerate(self.luminosity_distance_paramspace):
                         # Comparison with real waveform datapieces
-                        surrogate_amp, surrogate_phase = surrogate_generator.generate_PhenomTE_surrogate(
-                            ecc_ref=ecc,
-                            plot_surr_datapiece=plot_surr_datapieces,
-                            save_fig_datapiece=save_fig_datapieces,
-                            plot_surr_wf=plot_surr_wf,
-                            save_fig_surr=save_fig_surr
-                        )
-                        print(1, surrogate_generator.output_ecc_ref, surrogate_generator.ecc_ref)
-                        surrogate_amp, true_amp, relative_error_amp = self._plot_surr_datapieces(
-                            property='amplitude',
-                            surrogate_datapiece=surrogate_amp,
-                            save_fig_datapiece=save_fig_datapieces,
-                            geometric_units=False,
-                            total_mass=mass,
-                            luminosity_distance=luminosity_distance
-                        )
+                # self.output_ecc_ref = ecc
+                # self.total_mass = mass
+                # self.luminosity_distance = luminosity_distance
 
-                        surrogate_phase, true_phase, relative_error_phase = self._plot_surr_datapieces(
-                            property='phase',
-                            surrogate_datapiece=surrogate_phase,
-                            save_fig_datapiece=save_fig_datapieces,
-                            geometric_units=False,
-                            total_mass=mass,
-                            luminosity_distance=luminosity_distance
-                        )
+                    surrogate_amp, surrogate_phase = self.generate_PhenomTE_surrogate(
+                        ecc_ref=ecc,
+                        plot_surr_datapiece=plot_surr_datapieces,
+                        save_fig_datapiece=save_fig_datapieces,
+                    )
 
-                        relative_errors_amp[ecc_idx, mass_idx, ld_idx] = relative_error_amp
-                        relative_errors_phase[ecc_idx, mass_idx, ld_idx] = relative_error_phase
+                        # surrogate_amp, true_amp, relative_error_amp = self._plot_surr_datapieces(
+                        #     property='amplitude',
+                        #     surrogate_datapiece=surrogate_amp,
+                        #     save_fig_datapiece=save_fig_datapieces,
+                        #     geometric_units=False,
+                        #     total_mass=mass,
+                        #     luminosity_distance=luminosity_distance,
+                        #     ecc_ref=self.output_ecc_ref
+                        # )
 
+                        # surrogate_phase, true_phase, relative_error_phase = self._plot_surr_datapieces(
+                        #     property='phase',
+                        #     surrogate_datapiece=surrogate_phase,
+                        #     save_fig_datapiece=save_fig_datapieces,
+                        #     geometric_units=False,
+                        #     total_mass=mass,
+                        #     luminosity_distance=luminosity_distance,
+                        #     ecc_ref=self.output_ecc_ref
+                        # )
+
+                        # mean_relative_errors_amp[ecc_idx, mass_idx, ld_idx] = np.mean(relative_error_amp)
+                        # mean_relative_errors_phase[ecc_idx, mass_idx, ld_idx] = np.mean(relative_error_phase)
+
+                        # worst_relative_errors_amp[ecc_idx, mass_idx, ld_idx] = np.max(relative_error_amp)
+                        # worst_relative_errors_phase[ecc_idx, mass_idx, ld_idx] = np.max(relative_error_phase)
 
 
                         # fig_compare_datapieces = plt.figure(figsize=(16, 7))
@@ -126,25 +120,30 @@ class AnalyseSurrogate(Generate_Online_Surrogate):
 
 
 
-                        # Comparison with real waveform h_+, h_x
-                        surrogate_hp, surrogate_hc = surrogate_generator.get_surrogate_polarisations(
-                            total_mass=mass,
-                            luminosity_distance=luminosity_distance,
-                            geometric_units=False,
-                            plot_polarisations=False,
-                            save_fig=False
-                        )
+                        # # Comparison with real waveform h_+, h_x
+                        # surrogate_hp, surrogate_hc = self.get_surrogate_polarisations(
+                        #     total_mass=mass,
+                        #     luminosity_distance=luminosity_distance,
+                        #     geometric_units=False,
+                        #     plot_polarisations=False,
+                        #     save_fig=False
+                        # )
 
-                        surrogate_h = surrogate_amp * np.exp(1j * surrogate_phase)
+                        # surrogate_h = surrogate_amp * np.exp(1j * surrogate_phase)
 
-                        surrogate_h, true_h, relative_error_hp, relative_error_hc = self.plot_surrogate_waveform(
-                            h_surrogate=surrogate_h,
-                            save_fig_surr=save_fig_surr,
-                            geometric_units=False
-                        )
+                        # print('surr hp ', surrogate_hp)
 
-                        relative_errors_hp[ecc_idx, mass_idx, ld_idx] = relative_error_hp
-                        relative_errors_hc[ecc_idx, mass_idx, ld_idx] = relative_error_hc
+                        # surrogate_h, true_h, relative_error_hp, relative_error_hc = self.plot_surrogate_waveform(
+                        #     surrogate_h=surrogate_h,
+                        #     save_fig_surr=save_fig_surr,
+                        #     geometric_units=False
+                        # )
+
+                        # mean_relative_errors_hp[ecc_idx, mass_idx, ld_idx] = np.mean(relative_error_hp)
+                        # mean_relative_errors_hc[ecc_idx, mass_idx, ld_idx] = np.mean(relative_error_hc)
+
+                        # worst_relative_errors_hp[ecc_idx, mass_idx, ld_idx] = np.max(relative_error_hp)
+                        # worst_relative_errors_hc[ecc_idx, mass_idx, ld_idx] = np.max(relative_error_hc)
                         
                         # # Create grids of parameter values
                         # E, M, L = np.meshgrid(self.eccentric_paramspace,
@@ -189,10 +188,11 @@ class AnalyseSurrogate(Generate_Online_Surrogate):
 
                         
 
-                        print('worst relative errors: ', relative_error_amp.flatten().sorted()[:5])
-                        print('worst relative errors: ', relative_error_phase.flatten().sorted()[:5])
-                        print('worst relative errors: ', relative_error_hp.flatten().sorted()[:5])
-                        print('worst relative errors: ', relative_error_hc.flatten().sorted()[:5])
+                    # print("worst relative errors (amp):", np.partition(relative_error_amp.flatten(), -5)[-5:])
+                    # print("worst relative errors (phase):", np.partition(relative_error_phase.flatten(), -5)[-5:])
+                    # print("worst relative errors (hp):", np.partition(relative_error_hp.flatten(), -5)[-5:])
+                    # print("worst relative errors (hc):", np.partition(relative_error_hc.flatten(), -5)[-5:])
+
                             
                     
 
@@ -227,6 +227,7 @@ class AnalyseSurrogate(Generate_Online_Surrogate):
 
         return analysis_results
 
+
 sampling_frequency = 2048 # or 4096
 duration = 4 # seconds
 time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
@@ -235,14 +236,14 @@ time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # ti
 analyse_surrogate = AnalyseSurrogate(
     time_array=time_array,
     mass_paramspace = np.linspace(20, 80, 2),  # Example mass values from 20 to 80
-    eccentric_paramspace = np.linspace(0.1, 0.2, 2),  # Example eccentricity values from 0.0 to 0.2
+    eccentric_paramspace = np.linspace(0.01, 0.19, 5),  # Example eccentricity values from 0.0 to 0.2
     luminosity_distance_paramspace = np.linspace(100, 500, 2),  # Example distances from 100 to 500 Mpc
     mass_ratio_paramspace = np.linspace(1, 3, 3),  # Example mass ratios from 1 to 3
     chi_range = (-0.5, 0.5),
     N_greedy_vecs_amp = 40,
     N_greedy_vecs_phase = 40,       
     f_ref = 20,
-    f_lower = 15
+    f_lower = 8
 )
 
 

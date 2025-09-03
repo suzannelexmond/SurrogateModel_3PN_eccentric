@@ -134,7 +134,6 @@ class Simulate_Inspiral:
 
         # Compute instantaneous phase frequency Mf = dϕ/dt / 2π
         phase = self.phase(phen.hp, phen.hc)  # Calculate phase from plus and cross polarizations
-        print(len(phase), len(self.time))
         dphi_dt = np.gradient(phase, time_array)
         Mf = dphi_dt / (2 * np.pi)
 
@@ -177,7 +176,7 @@ class Simulate_Inspiral:
         return idx_cut
         
       
-    def simulate_inspiral_mass_independent(self, ecc_ref=None, custom_time_array=None, plot_polarisations=False, save_fig=False, truncate_at_ISCO=False):
+    def simulate_inspiral_mass_independent(self, ecc_ref=None, custom_time_array=None, plot_polarisations=False, save_fig=False, truncate_at_ISCO=False, truncate_at_tmin=False):
         """
         Simulate mass-independent plus and cross polarisations of the eccentric eob waveform (pyseobnr) (2,2) mode from f_start till t0 (waveform peak at t=0).
         
@@ -193,6 +192,7 @@ class Simulate_Inspiral:
         hc [dimensionless], np.array: Time-domain cross polarisation 
 
         """
+        
         if custom_time_array is None:
             time_array = self.time
         else:
@@ -230,7 +230,7 @@ class Simulate_Inspiral:
                 "or adjust the time-array manually to start at higher values."
             )
             # mask to only include the physical range of the time-domain
-            if self.truncate_at_tmin is True:
+            if (self.truncate_at_tmin is True) and (truncate_at_tmin is True):
                 mask = time_array >= phen.pWF.tmin
 
                 time_array = time_array[mask]
@@ -243,11 +243,11 @@ class Simulate_Inspiral:
         # True because it's smallest truncated waveform AND true because the surrogate is called with the ISCO cut-off.
         if (truncate_at_ISCO is True) and (self.truncate_at_ISCO is True):
             # Truncate the waveform at ISCO frequency
-            idx_cut = self.truncate_waveform_at_isco(phen, time_array)
+            idx_cut = self.truncate_waveform_at_isco(phen, time_array)                   
             time_array = time_array[:idx_cut]
             
 
-        print(f'time : SimInspiral_M_independent ecc = {round(ecc_ref, 3)}, M = {self.total_mass}, t=[{int(time_array[0])}, {int(time_array[-1])}, num={len(time_array)}] | computation time = {(timer()-start)} seconds')
+        print(f'time : SimInspiral_M_independent ecc = {round(ecc_ref, 3)}, t=[{int(time_array[0])}, {int(time_array[-1])}, num={len(time_array)}], f_lower={self.f_lower}, f_ref={self.f_ref} | computation time = {(timer()-start)} seconds')
 
         if plot_polarisations is True:
             self._plot_polarisations(phen.hp, phen.hc, time_array, save_fig=save_fig)
@@ -494,8 +494,8 @@ class Waveform_Properties(Simulate_Inspiral):
         self.amp_circ = None # Amplitude of the non-eccentric inspiral waveform
 
         # Inherit parameters from Simulate_Inspiral class
-        Simulate_Inspiral.__init__(self, time_array, ecc_ref, total_mass, luminosity_distance, f_lower, f_ref, chi1, chi2, phiRef, rel_anomaly, inclination, truncate_at_ISCO, truncate_at_tmin)
-        
+        Simulate_Inspiral.__init__(self, time_array=time_array, ecc_ref=ecc_ref, total_mass=total_mass, luminosity_distance=luminosity_distance, f_lower=f_lower, f_ref=f_ref, chi1=chi1, chi2=chi2, phiRef=phiRef, rel_anomaly=rel_anomaly, inclination=inclination, truncate_at_ISCO=truncate_at_ISCO, truncate_at_tmin=truncate_at_tmin)
+
     def circulair_wf(self):
         """
         Simulate plus and cross polarisations of NON-ECCENTRIC waveform Inspiral for t in units [M]. 
@@ -508,7 +508,7 @@ class Waveform_Properties(Simulate_Inspiral):
 
         """
         
-        if self.phase_circ is None or self.amp_circ is None:
+        if (self.phase_circ is None) or (self.amp_circ is None):
             print('checking if hp_circ and hc_circ are set')
             # Generate arrays
             self.hp_circ, self.hc_circ = self.simulate_inspiral_mass_independent(ecc_ref=0)
@@ -522,7 +522,8 @@ class Waveform_Properties(Simulate_Inspiral):
             self.amp_circ = self.amp_circ[:len(self.time)]
         else:
             pass # self.hp_circ and self.hc_circ are already set, no need to recompute
-
+        
+        print('circs', self.phase_circ, self.amp_circ)
 
         
 
@@ -548,21 +549,18 @@ class Waveform_Properties(Simulate_Inspiral):
 
         # Calculate plus and cross polarizations of circular (non-eccentric) waveform
         self.circulair_wf()
-
         # Calculate phase from plus and cross polarizations
         if property == 'phase':
             circ = self.phase_circ# non-eccentric case
             eccentric = self.phase(hp, hc) # eccentric case
             units = '[radians]'
-
             # Residual = circular - eccentric to prevent negative residual values
             residual = circ - eccentric # to prevent negative values
-
             # Warning for negative residual values
 
             if eccentric[1] < 0: # 
                 warnings.warn("Eccentric phase has negative starting values. This may not be expected for physical waveforms. This usually happens when the eccentric waveformlength is shorter than the chosen time array. Consider decreasing the time array length or decreasing the eccentricity.")
-
+            
         # Calculate amplitude from plus and cross polarisations
         elif property == 'amplitude':
             circ = self.amp_circ # non-eccentric case
@@ -574,7 +572,7 @@ class Waveform_Properties(Simulate_Inspiral):
         else:
             print('Choose property = "phase", "amplitude", "frequency"', property, 2)
             sys.exit(1)
-
+        print(1, 'in calculate_residual)')
         if plot_residual is True:
             fig_residual = plt.figure()
             
@@ -602,7 +600,7 @@ class Waveform_Properties(Simulate_Inspiral):
                 print('Figure is saved in Images/Residuals')
         
         del circ, eccentric # clear memory
-
+        print(2, 'in calculate_residual)')
         return residual
 
 

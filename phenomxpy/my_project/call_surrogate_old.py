@@ -25,19 +25,6 @@ class Generate_Online_Surrogate(Load_Offline_Surrogate):
         self.total_mass = total_mass
         self.output_ecc_ref = ecc_ref
         self.luminosity_distance = luminosity_distance
-        self.f_lower = f_lower
-        self.f_ref = f_ref
-        self.chi1 = chi1
-        self.chi2 = chi2
-        self.phiRef = phiRef
-        self.rel_anomaly = rel_anomaly
-        self.inclination = inclination  
-        self.truncate_at_ISCO = truncate_at_ISCO
-        self.truncate_at_tmin = truncate_at_tmin
-
-        print(ecc_ref, self.output_ecc_ref)
-
-
 
         Load_Offline_Surrogate.__init__(
             self,
@@ -49,17 +36,18 @@ class Generate_Online_Surrogate(Load_Offline_Surrogate):
             amount_output_wfs=500,
             N_greedy_vecs_amp=40,
             N_greedy_vecs_phase=40,
-            f_lower=self.f_lower,
-            f_ref=self.f_ref,
-            chi1=self.chi1,
-            chi2=self.chi2,
-            phiRef=self.phiRef,
-            rel_anomaly=self.rel_anomaly,
-            inclination=self.inclination,
+            f_lower=f_lower,
+            f_ref=f_ref,
+            chi1=chi1,
+            chi2=chi2,
+            phiRef=phiRef,
+            rel_anomaly=rel_anomaly,
+            inclination=inclination,
             truncate_at_ISCO=truncate_at_ISCO,
             truncate_at_tmin=truncate_at_tmin,
 
         )
+
 
 
     def residual_to_original(self, residual_waveform, property):
@@ -115,18 +103,17 @@ class Generate_Online_Surrogate(Load_Offline_Surrogate):
 
         return surrogate_datapiece, computation_time
     
-    def _plot_surr_datapieces(self, property, surrogate_datapiece, save_fig_datapiece=False, geometric_units=True, total_mass=None, luminosity_distance=None):
-            
+    def _plot_surr_datapieces(self, property, surrogate_datapiece, save_fig_datapiece=False, geometric_units=True, total_mass=None, luminosity_distance=None, ecc_ref=None):
         # Create a 2x1 subplot grid with height ratios 3:1
         fig_surrogate_datapieces, axs = plt.subplots(2, 1, figsize=(6, 6), gridspec_kw={'height_ratios': [3, 1], 'hspace': 0.1}, sharex=True)
-        print(14, self.output_ecc_ref, self.ecc_ref)
+
+        if self.output_ecc_ref is None:
+            self.output_ecc_ref = ecc_ref
         if geometric_units is True:
-            print(15, self.output_ecc_ref, self.ecc_ref)
             # Simulate the real waveform datapiece
-            real_hp, real_hc = self.simulate_inspiral_mass_independent(self.output_ecc_ref)
+            real_hp, real_hc = self.simulate_inspiral_mass_independent(ecc_ref=self.output_ecc_ref, truncate_at_ISCO=False, truncate_at_tmin=False)
         else:
-            print(0, total_mass, luminosity_distance, self.output_ecc_ref)
-            real_hp, real_hc = self.simulate_inspiral_mass_dependent(total_mass=total_mass, distance=luminosity_distance, ecc_ref=self.output_ecc_ref)
+            real_hp, real_hc = self.simulate_inspiral_mass_dependent(total_mass=total_mass, distance=luminosity_distance, ecc_ref=self.output_ecc_ref, truncate_at_ISCO=False, truncate_at_tmin=False)
 
         if property == 'amplitude':
             true_datapiece = self.amplitude(real_hp, real_hc)
@@ -194,7 +181,6 @@ class Generate_Online_Surrogate(Load_Offline_Surrogate):
                 self.output_ecc_ref_idx = np.where(self.ecc_parameter_space_output == self.output_ecc_ref)[0][0]
                 print(f'Eccentricity value for output_ecc_ref={output_ecc_ref_asked} not in ouput parameterspace. Eccentricity calculated for closest existing value at e={self.output_ecc_ref}.')
 
-        print(12, self.output_ecc_ref, self.ecc_ref)
         if self.gaussian_fit_amp is None:
             print('Loading surrogate amplitude...')
             # Set timer for computational time of the surrogate model
@@ -219,8 +205,6 @@ class Generate_Online_Surrogate(Load_Offline_Surrogate):
             if plot_GPRfit is True:
                 self._plot_GPR_fits('amplitude', save_fig_fits=save_fig_fits)
 
-        # # End timer for computation of surrogate model
-        # end_time_amp = time.time()
 
         if self.gaussian_fit_phase is None:
             print('Loading surrogate phase...')
@@ -280,7 +264,6 @@ class Generate_Online_Surrogate(Load_Offline_Surrogate):
         if plot_surr_wf is True:
             self.plot_surrogate_waveform(h_surrogate, save_fig_surr=save_fig_surr, geometric_units=self.waveforms_in_geom_units)
 
-        print(13, self.output_ecc_ref)
         return self.surrogate_amp, self.surrogate_phase
 
 
@@ -406,19 +389,6 @@ class Call_Surrogate(Generate_Online_Surrogate):
         truncate_at_tmin=True,
     ):
 
-        self.total_mass = total_mass
-        self.luminosity_distance = luminosity_distance
-        self.f_lower = f_lower
-        self.f_ref = f_ref
-        self.chi1 = chi1
-        self.chi2 = chi2
-        self.phiRef = phiRef
-        self.rel_anomaly = rel_anomaly
-        self.inclination = inclination  
-        self.truncate_at_ISCO = truncate_at_ISCO
-        self.truncate_at_tmin = truncate_at_tmin
-
-        print(10, ecc_ref)
         Generate_Online_Surrogate.__init__(
             self,
             time_array=time_array,
@@ -486,7 +456,6 @@ class Call_Surrogate(Generate_Online_Surrogate):
                 self._plot_GPR_fits('phase', save_fig_fits=save_fig_fits)
                 self._plot_GPR_fits('amplitude', save_fig_fits=save_fig_fits)
 
-
         except:
             print("Surrogate model not found. Generating new surrogate data...")
             # Generate surrogate data and save it
@@ -509,9 +478,6 @@ class Call_Surrogate(Generate_Online_Surrogate):
         else:
             self.output_ecc_ref = ecc_ref
 
-
-        print(11, self.output_ecc_ref, self.ecc_ref)
-
         if self.surrogate_amp is None or self.surrogate_phase is None:
             print('Load surrogate ...')
             start = time.time()
@@ -531,8 +497,9 @@ class Call_Surrogate(Generate_Online_Surrogate):
             save_fits_to_file=False,
             save_fig_fits=save_fig_fits
         )
+        print(self.output_ecc_ref, self.surrogate_amp, self.surrogate_phase)
+
         print('Surrogate calculated. Time taken:', time.time() - start)
-        print(16, self.output_ecc_ref, self.ecc_ref)
         return self.surrogate_amp, self.surrogate_phase
 
     def get_surrogate_polarisations(self, total_mass=None, luminosity_distance=None, geometric_units=False, plot_polarisations=False, save_fig=False):
@@ -571,7 +538,7 @@ class Call_Surrogate(Generate_Online_Surrogate):
 #         time_array,
 #         total_mass=50,
 #         luminosity_distance=200,
-#         f_lower=11,
+#         f_lower=10,
 #         f_ref=20,
 #         chi1=0,
 #         chi2=0,
@@ -583,18 +550,19 @@ class Call_Surrogate(Generate_Online_Surrogate):
 #     )
 
 
-# # Generate the surrogate model with the specified output eccentricity reference
+# Generate the surrogate model with the specified output eccentricity reference
 
 # for ecc in np.linspace(0.01, 0.2, 5):
 #     if ecc==0.01:
 #         online.generate_PhenomTE_surrogate(ecc_ref=ecc, plot_GPRfit=True, plot_surr_datapiece=True, plot_surr_wf=True, save_fig_datapiece=True, save_fig_fits=True, save_fig_surr=True)
+#         print(online.output_ecc_ref, online.surrogate_amp, online.surrogate_phase)
 #     else:
 #         online.generate_PhenomTE_surrogate(ecc_ref=ecc, plot_surr_datapiece=True, plot_surr_wf=True, save_fig_datapiece=True, save_fig_fits=True, save_fig_surr=True)
-
+#         print(online.output_ecc_ref, online.surrogate_amp, online.surrogate_phase)
 # plt.show()
 
-# hp, hc = online.get_surrogate_polarisations(geometric_units=False)
-# # print(2, len(online.time), len(online.hplus))
+# hp, hc = online.get_surrogate_polarisations(geometric_units=False, plot_polarisations=True, save_fig=True)
+# print(2, len(online.time), len(online.hplus))
 
 # online_true = Generate_Surrogate_Online(
 #         time_array,

@@ -32,10 +32,12 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                 print('Choose either settings for the amount of greedy_vecs OR the minimum greedy error.')
                 sys.exit(1)
 
-
+        self.ecc_ref_parameterspace_range = ecc_ref_parameterspace_range
         self.ecc_parameter_space_input = np.linspace(ecc_ref_parameterspace_range[0], ecc_ref_parameterspace_range[1], amount_input_wfs).round(4)
         self.ecc_parameter_space_output = np.linspace(ecc_ref_parameterspace_range[0], ecc_ref_parameterspace_range[1], amount_output_wfs).round(4)
-        
+        self.amount_input_wfs = amount_input_wfs
+        self.amount_output_wfs = amount_output_wfs
+
         self.min_greedy_error_amp = min_greedy_error_amp
         self.min_greedy_error_phase = min_greedy_error_phase
         self.N_greedy_vecs_amp = N_greedy_vecs_amp
@@ -52,11 +54,9 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         self.greedy_parameters_idx_amp = None
         self.greedy_parameters_idx_phase = None
 
-        
-        Generate_TrainingSet.__init__(self, time_array, self.ecc_parameter_space_input, self.reference_total_mass, self.reference_luminosity_distance, f_lower, f_ref, chi1, chi2, phiRef, rel_anomaly, inclination, truncate_at_ISCO, truncate_at_tmin)
+        Generate_TrainingSet.__init__(self, time_array=time_array, ecc_ref_parameterspace=self.ecc_parameter_space_input, total_mass=reference_total_mass, luminosity_distance=reference_luminosity_distance, f_lower=f_lower, f_ref=f_ref, chi1=chi1, chi2=chi2, phiRef=phiRef, rel_anomaly=rel_anomaly, inclination=inclination, truncate_at_ISCO=truncate_at_ISCO, truncate_at_tmin=truncate_at_tmin)
 
-    
-    def simulate_inspiral_mass_dependent(self, total_mass, distance, ecc_ref=None, plot_polarisations=False, save_fig=False):
+    def simulate_inspiral_mass_dependent(self, total_mass, distance, custom_time_array=None, ecc_ref=None, truncate_at_ISCO=True, truncate_at_tmin=True, plot_polarisations=False, save_fig=False):
         """
         Simulate mass-independent plus and cross polarisations of the eccentric eob waveform (pyseobnr) (2,2) mode from f_start till t0 (waveform peak at t=0).
         
@@ -72,6 +72,11 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         hc [dimensionless], np.array: Time-domain cross polarisation 
         t [M], np.array: Time-domain in mass independent geometric units c=G=M=1
         """
+
+        if custom_time_array is None:
+            time_array = self.time
+        else:
+            time_array = custom_time_array
 
         # Either set ecc_ref specifically or use the class defined value
         if ecc_ref is None:
@@ -90,7 +95,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
 
         phen = phenomt.PhenomTE(
             mode=[2,2],
-            times=self.time,
+            times=time_array,
             eccentricity=ecc_ref,  
             total_mass=self.total_mass,
             distance=self.luminosity_distance,                
@@ -99,20 +104,20 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             phiRef=self.phiRef,
             inclination=self.inclination)
         
-        phen.compute_polarizations(times=self.time, distance=distance, total_mass=total_mass)
+        phen.compute_polarizations(times=time_array, distance=distance, total_mass=total_mass)
 
         
-        if phen.pWF.tmin > self.time[0]:
+        if phen.pWF.tmin > time_array[0]:
             warnings.warn(
                 "t_min is larger than parts of the specified time-domain, resulting in unphysical waveforms. "
                 "Either use the truncate_tmin=True setting to automatically truncate to start from t_min=time_array[0] "
                 "or adjust the time-array manually to start at higher values."
             )
             # mask to only include the physical range of the time-domain
-            if self.truncate_at_tmin is True:
+            if (self.truncate_at_tmin is True) and (truncate_at_tmin is True):
                 mask = self.time >= phen.pWF.tmin
 
-                self.time = self.time[mask]
+                time_array = time_array[mask]
                 phen.hp = phen.hp[mask]
                 phen.hc = phen.hc[mask]
 
@@ -120,41 +125,21 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                 del mask # clear memory
 
         # True because it's smallest truncated waveform AND true because the surrogate is called with the ISCO cut-off.
-        if (self.truncate_at_ISCO is True) :
+        if (self.truncate_at_ISCO is True) and (truncate_at_ISCO is True):
             # Truncate the waveform at ISCO frequency
-            idx_cut = self.truncate_waveform_at_isco(phen)
-            self.time = self.time[:idx_cut]
-            
-
-        print(f'time : SimInspiral_M_independent ecc = {round(ecc_ref, 3)}, M = {self.total_mass}, t=[{int(self.time[0])}, {int(self.time[-1])}, num={len(self.time)}] | computation time = {(timer()-start)} seconds')
+            idx_cut = self.truncate_waveform_at_isco(phen, time_array)
+            time_array = time_array[:idx_cut]
+        
+        print(f'time : SimInspiral_M_independent ecc = {round(ecc_ref, 3)}, M = {self.total_mass}, lum_dist={self.luminosity_distance}, t=[{int(time_array[0])}, {int(time_array[-1])}, num={len(time_array)}], f_lower={self.f_lower}, f_ref={self.f_ref} | computation time = {(timer()-start)} seconds')
 
         if plot_polarisations is True:
+            self._plot_polarisations(phen.hp, phen.hc, time_array, save_fig)
 
-            fig_simulate_inspiral = plt.figure(figsize=(12,5))
-
-            plt.plot(self.time[:len(phen.hp)], phen.hp, label = f'$h_+$', linewidth=0.6)
-            plt.plot(self.time[:len(phen.hp)], phen.hc, label = f'$h_\times$', linewidth=0.6)
-
-            plt.legend(loc = 'upper left')
-            plt.xlabel('t [s]')
-            plt.ylabel('$h_{22}]$')
-            plt.title(f'M={self.total_mass}, e={round(ecc_ref, 3)}, f_min={self.f_lower} Hz')
-            plt.grid(True)
-
-            plt.tight_layout()
-
-            if save_fig is True:
-                figname = 'Polarisations_M={}_ecc={}.png'.format(self.total_mass, round(ecc_ref, 3))
-                
-                # Ensure the directory exists, creating it if necessary and save
-                os.makedirs('Images/Polarisations', exist_ok=True)
-                fig_simulate_inspiral.savefig('Images/Polarisations/' + figname, dpi=300, bbox_inches='tight')
-
-                print('Figure is saved in Images/Polarisations/' + figname)
-
-            plt.close('all')  # Clean up plots
-
-        return phen.hp, phen.hc
+        if custom_time_array is None:
+            self.time = time_array
+            return phen.hp, phen.hc
+        else:
+            return phen.hp, phen.hc, time_array
     
     def fit_to_training_set(self, property, min_greedy_error=None, N_greedy_vecs=None, save_fits_to_file=True, plot_kernels=False, plot_fits=False, save_fig_kernels=False, save_fig_fits=False, plot_residuals_ecc_evolve=False, save_fig_ecc_evolve=False, plot_residuals_time_evolve=False, save_fig_time_evolve=False):
     
@@ -319,6 +304,9 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                 # Ensure the directory exists, creating it if necessary and save
                 os.makedirs('Straindata/GPRfits', exist_ok=True)
 
+                if self.phase_circ is None or self.amp_circ is None:
+                    self.circulair_wf()
+                    
                 np.savez(filename, GPR_fit=gaussian_fit, empirical_nodes=self.empirical_nodes_idx, residual_greedy_basis=self.residual_greedy_basis, time=self.time, lml_fits=lml_fits, training_set=training_set, greedy_parameters_idx=self.greedy_parameters_idx, uncertainty_region=np.array(uncertainty_region, dtype=object), phase_circ=self.phase_circ, amp_circ=self.amp_circ)
                 print('GPR fits saved in Straindata/GPRfits/' + filename)
         
@@ -512,29 +500,7 @@ class Load_Offline_Surrogate(Generate_Offline_Surrogate):
         truncate_at_tmin=True,
         waveforms_in_geom_units=True
     ):
-        self.time_array = time_array
-        self.chi1 = chi1
-        self.chi2 = chi2
-        self.phiRef = phiRef
-        self.rel_anomaly = rel_anomaly
-        self.inclination = inclination
-        self.f_lower = f_lower
-        self.f_ref = f_ref
-        self.reference_total_mass = reference_total_mass
-        self.reference_luminosity_distance = reference_luminosity_distance
-        self.N_greedy_vecs_amp = N_greedy_vecs_amp
-        self.N_greedy_vecs_phase = N_greedy_vecs_phase
-        self.min_greedy_error_amp = min_greedy_error_amp
-        self.min_greedy_error_phase = min_greedy_error_phase
-        self.ecc_ref_parameterspace_range = ecc_ref_parameterspace_range
-        self.amount_input_wfs = amount_input_wfs
-        self.amount_output_wfs = amount_output_wfs
-        self.truncate_at_ISCO = truncate_at_ISCO
-        self.truncate_at_tmin = truncate_at_tmin
-        self.waveforms_in_geom_units = waveforms_in_geom_units
-        
-
-        Generate_Offline_Surrogate.__init__(self, time_array=time_array, ecc_ref_parameterspace_range=ecc_ref_parameterspace_range, reference_total_mass=self.reference_total_mass, reference_luminosity_distance=self.reference_luminosity_distance, amount_input_wfs=amount_input_wfs, amount_output_wfs=amount_output_wfs, N_greedy_vecs_amp=N_greedy_vecs_amp, N_greedy_vecs_phase=N_greedy_vecs_phase, min_greedy_error_amp=min_greedy_error_amp, min_greedy_error_phase=min_greedy_error_phase, f_lower=f_lower, f_ref=f_ref, chi1=chi1, chi2=chi2, phiRef=phiRef, rel_anomaly=rel_anomaly, inclination=inclination, truncate_at_ISCO=truncate_at_ISCO, truncate_at_tmin=truncate_at_tmin, geometric_units=self.waveforms_in_geom_units)
+        Generate_Offline_Surrogate.__init__(self, time_array=time_array, ecc_ref_parameterspace_range=ecc_ref_parameterspace_range, reference_total_mass=reference_total_mass, reference_luminosity_distance=reference_luminosity_distance, amount_input_wfs=amount_input_wfs, amount_output_wfs=amount_output_wfs, N_greedy_vecs_amp=N_greedy_vecs_amp, N_greedy_vecs_phase=N_greedy_vecs_phase, min_greedy_error_amp=min_greedy_error_amp, min_greedy_error_phase=min_greedy_error_phase, f_lower=f_lower, f_ref=f_ref, chi1=chi1, chi2=chi2, phiRef=phiRef, rel_anomaly=rel_anomaly, inclination=inclination, truncate_at_ISCO=truncate_at_ISCO, truncate_at_tmin=truncate_at_tmin, geometric_units=waveforms_in_geom_units)
 
 
 
