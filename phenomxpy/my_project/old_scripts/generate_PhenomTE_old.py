@@ -14,7 +14,7 @@ warnings.simplefilter("once")
 warnings.filterwarnings("ignore", "Wswiglal-redir-stdio")
 
 
-plt.switch_backend('WebAgg')
+plt.switch_backend('Agg')
 
 class Simulate_Inspiral:
     """ Simulates time-domain (2,2) mode EOB waveform of a binary blackhole merger. Generates time-domain from starting frequency (f_lower) till peak at t=0 for time in geometric units. """
@@ -36,15 +36,13 @@ class Simulate_Inspiral:
         """
 
         # Initial parameters
-        if total_mass is None:
-            total_mass = 60 # Reference total mass for geometric frequency calculations [M_sun]
 
         self.time = SecondtoMass(time_array, total_mass) # Time array in geometric units c=G=M=1
         self.ecc_ref = ecc_ref # eccentricity of binary at start frequency
         self.f_lower =  f_lower# Start frequency [Hz]
         self.f_ref = f_ref # Reference frequency at which the waveform parameters (eccentricity, spin, ...) are defined.
         self.total_mass = total_mass # Total mass of the binary [M]
-        self.luminosity_distance = luminosity_distance # Luminosity distance of the binary [Mpc]
+        self.luminosity_distance = luminosity_distance # Luminosity distance of the binary
         self.chi1 = chi1 # Dimensionless spin of primary [float,ndarray]. If float, interpreted as z component
         self.chi2 = chi2 # Dimensionless spin of secondary [float,ndarray]. If float, interpreted as z component
         self.rel_anomaly= rel_anomaly # Relativistic anomaly. Radial phase which parametrizes the orbit within the Keplerian (relativistic) parametrization. Defaults to 0 (periastron)
@@ -55,7 +53,7 @@ class Simulate_Inspiral:
         self.mean_anomaly_start = mean_anomaly_start
 
 
-    def amplitude(self, hplus_NR, hcross_NR, geometric_units=True, luminosity_distance=None, total_mass=None):
+    def amplitude(self, hplus_NR, hcross_NR, geometric_units=True, distance=None, total_mass=None):
         """
         Calculate the amplitude from the plus and cross polarizations.
         If geometric_units is True, the amplitude is returned in geometric units.
@@ -65,7 +63,7 @@ class Simulate_Inspiral:
         if geometric_units:
             return amp_NR
         else:
-            return AmpNRtoSI(amp_NR, luminosity_distance, total_mass)
+            return AmpNRtoSI(amp_NR, distance, total_mass)
 
     def phase(self, hplus, hcross):
         """
@@ -169,7 +167,7 @@ class Simulate_Inspiral:
 
             os.makedirs('Images/ISCO', exist_ok=True)  # Ensure the directory exists
             ISCO_vs_Mf_after.savefig('Images/ISCO/truncate_at_ISCO_vs_Mf_M={}_e={}_f_lower={}.svg'.format(self.total_mass, round(phen.pWF.eccentricity, 2), self.f_lower), dpi=300, bbox_inches='tight')
-            # plt.close('all') 
+            plt.close('all') 
             print('Figure is saved in Images/ISCO')
             
         # Clean memory
@@ -177,7 +175,8 @@ class Simulate_Inspiral:
 
         return idx_cut
         
-    def simulate_inspiral(self, total_mass=None, luminosity_distance=None, custom_time_array=None, ecc_ref=None, truncate_at_ISCO=False, truncate_at_tmin=False, geometric_units=True, plot_polarisations=False, save_fig=False):
+      
+    def simulate_inspiral_mass_independent(self, ecc_ref=None, custom_time_array=None, plot_polarisations=False, save_fig=False, truncate_at_ISCO=False):
         """
         Simulate mass-independent plus and cross polarisations of the eccentric eob waveform (pyseobnr) (2,2) mode from f_start till t0 (waveform peak at t=0).
         
@@ -191,9 +190,8 @@ class Simulate_Inspiral:
         ----------------
         hp [dimensionless], np.array: Time-domain plus polarisation 
         hc [dimensionless], np.array: Time-domain cross polarisation 
-        t [M], np.array: Time-domain in mass independent geometric units c=G=M=1
-        """
 
+        """
         if custom_time_array is None:
             time_array = self.time
         else:
@@ -207,42 +205,23 @@ class Simulate_Inspiral:
 
         # To compute the runtime for 1 simulated waveform
         start = timer()
-        
 
-        if (geometric_units is False) and ((total_mass is not None) or (luminosity_distance is not None)):
-            reference_total_mass = 60
-            f_ref_geom = HztoMf(self.f_ref, reference_total_mass)
-            f_lower_geom = HztoMf(self.f_lower, reference_total_mass)
-
-            f_ref = MftoHz(f_ref_geom, total_mass)
-            f_lower = MftoHz(f_lower_geom, total_mass)
-        elif (geometric_units is False) and ((total_mass is None) or (luminosity_distance is None)):
-            warnings.warn("For geometric_units=False, both total_mass and luminosity_distance must be provided.")
-        elif (geometric_units is True) and ((total_mass is not None) or (luminosity_distance is not None)):
-            total_mass = None
-            luminosity_distance = None
-            warnings.warn("total_mass and luminosity_distance are ignored when geometric_units=True.")
-        else:
-            total_mass = 60 # Reference total mass for geometric frequency calculations [M_sun] in case of geometric units
-            f_ref = self.f_ref
-            f_lower = self.f_lower
-
-        
         phen = phenomt.PhenomTE(
             mode=[2,2],
             times=time_array,
             eccentricity=ecc_ref,  
-            total_mass=total_mass, # Used as reference total_mass to calculate geometric frequency during the waveform generation.           
-            f_ref=f_ref,                   
-            f_lower=f_lower,
+            total_mass=self.total_mass,
+            distance=self.luminosity_distance,                
+            f_ref=self.f_ref,                   
+            f_lower=self.f_lower,
             phiRef=self.phiRef,
-            inclination=self.inclination)
+            inclination=self.inclination,
+            mean_anomaly = self.mean_anomaly_start)
         
-        if geometric_units is False:
-            phen.compute_polarizations(times=time_array, total_mass=total_mass, distance=luminosity_distance)
-        else:
-            phen.compute_polarizations(times=time_array)
 
+        phen.compute_polarizations(times=time_array)
+
+        
         if phen.pWF.tmin > time_array[0]:
             warnings.warn(
                 "t_min is larger than parts of the specified time-domain, resulting in unphysical waveforms. "
@@ -250,118 +229,33 @@ class Simulate_Inspiral:
                 "or adjust the time-array manually to start at higher values."
             )
             # mask to only include the physical range of the time-domain
-            if (self.truncate_at_tmin is True) and (truncate_at_tmin is True):
-                mask = self.time >= phen.pWF.tmin
+            if self.truncate_at_tmin is True:
+                mask = time_array >= phen.pWF.tmin
 
                 time_array = time_array[mask]
                 phen.hp = phen.hp[mask]
                 phen.hc = phen.hc[mask]
 
-                print(f'NEW TIME-DOMAIN (in geometric units): [{int(self.time[0])}, {int(self.time[-1])}] M')
+                print(f'NEW TIME-DOMAIN (in geometric units): [{int(time_array[0])}, {int(time_array[-1])}] M')
                 del mask # clear memory
-        
+
         # True because it's smallest truncated waveform AND true because the surrogate is called with the ISCO cut-off.
-        if (self.truncate_at_ISCO is True) and (truncate_at_ISCO is True):
+        if (truncate_at_ISCO is True) and (self.truncate_at_ISCO is True):
             # Truncate the waveform at ISCO frequency
             idx_cut = self.truncate_waveform_at_isco(phen, time_array)
             time_array = time_array[:idx_cut]
-        
-        print(f'time : SimInspiral_M_independent ecc = {round(ecc_ref, 3)}, M = {self.total_mass}, lum_dist={self.luminosity_distance}, t=[{int(time_array[0])}, {int(time_array[-1])}, num={len(time_array)}], f_lower={self.f_lower}, f_ref={self.f_ref} | computation time = {(timer()-start)} seconds')
+            
+
+        print(f'time : SimInspiral_M_independent ecc = {round(ecc_ref, 3)}, M = {self.total_mass}, t=[{int(time_array[0])}, {int(time_array[-1])}, num={len(time_array)}] | computation time = {(timer()-start)} seconds')
 
         if plot_polarisations is True:
-            self._plot_polarisations(phen.hp, phen.hc, time_array, save_fig)
+            self._plot_polarisations(phen.hp, phen.hc, time_array, save_fig=save_fig)
 
         if custom_time_array is None:
             self.time = time_array
             return phen.hp, phen.hc
         else:
             return phen.hp, phen.hc, time_array
-        
-    # def simulate_inspiral_mass_independent(self, ecc_ref=None, custom_time_array=None, plot_polarisations=False, save_fig=False, truncate_at_ISCO=False, truncate_at_tmin=False):
-    #     """
-    #     Simulate mass-independent plus and cross polarisations of the eccentric eob waveform (pyseobnr) (2,2) mode from f_start till t0 (waveform peak at t=0).
-        
-    #     Parameters:
-    #     ----------------
-    #     ecc_ref [dimensionless], float : For other eccentricity than Class specified ecc_ref, set new value.
-    #     plot_polarisations, True OR False, bool : For a plot of the plus and cross polarisations, set to True.
-    #     save_fig, True Or False, bool : If plot of the polarisations should be saved to a automatically created folder \Images, set to True.
-        
-    #     Returns:
-    #     ----------------
-    #     hp [dimensionless], np.array: Time-domain plus polarisation 
-    #     hc [dimensionless], np.array: Time-domain cross polarisation 
-
-    #     """
-        
-    #     if custom_time_array is None:
-    #         time_array = self.time
-    #     else:
-    #         time_array = custom_time_array
-
-    #     # Either set ecc_ref specifically or use the class defined value
-    #     if ecc_ref is None:
-    #         ecc_ref = self.ecc_ref
-    #     else:
-    #         ecc_ref = ecc_ref
-
-    #     # To compute the runtime for 1 simulated waveform
-    #     start = timer()
-    #     print(len(time_array))
-
-    #     phen = phenomt.PhenomTE(
-    #         mode=[2,2],
-    #         times=time_array,
-    #         eccentricity=ecc_ref,  
-    #         total_mass=self.total_mass,            
-    #         f_ref=self.f_ref,                   
-    #         f_lower=self.f_lower,
-    #         phiRef=self.phiRef,
-    #         inclination=self.inclination,
-    #         mean_anomaly = self.mean_anomaly_start)
-        
-
-    #     phen.compute_polarizations(times=time_array)
-    #     print(len(time_array), time_array)
-
-        
-    #     if phen.pWF.tmin > time_array[0]:
-    #         warnings.warn(
-    #             "t_min is larger than parts of the specified time-domain, resulting in unphysical waveforms. "
-    #             "Either use the truncate_tmin=True setting to automatically truncate to start from t_min=time_array[0] "
-    #             "or adjust the time-array manually to start at higher values."
-    #         )
-    #         # mask to only include the physical range of the time-domain
-    #         if (self.truncate_at_tmin is True) and (truncate_at_tmin is True):
-    #             mask = time_array >= phen.pWF.tmin
-    #             print('tmin', phen.pWF.tmin, time_array[0])
-    #             time_array = time_array[mask]
-    #             phen.hp = phen.hp[mask]
-    #             phen.hc = phen.hc[mask]
-
-    #             print(f'NEW TIME-DOMAIN (in geometric units): [{int(time_array[0])}, {int(time_array[-1])}] M')
-    #             del mask # clear memory
-        
-    #     print(len(time_array))
-
-    #     # True because it's smallest truncated waveform AND true because the surrogate is called with the ISCO cut-off.
-    #     if (truncate_at_ISCO is True) and (self.truncate_at_ISCO is True):
-    #         # Truncate the waveform at ISCO frequency
-    #         idx_cut = self.truncate_waveform_at_isco(phen, time_array)                   
-    #         time_array = time_array[:idx_cut]
-    #         print(idx_cut)
-            
-    #     print(len(time_array))
-    #     print(f'time : SimInspiral_M_independent ecc = {round(ecc_ref, 3)}, t=[{int(time_array[0])}, {int(time_array[-1])}, num={len(time_array)}], f_lower={self.f_lower}, f_ref={self.f_ref} | computation time = {(timer()-start)} seconds')
-
-    #     if plot_polarisations is True:
-    #         self._plot_polarisations(phen.hp, phen.hc, time_array, save_fig=save_fig)
-
-    #     if custom_time_array is None:
-    #         self.time = time_array
-    #         return phen.hp, phen.hc
-    #     else:
-    #         return phen.hp, phen.hc, time_array
     
     def _plot_polarisations(self, hp, hc, time_array=None, save_fig=True):
         """
@@ -382,8 +276,8 @@ class Simulate_Inspiral:
             time_array = self.time
             
         fig = plt.figure(figsize=(12,5))
-      
-        plt.plot(self.time[-len(hp):], hp, label = f'$h_+$ mass indp', linewidth=0.6)
+
+        plt.plot(self.time[-len(hp):], hp, label = f'$h_+$', linewidth=0.6)
         # plt.plot(self.time[:len(hc)], hc, label = f'$h_\times$', linewidth=0.6)
 
         plt.legend(loc = 'upper left')
@@ -393,7 +287,7 @@ class Simulate_Inspiral:
         plt.grid(True)
 
         plt.tight_layout()
-        # plt.show()
+        plt.show()
 
         if save_fig is True:
             figname = 'Polarisations_M={}_ecc={}.png'.format(self.total_mass, round(self.ecc_ref, 3))
@@ -402,9 +296,9 @@ class Simulate_Inspiral:
             os.makedirs('Images/Polarisations', exist_ok=True)
             fig.savefig('Images/Polarisations/' + figname, dpi=300, bbox_inches='tight')
 
-            print('Figure is saved in Images/Polarisations')
+            print(f'Figure is saved in Images/Polarisations/{figname}')
 
-        # plt.close('all')
+        plt.close('all')
 
 
     
@@ -465,8 +359,9 @@ class Waveform_Properties_l(Simulate_Inspiral):
         """
         
         if self.phase_circ is None or self.amp_circ is None:
+            print('checking if hp_circ and hc_circ are set')
             # Generate arrays
-            self.hp_circ, self.hc_circ = self.simulate_inspiral(ecc_ref=0)
+            self.hp_circ, self.hc_circ = self.simulate_inspiral_mass_independent(ecc_ref=0)
 
 
             self.phase_circ = self.phase(self.hp_circ, self.hc_circ)
@@ -558,7 +453,7 @@ class Waveform_Properties_l(Simulate_Inspiral):
 
             plt.tight_layout()
 
-            # plt.close('all')  # Clean up plots
+            plt.close('all')  # Clean up plots
 
             if save_fig is True:
                 figname = f'Residual {property} M={self.total_mass}, ecc={round(ecc_ref, 3)}.png'
@@ -580,7 +475,7 @@ class Waveform_Properties(Simulate_Inspiral):
     Calculates and plots residuals (residual = eccentric - non-eccentric) of waveform properties: amplitude, phase and frequency.
     """
 
-    def __init__(self, time_array, ecc_ref, total_mass, luminosity_distance, f_lower=10, f_ref=20, chi1=0, chi2=0, phiRef=0., rel_anomaly=0., inclination=0., truncate_at_ISCO=True, truncate_at_tmin=True):
+    def __init__(self, time_array, ecc_ref, total_mass, luminosity_distance, f_lower=10, f_ref=20, chi1=0, chi2=0, phiRef=0., rel_anomaly=0., inclination=0., truncate_at_ISCO=True, truncate_at_tmin=True, **kwargs):
         """
         Parameters:
         ----------------
@@ -598,7 +493,21 @@ class Waveform_Properties(Simulate_Inspiral):
         self.amp_circ = None # Amplitude of the non-eccentric inspiral waveform
 
         # Inherit parameters from Simulate_Inspiral class
-        Simulate_Inspiral.__init__(self, time_array=time_array, ecc_ref=ecc_ref, total_mass=total_mass, luminosity_distance=luminosity_distance, f_lower=f_lower, f_ref=f_ref, chi1=chi1, chi2=chi2, phiRef=phiRef, rel_anomaly=rel_anomaly, inclination=inclination, truncate_at_ISCO=truncate_at_ISCO, truncate_at_tmin=truncate_at_tmin)
+        super().__init__(
+            time_array=time_array,
+            ecc_ref=ecc_ref,
+            total_mass=total_mass,
+            luminosity_distance=luminosity_distance,
+            f_lower=f_lower,
+            f_ref=f_ref,
+            chi1=chi1,
+            chi2=chi2,
+            phiRef=phiRef,
+            rel_anomaly=rel_anomaly,
+            inclination=inclination,
+            truncate_at_ISCO=truncate_at_ISCO,
+            truncate_at_tmin=truncate_at_tmin
+        )
 
     def circulair_wf(self):
         """
@@ -612,10 +521,10 @@ class Waveform_Properties(Simulate_Inspiral):
 
         """
         
-        if (self.phase_circ is None) or (self.amp_circ is None):
+        if self.phase_circ is None or self.amp_circ is None:
             print('checking if hp_circ and hc_circ are set')
             # Generate arrays
-            self.hp_circ, self.hc_circ = self.simulate_inspiral(ecc_ref=0)
+            self.hp_circ, self.hc_circ = self.simulate_inspiral_mass_independent(ecc_ref=0)
             
             self.phase_circ = self.phase(self.hp_circ, self.hc_circ)
             self.amp_circ = self.amplitude(self.hp_circ, self.hc_circ)
@@ -626,7 +535,8 @@ class Waveform_Properties(Simulate_Inspiral):
             self.amp_circ = self.amp_circ[:len(self.time)]
         else:
             pass # self.hp_circ and self.hc_circ are already set, no need to recompute
-        
+
+
         
 
     def calculate_residual(self, hp, hc, ecc_ref=None, property=None, plot_residual=False, save_fig=False):
@@ -651,18 +561,21 @@ class Waveform_Properties(Simulate_Inspiral):
 
         # Calculate plus and cross polarizations of circular (non-eccentric) waveform
         self.circulair_wf()
+
         # Calculate phase from plus and cross polarizations
         if property == 'phase':
             circ = self.phase_circ# non-eccentric case
             eccentric = self.phase(hp, hc) # eccentric case
             units = '[radians]'
+
             # Residual = circular - eccentric to prevent negative residual values
             residual = circ - eccentric # to prevent negative values
+
             # Warning for negative residual values
 
             if eccentric[1] < 0: # 
                 warnings.warn("Eccentric phase has negative starting values. This may not be expected for physical waveforms. This usually happens when the eccentric waveformlength is shorter than the chosen time array. Consider decreasing the time array length or decreasing the eccentricity.")
-            
+
         # Calculate amplitude from plus and cross polarisations
         elif property == 'amplitude':
             circ = self.amp_circ # non-eccentric case
@@ -674,6 +587,7 @@ class Waveform_Properties(Simulate_Inspiral):
         else:
             print('Choose property = "phase", "amplitude", "frequency"', property, 2)
             sys.exit(1)
+
         if plot_residual is True:
             fig_residual = plt.figure()
             
@@ -689,7 +603,7 @@ class Waveform_Properties(Simulate_Inspiral):
 
             plt.tight_layout()
 
-            # plt.close('all')  # Clean up plots
+            plt.close('all')  # Clean up plots
 
             if save_fig is True:
                 figname = f'Residual {property} M={self.total_mass}, ecc={round(ecc_ref, 3)}.png'
@@ -701,15 +615,16 @@ class Waveform_Properties(Simulate_Inspiral):
                 print('Figure is saved in Images/Residuals')
         
         del circ, eccentric # clear memory
+
         return residual
+
 
     
 # sampling_frequency = 2048 # or 4096
 # duration = 4 # seconds
 # time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
 # wp = Waveform_Properties_l(time_array=time_array, ecc_ref=0.2, total_mass=60, luminosity_distance=200, truncate_at_ISCO=False)
-# hp, hc = wp.simulate_inspiral_mass_independent(ecc_ref=0.2, plot_polarisations=True, save_fig=True, truncate_at_ISCO=True, truncate_at_tmin=True)
-# hp, hc = wp.simulate_inspiral(ecc_ref=0.2, plot_polarisations=True, save_fig=True, truncate_at_ISCO=False, truncate_at_tmin=False)
+# hp, hc = wp.simulate_inspiral_mass_independent()
 
 # wp.calculate_residual(hp, hc, property='amplitude', plot_residual=True, save_fig=True)
 # wp.calculate_residual(hp, hc, property='phase', plot_residual=True, save_fig=True)
