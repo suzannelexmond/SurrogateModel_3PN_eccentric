@@ -591,3 +591,69 @@ def _save_GPR_fits_to_file(self, property, gaussian_fit, training_set, lml_fits,
                 print('GPR fits saved in Straindata/GPRfits/' + filename)
 
 self.phase_circ is None but a None array because it loads like None from a file, so it never calculates self.phase_circ in the self.circulair() function! Add a call to generate circulair() before saving the file.
+
+
+
+25/09/2025:
+
+# Waveform Comparison: Relative Errors vs Mismatch
+
+1. Definitions
+
+Given true waveform h_true and surrogate waveform h_sur:
+
+Complex waveforms:
+    h_true = A_true * exp(i * phi_true)
+    h_sur  = A_sur  * exp(i * phi_sur)
+
+Pointwise relative errors:
+    Relative amplitude error:
+        rel_amp = |A_sur - A_true| / |A_true|
+    
+    Relative phase error:
+        rel_phase = |phi_sur - phi_true|
+    
+    Complex waveform relative error:
+        rel_h = |h_sur - h_true| / |h_true|
+
+2. Mismatch (1 - match)
+
+The mismatch is a global, phase- and time-maximized measure:
+
+    Mismatch:
+        M = 1 - max_{t0, phi0} ( <h_true, h_sur> / (||h_true|| * ||h_sur||) )
+
+Where:
+    <h_true, h_sur> = sum_n h_true[n] * conj(h_sur[n])    # inner product
+    ||h|| = sqrt(<h, h>)                                   # norm
+    phi0 = global phase shift
+    t0   = time shift
+
+Properties:
+    - Mismatch is sensitive only to the component of h_sur orthogonal to h_true.
+    - Global phase/time offsets are absorbed by maximization.
+
+3. Small error approximation
+
+For small errors:
+    h_sur = (1 + epsilon_A) * h_true * exp(i * epsilon_phi)
+    
+Then:
+    delta_h = h_sur - h_true ≈ (epsilon_A + i * epsilon_phi) * h_true
+
+Mismatch scales quadratically:
+    M ≈ 0.5 * ||delta_h_perp||^2 / ||h_true||^2
+      ~ 0.5 * (epsilon)^2
+
+Interpretation:
+    - Relative errors ~ epsilon (linear)
+    - Mismatch ~ epsilon^2 / 2 (quadratic)
+    - Therefore, even relative errors ~ 1e-4 can yield mismatches ~ 1e-8
+
+4. Key intuition
+
+- Relative errors: local, linear, pointwise differences
+- Mismatch: global, normalized, phase- and time-maximized
+- Mismatch is always smaller than relative errors for well-aligned waveforms
+- Only shape-distorting errors contribute significantly to mismatch
+
