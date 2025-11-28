@@ -20,7 +20,6 @@ class Generate_Online_Surrogate(Load_Offline_Surrogate):
         inclination=0.,
         truncate_at_ISCO=True,
         truncate_at_tmin=True,
-        **kwargs
     ):
         self.total_mass = total_mass
         self.output_ecc_ref = ecc_ref
@@ -30,10 +29,11 @@ class Generate_Online_Surrogate(Load_Offline_Surrogate):
             self,
             time_array=time_array,
             ecc_ref_parameterspace_range=[0.0, 0.3],
-            amount_input_wfs=99,
+            amount_input_wfs=60,
             amount_output_wfs=500,
-            N_greedy_vecs_amp=30,
-            N_greedy_vecs_phase=30,
+            N_greedy_vecs_amp=40,
+            N_greedy_vecs_phase=40,
+            minimum_spacing_greedy=0.008,
             f_lower=f_lower,
             f_ref=f_ref,
             chi1=chi1,
@@ -516,9 +516,9 @@ class Call_Surrogate(Generate_Online_Surrogate):
             f"Ni={self.amount_input_wfs}_"
             f"No={self.amount_output_wfs}_"
             f"gp={self.min_greedy_error_phase}_"
-            f"ga={self.min_greedy_error_amp}_"
             f"Ngp={self.N_greedy_vecs_phase}_"
-            f"Nga={self.N_greedy_vecs_amp}.npz", allow_pickle=True)
+            f"Nga={self.N_greedy_vecs_amp}_"
+            f"min_s={self.minimum_spacing_greedy}.npz", allow_pickle=True)
 
 
             # Amplitude data
@@ -586,7 +586,7 @@ class Call_Surrogate(Generate_Online_Surrogate):
         # Warning for inconsistency in geometric_units parameter with class object
         geometric_units, total_mass, luminosity_distance = self.geometric_units_warning(geometric_units, total_mass, luminosity_distance)
 
-
+        self._printed_surrogate_loaded = False
         # Check if surrogate is already loaded, if not load it
         if self.surrogate_amp is None or self.surrogate_phase is None:
             print('Load surrogate ...')
@@ -594,7 +594,9 @@ class Call_Surrogate(Generate_Online_Surrogate):
             self.load_offline_surrogate()
             print('Load offline surrogate. Time taken:', time.time() - start)
         else:
-            print('Surrogate already loaded, skipping loading step.')
+            if not self._printed_surrogate_loaded:
+                print('Surrogate already loaded, skipping loading step.')
+                self._printed_surrogate_loaded = True
         
 
         self.surrogate_amp, self.surrogate_phase = self.generate_surrogate_waveform(
@@ -627,6 +629,14 @@ class Call_Surrogate(Generate_Online_Surrogate):
         
         return self.hplus, self.hcross
     
+
+
+
+
+
+
+
+
     
 # sampling_frequency = 2048 # or 4096
 # duration = 4 # seconds
