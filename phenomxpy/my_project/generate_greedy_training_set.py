@@ -13,7 +13,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
     """
 
-    def __init__(self, time_array, ecc_ref_parameterspace, N_basis_vecs_amp=None, N_basis_vecs_phase=None, min_greedy_error_amp=None, min_greedy_error_phase=None, minimum_spacing_greedy=0.005, f_ref=20, f_lower=10, chi1=0, chi2=0, phiRef=0., rel_anomaly=0., inclination=0., truncate_at_ISCO=True, truncate_at_tmin=True):
+    def __init__(self, time_array, ecc_ref_parameterspace, mean_ano_parameterspace, N_basis_vecs_amp=None, N_basis_vecs_phase=None, min_greedy_error_amp=None, min_greedy_error_phase=None, minimum_spacing_greedy=0.005, f_ref=20, f_lower=10, chi1=0, chi2=0, phiRef=0., rel_anomaly=0., inclination=0., truncate_at_ISCO=True, truncate_at_tmin=True):
         """
         Parameters:
         ----------------
@@ -51,7 +51,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         # Inherit parameters from all previously defined classes
         Waveform_Properties.__init__(self, time_array=time_array, ecc_ref=None, total_mass=None, luminosity_distance=None, f_lower=f_lower, f_ref=f_ref, chi1=chi1, chi2=chi2, phiRef=phiRef, rel_anomaly=rel_anomaly, inclination=inclination, truncate_at_ISCO=truncate_at_ISCO, truncate_at_tmin=truncate_at_tmin)
 
-    def generate_property_dataset(self, ecc_list, property, save_dataset_to_file=None, plot_residuals_time_evolv=False, plot_residuals_eccentric_evolv=False, save_fig_eccentric_evolv=False, save_fig_time_evolve=False):
+    def generate_property_dataset(self, ecc_list, property, save_dataset_to_file=None, plot_residuals_time_evolv=False, plot_residuals_eccentric_evolv=False, save_fig_eccentric_evolv=False, save_fig_time_evolve=False, show_legend=True):
         """
         Generates a dataset of waveform residuals based on the specified property for a certain range of eccentricities (ecc).
 
@@ -100,7 +100,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
         # If plot_residuals is True, plot whole residual dataset
         if (plot_residuals_eccentric_evolv is True) or (plot_residuals_time_evolv is True):
-            self._plot_residuals(residual_dataset, ecc_list, property, plot_residuals_eccentric_evolv, plot_residuals_time_evolv, save_fig_eccentric_evolv, save_fig_time_evolve )
+            self._plot_residuals(residual_dataset, ecc_list, property, plot_residuals_eccentric_evolv, plot_residuals_time_evolv, save_fig_eccentric_evolv, save_fig_time_evolve, show_legend=show_legend )
         
         return residual_dataset
     
@@ -195,7 +195,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             del residual
         return residual_dataset
     
-    def _plot_residuals(self, residual_dataset, ecc_list, property, plot_eccentric_evolv=False, plot_time_evolve=False, save_fig_eccentric_evolve=False, save_fig_time_evolve=False):
+    def _plot_residuals(self, residual_dataset, ecc_list, property, plot_eccentric_evolv=False, plot_time_evolve=False, save_fig_eccentric_evolve=False, save_fig_time_evolve=False, show_legend=True):
         """Function to plot residuals dataset including save figure option."""
         if plot_eccentric_evolv is True:
             fig_residuals_ecc = plt.figure()
@@ -213,7 +213,9 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
             plt.title(f'Residuals {property}')
             plt.grid(True)
-            plt.legend(loc='upper left', fontsize='small')
+
+            if show_legend:
+                plt.legend(loc='upper right', fontsize='small', ncol=2)
 
             plt.tight_layout()
 
@@ -221,7 +223,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
                 ISCO = '' if self.truncate_at_ISCO else 'NO_ISCO_'
                 tmin = '' if self.truncate_at_tmin else 'NO_tmin_'
 
-                figname = f'Images/Residuals/Residuals_eccentric_evolv_{property}_{ISCO}{tmin}M={self.total_mass}_ecc_list=[{round(min(ecc_list), 2)}_{round(max(ecc_list), 2)}_N={len(self.ecc_ref_parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}.png'
+                figname = f'Images/Residuals/Residuals_eccentric_evolv_{property}_{ISCO}_{tmin}_M={self.total_mass}_ecc_list=[{round(min(ecc_list), 2)}_{round(max(ecc_list), 2)}_N={len(self.ecc_ref_parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}.png'
                
                 # Ensure the directory exists, creating it if necessary and save
                 os.makedirs('Images/Residuals', exist_ok=True)
@@ -234,7 +236,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             fig_residuals_t = plt.figure()
 
             for i in range(len(residual_dataset)):
-                plt.plot(self.time, residual_dataset[i], label='e$_{min}$' + f' = {round(ecc_list[i], 3)}', linewidth=0.6)
+                plt.plot(self.time, residual_dataset[i], label='e$_{ref}$' + f' = {round(ecc_list[i], 3)}', linewidth=0.6)
                
             plt.xlabel('t [M]')
             if property == 'phase':
@@ -247,7 +249,9 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
             plt.title(f'Residuals {property}')
             plt.grid(True)
-            plt.legend()
+
+            if show_legend:
+                plt.legend(loc='upper right', fontsize='small', ncol=2)
 
             plt.tight_layout()
 
@@ -255,9 +259,10 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
                 ISCO = '' if self.truncate_at_ISCO else 'NO_ISCO'
                 tmin = '' if self.truncate_at_tmin else 'NO_tmin'
 
-           
+
+
                 figname = f'Images/Residuals/Residuals_time_evolv_{property}_{ISCO}_{tmin}_M={self.total_mass}_ecc_list=[{min(ecc_list)}_{max(ecc_list)}_N={len(self.ecc_ref_parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}.png'
-           
+
                 # Ensure the directory exists, creating it if necessary and save
                 os.makedirs('Images/Residuals', exist_ok=True)
                 fig_residuals_t.savefig(figname)
@@ -1615,14 +1620,16 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             fig.savefig(figname)
             print(self.colored_text(f'Figure is saved in {figname}', 'blue'))
 
-# sampling_frequency = 2048 # or 4096
-# duration = 4 # seconds
-# time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
+sampling_frequency = 2048 # or 4096
+duration = 4 # seconds
+time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
 
-# gt = Generate_TrainingSet(time_array=time_array, ecc_ref_parameterspace=np.linspace(0, 0.3, num=40), N_basis_vecs_amp=20, N_basis_vecs_phase=20,
-#                           minimum_spacing_greedy=0.003, )
-# res_ds_phase = gt.generate_property_dataset(np.linspace(0, 0.3, num=40), 'phase')
-# res_ds_amp = gt.generate_property_dataset(np.linspace(0, 0.2, num=40), 'amplitude')
+gt = Generate_TrainingSet(time_array=time_array, ecc_ref_parameterspace=np.linspace(0, 0.3, num=10), mean_ano_parameterspace=[0], N_basis_vecs_amp=20, N_basis_vecs_phase=20,
+                          minimum_spacing_greedy=0.003 )
+res_ds_phase = gt.generate_property_dataset(np.linspace(0, 0.3, num=10), 'phase', plot_residuals_time_evolv=True, save_fig_time_evolve=True, plot_residuals_eccentric_evolv=True, save_fig_eccentric_evolv=True)
+res_ds_amp = gt.generate_property_dataset(np.linspace(0, 0.3, num=10), 'amplitude', plot_residuals_time_evolv=True, save_fig_time_evolve=True, plot_residuals_eccentric_evolv=True, save_fig_eccentric_evolv=True)
+# hp, hc = gt.simulate_inspiral(0.3, geometric_units=True)
+# res_ds_amp = gt.calculate_residual(hp, hc, 0.3, 'amplitude', plot_residual=True, save_fig=True)
 # gt.get_greedy_parameters(U=res_ds_phase, property='phase', N_greedy_vecs=21)
 # gt.get_greedy_parameters(U=res_ds_amp, property='amplitude', N_greedy_vecs=21)
 # gt.get_empirical_nodes(res_ds_phase, 'phase', plot_emp_nodes_at_ecc=0.1, save_fig=True)

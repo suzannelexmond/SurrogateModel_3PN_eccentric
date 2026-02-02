@@ -435,11 +435,11 @@ class Generate_Online_Surrogate_Testing(Load_Offline_Surrogate):
         # Warning for inconsistency in geometric_units parameter with class object
         if geometric_units != self.geometric_units:
             self.geometric_units = geometric_units
-            print(f"Warning: geometric_units parameter is different from the class attribute. Using geometric_units ={geometric_units} and setting class object.")
+            print(self.colored_text(f"Warning: geometric_units parameter is different from the class attribute. Using geometric_units ={geometric_units} and setting class object."), 'red')
 
         if (geometric_units is False) and (((total_mass is None) and (self.total_mass is None)) or ((luminosity_distance is None) and (self.luminosity_distance is None))):
             # For SI units: SI units but no distance or mass provided
-            raise ValueError("For SI units, please provide total_mass and luminosity_distance in function call or class object.")
+            raise ValueError(self.colored_text("For SI units, please provide total_mass and luminosity_distance in function call or class object."), 'red')
         
         elif (geometric_units is False) and (((self.total_mass is not None) and (total_mass is None)) or ((self.luminosity_distance is not None) and (luminosity_distance is None))):
             # For SI units: Use class attributes for total mass and distance if not provided in function call

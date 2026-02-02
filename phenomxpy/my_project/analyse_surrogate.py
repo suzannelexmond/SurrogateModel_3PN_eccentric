@@ -234,7 +234,7 @@ class AnalyseSurrogate(Call_Surrogate_Testing):
         
         if training_set_selection is not self.training_set_selection:
             self.training_set_selection = training_set_selection
-            print(f"WARNING: Class object training_set_selection is different from specified function variable. Updated training set selection of class self object to {self.training_set_selection} for hyperparameter optimisation.")
+            print(self.colored_text(f"WARNING: Class object training_set_selection is different from specified function variable. Updated training set selection of class self object to {self.training_set_selection} for hyperparameter optimisation."), 'red')
 
         param_grid = list(itertools.product(
             M_input_waveforms_PS, 
