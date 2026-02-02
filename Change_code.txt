@@ -1,5 +1,8 @@
-- t_ref instead of f_ref
-- make sim_inspiral independent (h/r)
-- make Sim_inspiral objects with function and use these objects for polarizations and residuals
-- Use normalised waveforms in thesis?
-- change name of residual_parameterspace
+- Change class that only function in geom to not include total mass and lum_dist
+- In training set class, just call the simulate inspiral and waveform properties classes instead of inheritence, so no class objects have to be included in training set class.
+- Put all long lines of class inheritence in rows for clearence
+- Make siminspiral_mass_indp and mass_depd 1 function
+- change amount input waveforms to 500 or something and see what greedy algorithm does
+- Train the time-domain for much lower f_lower so there's more time-domain available also for high eccentric classes
+- Build Juan's hyperparameter training algorithm for optimisation of the N_greedy vecs and input_vecs
+- 
