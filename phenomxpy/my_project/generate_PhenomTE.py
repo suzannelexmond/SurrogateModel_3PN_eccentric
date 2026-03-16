@@ -1,3 +1,5 @@
+from warnings_custom import *
+
 import sys
 import phenomxpy.phenomt as phenomt
 from phenomxpy.common import Waveform
@@ -29,7 +31,7 @@ warnings.filterwarnings("ignore", "Wswiglal-redir-stdio")
 
 plt.switch_backend('WebAgg')
 
-class Simulate_Inspiral:
+class Simulate_Inspiral(Warnings):
     """ Simulates time-domain (2,2) mode EOB waveform of a binary blackhole merger. Generates time-domain from starting frequency (f_lower) till peak at t=0 for time in geometric units. """
     
     def __init__(self, time_array, ecc_ref, total_mass, luminosity_distance, f_lower=10, f_ref=20, chi1=0, chi2=0, phiRef=0., rel_anomaly=0., inclination=0., mean_anomaly_ref=0., truncate_at_ISCO=True, truncate_at_tmin=True):
@@ -82,6 +84,8 @@ class Simulate_Inspiral:
         self.mean_anomaly = None # Mean anomaly for self.time [rad]
         self.eccentricity = None # Eccentricity for self.time [dimensionless]
     
+        Warnings.__init__(self)
+
     def simulate_inspiral(self, total_mass=None, luminosity_distance=None, custom_time_array=None, ecc_ref=None, mean_ano_ref=None, truncate_at_ISCO=False, truncate_at_tmin=False, geometric_units=True, plot_polarisations=False, save_fig_polarisations=False, plot_ISCO_cut_off=False, save_fig_ISCO_cut_off=False):
         """
         Simulate mass-independent plus and cross polarisations of the eccentric eob waveform (pyseobnr) (2,2) mode from f_start till t0 (waveform peak at t=0).
@@ -224,6 +228,15 @@ class Simulate_Inspiral:
 
         # plt.close('all')
         
+    def phase(self, hplus, hcross):
+        """
+        Calculate the phase from the plus and cross polarizations. Unitless.
+        """
+        phase = np.unwrap(np.arctan2(hcross, hplus))
+        phase -= phase[0] # Normalize phase to start at zero, correcting for the initial phase offset.
+        
+        self.phase_ecc = phase
+        return phase
     
     def truncate_waveform_at_ISCO(self, phen, time_array, plot_ISCO_cut_off=False, save_fig_ISCO_cut_off=False):
         """
@@ -235,7 +248,6 @@ class Simulate_Inspiral:
         ----------------
         phen : Phenomt object containing the waveform data (hp, hc) and time array.     
         """
-
         # Compute instantaneous phase frequency Mf = dϕ/dt / 2π
         phase = self.phase(phen.hp, phen.hc)  # Calculate phase from plus and cross polarizations
         dphi_dt = np.gradient(phase, time_array)
@@ -282,34 +294,8 @@ class Simulate_Inspiral:
         del phase, dphi_dt, Mf, f_isco, above_isco
 
         return idx_cut
+
     
-
-    def colored_text(self, text, color):
-        """
-        Returns colored text for terminal output.
-        Parameters:
-        ----------------
-        text : str : Text to be colored
-        color : str : Color name ('red', 'green', 'yellow', 'blue')
-        Returns:
-        ----------------
-        str : Colored text
-        """
-
-        colors = {
-            'red': '\033[91m',
-            'green': '\033[92m',
-            'yellow': '\033[93m',
-            'blue': '\033[94m',
-            'reset': '\033[0m'
-        }
-        return f"{colors.get(color, '')}{text}{colors['reset']}"
-        
-        
-    
-
-
-
 
 
 
@@ -351,16 +337,6 @@ class Waveform_Properties(Simulate_Inspiral):
             amp_SI = AmpNRtoSI(amp_geom, luminosity_distance, total_mass)
             self.amp_ecc = amp_SI
             return amp_SI
-
-    def phase(self, hplus, hcross):
-        """
-        Calculate the phase from the plus and cross polarizations. Unitless.
-        """
-        phase = np.unwrap(np.arctan2(hcross, hplus))
-        phase -= phase[0] # Normalize phase to start at zero, correcting for the initial phase offset.
-        
-        self.phase_ecc = phase
-        return phase
 
 
     def polarisations(self, phase, amplitude, geometric_units=True, distance=None, total_mass=None, plot_polarisations=False, save_fig=False):
@@ -598,15 +574,15 @@ time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # ti
 wp = Waveform_Properties(time_array=time_array, ecc_ref=0.2, total_mass=60, luminosity_distance=200, f_lower=10, f_ref=20, truncate_at_ISCO=True, truncate_at_tmin=True)
 # hp, hc = wp.simulate_inspiral(geometric_units=True)
 # wp.calculate_residual(hp=hp, hc=hc, property='phase', plot_residual=False, save_fig=False)
-wp.get_orbital_parameters(plot_orbital_parameters=True, save_fig_orbital_parameters=True, make_diagnostic_plots=True)
+# wp.get_orbital_parameters(plot_orbital_parameters=True, save_fig_orbital_parameters=True, make_diagnostic_plots=True)
 
 # eccentricties = [0.1, 0.2, 0.3]  # grid of eccentricities
 # # mean_anos = np.linspace(0, np.pi/2, 50)  # mean anomalies to test
 # mean_anos = [0, np.pi, 2*np.pi]
 
 # # --- Reference circular waveform ---
-# si_0 = Simulate_Inspiral(time_array=time_array, ecc_ref=0, total_mass=60, luminosity_distance=200)
-# hp_0, hc_0 = si_0.simulate_inspiral(truncate_at_ISCO=True, truncate_at_tmin=True, geometric_units=True)
+si_0 = Simulate_Inspiral(time_array=time_array, ecc_ref=0, total_mass=60, luminosity_distance=200)
+hp_0, hc_0 = si_0.simulate_inspiral(truncate_at_ISCO=True, truncate_at_tmin=True, geometric_units=True)
 
 # phase_0 = si_0.phase(hp_0, hc_0)
 # amplitude_0 = si_0.amplitude(hp_0, hc_0)
