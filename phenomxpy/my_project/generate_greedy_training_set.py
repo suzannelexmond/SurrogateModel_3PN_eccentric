@@ -2,6 +2,8 @@ from generate_PhenomTE import *
 
 from sklearn.preprocessing import normalize
 from scipy.linalg import orth
+from skreducedmodel.reducedbasis import ReducedBasis
+from skreducedmodel.empiricalinterpolation import EmpiricalInterpolation
 
 plt.switch_backend('WebAgg')
 
@@ -278,268 +280,667 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         np.savez(file_path, residual=residual_dataset, time=self.time, eccentricities=ecc_list)
         print('Residuals saved to Straindata/Residuals')
 
+    def get_greedy_parameters(self, U, property, min_greedy_error=None, N_greedy_vecs=None, normalize=True, max_tree_depth=1, plot_greedy_error=False, save_greedy_error_fig=False, plot_greedy_vectors=False, save_greedy_vecs_fig=False, plot_SVD_matrix=False, save_SVD_matrix_fig=False, show_legend=False):
+            """
+            Greedy algorithm to select representative vectors from U using an orthonormal basis.
 
-    def get_greedy_parameters(self, U, property, min_greedy_error=None, N_greedy_vecs=None, reg=1e-6, plot_greedy_error=False, save_greedy_error_fig=False, plot_greedy_vectors=False, save_greedy_vecs_fig=False, plot_greedy_basis_formation=False, minimum_spacing=None):
-        """
-        Greedy algorithm to select representative vectors from U using an orthonormal basis.
+            Parameters
+            ----------
+            U : ndarray, shape (num_vectors, vector_length)
+                Dataset of vectors to build the greedy basis from.
+            N_greedy_vecs : int, optional
+                Maximum number of vectors to include in the greedy basis.
+            tol : float, optional
+                Stop when the maximum residual norm falls below this tolerance.
+            minimum_spacing : float, optional
+                If not None, greedy points are picked with a minimum spacing in between points.
 
-        Parameters
-        ----------
-        U : ndarray, shape (num_vectors, vector_length)
-            Dataset of vectors to build the greedy basis from.
-        N_greedy_vecs : int, optional
-            Maximum number of vectors to include in the greedy basis.
-        tol : float, optional
-            Stop when the maximum residual norm falls below this tolerance.
-        minimum_spacing : float, optional
-            If not None, greedy points are picked with a minimum spacing in between points.
+            Returns
+            -------
+            greedy_basis : ndarray
+                Orthonormal greedy basis vectors.
+            greedy_indices : list
+                Indices of the vectors chosen from U.
+            residuals : list
+                Maximum residual norm at each iteration.
+            """
+            dataset = U.copy()
+            greedy_tol = min_greedy_error if min_greedy_error is not None else -np.inf
+            nmax = N_greedy_vecs if N_greedy_vecs is not None else dataset.shape[0]
+            parameters = self.ecc_ref_parameter_space_input[self.ecc_ref_parameter_space_input != 0]
 
-        Returns
-        -------
-        greedy_basis : ndarray
-            Orthonormal greedy basis vectors.
-        greedy_indices : list
-            Indices of the vectors chosen from U.
-        residuals : list
-            Maximum residual norm at each iteration.
-        """
+            reduced_basis_object = ReducedBasis(greedy_tol=greedy_tol, normalize=normalize, nmax=nmax, lmax=max_tree_depth)
 
-        if minimum_spacing is None:
-            minimum_spacing = self.minimum_spacing_greedy
-            print('minimum spacing: ', minimum_spacing)
-
-        # Make a copy of U and normalize each vector to avoid scale issues
-        U = U.copy()
-        time_array = self.time
-        folder_img = f'test_{property}_{N_greedy_vecs}'
-
-        U_normalized = normalize(U, axis=1)[1:] # Skip the first row (zero vector of ecc=0) to prevent false uniqueness due to inner product of zero vectors
-        num_vectors = U.shape[0]
-
-        greedy_basis_orthonormal = []
-        greedy_basis = []
-        greedy_indices = []
-        greedy_errors = []
-        
-        # Get delta ecc_ref for application of minimum_spacing
-        delta_ecc_ref = self.ecc_ref_parameter_space_input[1] - self.ecc_ref_parameter_space_input[0]
-        minimum_spacing_idx = int(minimum_spacing / delta_ecc_ref)
-        
-        # Mask to track valid vectors (True = can be picked)
-        valid_mask = np.ones(U_normalized.shape[0], dtype=bool)
-
-        for step in range(num_vectors):
-            # Stop if no more valid vectors due to minimum spacing
-            if not valid_mask.any():
-                print(self.colored_text(f'WARNING: break in get_greedy_params at N_greedy_vecs = {len(greedy_indices)}. No more valid vectors due to minimum spacing constraint of {minimum_spacing}.', 'red'))
-                if property == 'phase':
-                    self.N_basis_vecs_phase = len(greedy_indices)
-                elif property == 'amplitude':
-                    self.N_basis_vecs_amp = len(greedy_indices)
-
-                break
-
-            # Compute residuals: h - sum_i <h, e_i> e_i for all vectors h in U
-            if len(greedy_basis_orthonormal) == 0:
-                # First iteration: residuals are just the norms of U
-                residual_norms = np.linalg.norm(U_normalized, axis=1)
-
-            else:
-                
-
-                # Stack basis for matrix operations
-                B = np.vstack(greedy_basis_orthonormal)  # shape: (m, vector_length)
-                # Compute inner products <h, e_i> for all h in U
-                coeffs = U_normalized @ B.T      # shape: (num_vectors, m)
-                # Reconstruct projections
-                U_proj = coeffs @ B              # shape: (num_vectors, vector_length)
-                # Residuals
-                residual_norms = np.linalg.norm(U_normalized - U_proj, axis=1)
-
-                # Accumulated rounding error
-                # orth_err = np.linalg.norm(B @ B.T - np.eye(len(B)), 'fro')
-                # print("orthogonal error:", orth_err)
-                
-                if plot_greedy_basis_formation:
-                    max_idx = np.argmax(residual_norms)
-
-                    fig_comp_greedy, axs = plt.subplots(4, 1, figsize=(15, 15))
-
-                    print('shapes: ', coeffs.shape, U_proj.shape, residual_norms.shape)
-                    axs[0].scatter(self.ecc_ref_parameter_space_input[greedy_indices], np.zeros(len(greedy_indices)), label=f'current greedy indices, i={step}')
-                    axs[0].scatter(self.ecc_ref_parameter_space_input[0], 0, c='orange', label='minimum spacing')
-                    axs[0].scatter(self.ecc_ref_parameter_space_input[minimum_spacing_idx], 0, c='orange')
-                    axs[0].plot(self.ecc_ref_parameter_space_input[1:], residual_norms,  label=f'step = {step}')
-                    axs[0].set_xlabel('ecc')
-                    axs[0].set_ylabel('residuals norm')
-                    axs[0].legend()
-
-                    axs[1].scatter(self.ecc_ref_parameter_space_input[greedy_indices], np.zeros(len(greedy_indices)))
-                    for i in range(len(U_normalized)):
-                        axs[1].plot(time_array, U_normalized.T, color='grey')
-                    for j in range(step):
-                        axs[1].plot(time_array, U_normalized[greedy_indices[j] - 1], color='red')
-                    axs[1].plot(time_array, U_normalized[greedy_indices[-1] - 1], label='last added vec', color='blue')
-                    # axs[1].plot(self.ecc_ref_parameter_space_input[1:], residual_norms,  label=f'step = {step}')
-                    axs[1].set_ylabel('residuals diff')
-                    axs[1].legend()
-
-
-                    axs[2].scatter(self.ecc_ref_parameter_space_input[greedy_indices], np.zeros(len(greedy_indices)), label=f'current greedy indices, i={step}')
-                    axs[2].plot(self.ecc_ref_parameter_space_input[1:], coeffs)
-                    axs[2].set_ylabel('coeffs')
-                    axs[2].legend()
-
-                    colors = plt.cm.tab10.colors[:7]
-                    for i,c in zip([1, 2, 3, 4, 5, 6, max_idx], colors):
-                        # axs[3].plot(U_normalized[i], label="U_normalized", c=c)
-                        # axs[3].plot(U_proj[i], label="U_proj", c=c)
-                        axs[3].plot(U_normalized[i] - U_proj[i], label=f"residual {str(i)}", c=c)
-                    axs[3].legend()
-                    axs[3].set_ylabel('residuals vec')
-                    axs[3].set_xlabel('time')
-
-                    os.makedirs(f'Images/{folder_img}/', exist_ok=True)
-                    fig_comp_greedy.savefig(f'Images/{folder_img}/test_greedy_{step}.png')
-
-                    plt.close('all')
-
-
-
-            # Apply mask: exclude already-picked vectors + minimum spacing. Set non pick to -infinity so they are never picked.
-            masked_residuals = np.where(valid_mask, residual_norms, -np.inf)
-
-            # Find the vector with the largest residual
-            max_idx = np.argmax(masked_residuals)
-            max_res = residual_norms[max_idx]
-
-            # Save highest residual --> greedy error
-            greedy_errors.append(round(float(max_res), 6)) 
-            greedy_indices.append(int(max_idx + 1))  # +1 to account for the zero vector at index 0. int for clearer show of greedy incidces
-            greedy_basis.append(U[max_idx + 1])  # Store the original vector from U
-
-            # Add new vector to the orthonormal basis
-            new_vec = U_normalized[max_idx].copy()
-
-            # Modified Gram-Schmidt: single pass
-            for b in greedy_basis_orthonormal:   # use the orthonormal vectors
-                new_vec -= np.dot(new_vec, b) * b
-
-            # second pass (re-orthogonalize to remove numerical residue)
-            for b in greedy_basis_orthonormal:
-                new_vec -= np.dot(new_vec, b) * b
-
-            # Normalise vector
-            norm = np.linalg.norm(new_vec)
-            new_vec /= norm
-
-            greedy_basis_orthonormal.append(new_vec)
-
-            # Update mask to enforce minimum spacing around this index
-            start = max(0, max_idx - minimum_spacing_idx)
-            end = min(valid_mask.size, max_idx + minimum_spacing_idx + 1)
-            valid_mask[start:end] = False
-
-            # --- Check stopping conditions ---
-            if min_greedy_error is not None and (max_res <= min_greedy_error or len(greedy_basis) == len(U)):
-                break
-            if N_greedy_vecs is not None and len(greedy_basis) >= N_greedy_vecs:
-                break
+            reduced_basis_object.fit(training_set = dataset,
+                parameters = parameters,
+                physical_points = self.time
+                )
             
+            greedy_indices = []
 
-        # Stack basis for convenience
-        greedy_basis = np.vstack(greedy_basis)
-        greedy_basis_orthonormal = np.vstack(greedy_basis_orthonormal)
+            for i in range(len(reduced_basis_object.tree.leaves)):
+                # print(f'Leaf {i} leaf indices: {leaf.indices}, leaf error: {leaf.errors}')    
+                greedy_indices.extend(reduced_basis_object.tree.leaves[i].indices)
 
-        #  Plot greedy errors if requested
-        if plot_greedy_error:
-            self._plot_greedy_errors(greedy_errors, property, save_greedy_error_fig)
+            self.best_rep_parameters_idx = greedy_indices
 
-        if plot_greedy_vectors:
-            # self._plot_greedy_vectors(U, greedy_basis_orthonormal, greedy_indices, property, save_greedy_vecs_fig)
-            self._plot_greedy_vectors(U=U, greedy_basis=greedy_basis, greedy_parameters_idx=greedy_indices, property=property, save_greedy_vecs_fig=save_greedy_vecs_fig)
+            if plot_greedy_error:
+                self._plot_greedy_errors(reduced_basis_object=reduced_basis_object, dataset=dataset, property=property, save_greedy_fig=save_greedy_error_fig)
+            
+            if plot_greedy_vectors:
+                self._plot_greedy_vectors(reduced_basis_object=reduced_basis_object, property=property, save_greedy_vecs_fig=save_greedy_vecs_fig, U=None, show_legend=show_legend)
+            
+            if plot_SVD_matrix:
+                self._plot_SVD_matrix(dataset=dataset, property=property, save_SVD_matrix_fig=save_SVD_matrix_fig)
+            
+            return reduced_basis_object
 
-        print(f'Highest error of best approximation of the basis: {round(np.min(greedy_errors), 5)} | {len(greedy_basis)} basis vectors')
-        print(greedy_indices, greedy_errors)
-
-        return greedy_indices, greedy_basis_orthonormal
-
-
-    def _plot_greedy_vectors(self, greedy_basis, greedy_parameters_idx, property, save_greedy_vecs_fig, U=None):
-        """Function to plot and option to save the greedy basis vectors. If U is specified, also plot complete dataset before greedy algorithm."""
-
-        fig_greedy_vecs, (ax_main, ax_bottom) = plt.subplots(
-            2, 1, figsize=(12, 6),
-            gridspec_kw={'height_ratios': [4, 0.5]}
-        )
-
-        # --- Top plot: dataset and greedy basis vectors ---
-        if U is not None:
-            for i, vec in enumerate(U):
-                ax_main.plot(vec, color='grey', alpha=0.3, label='Vector dataset' if i == 0 else None)
-
-        for i, vec in enumerate(greedy_basis):
-            ax_main.plot(vec, color='red', linewidth=0.6,
-                        label=f'{self.ecc_ref_parameter_space_input[greedy_parameters_idx[i]]}')
-
+    def _plot_greedy_errors(self, reduced_basis_object, dataset, property=None, save_greedy_fig=False):
+        """Function to plot greedy errors of the reduced basis. Option to save figure in Images/Greedy_errors.
         
+        Properties:
+        - reduced_basis_object: ReducedBasis object from which to extract the greedy basis and calculate projection errors.
+        - dataset: ndarray, shape (num_vectors, vector_length), the dataset of vectors used to build the greedy basis.
+        - property: 'phase' or 'amplitude', used for labeling the y-axis and saving the figure with the correct name.
+        - save_greedy_fig: bool, if True, saves the figure in Images/Greedy_errors with a name that includes the property and other relevant parameters.
 
-        ax_main.set_ylabel('Vector Value')
-        ax_main.set_title(f'Greedy Basis Vectors ({len(greedy_basis)} vectors) for {property}')
-        ax_main.legend()
-        ax_main.grid(True)
+        Returns:
+        - proj_errors: list of projection errors for each number of greedy basis vectors.
+        """
 
-        # --- Bottom plot: eccentric points and greedy indices ---
-        ecc_values = self.ecc_ref_parameter_space_input # assuming first component = eccentricity
-        y = np.zeros(len(self.ecc_ref_parameter_space_input))
+        self.property_warning(property) # checks if property is correctly specified for greedy error plot
 
-        # All dataset points
-        ax_bottom.plot(ecc_values, y, color='grey', alpha=0.6, label='Dataset points')
+        reduced_basis = []
+        for i in range(len(reduced_basis_object.tree.leaves)):
+                # print(f'Leaf {i} leaf indices: {leaf.indices}, leaf error: {leaf.errors}')    
+                reduced_basis.extend(reduced_basis_object.tree.leaves[i].basis)
+        print(0)
+        reduced_basis = np.array(reduced_basis) # (n_greedy_vecs, n_time)
+        print(len(reduced_basis), ' greedy basis vectors selected')
+        # Greedy errors
+        proj_errors = []
 
-        # Greedy-selected points
-        ax_bottom.scatter(ecc_values[greedy_parameters_idx], y[greedy_parameters_idx], color='red', s=50, label='Greedy parameters')
+        for k in range(1, len(reduced_basis) + 1):
+            basis_k = reduced_basis[:k]                        # (k, n_time)
+            max_proj_err = 0.0
 
-        ax_bottom.set_yticks([])
-        ax_bottom.set_xlabel('Vector index / parameter')
-        ax_bottom.grid(True, axis='x', linestyle='--', alpha=0.5)
-        ax_main.legend(loc='best', ncol=3, fontsize='small')
+            for f in dataset:
+                # --- Best projection onto span(basis_k) ---
+                # Solve min ||f - c @ basis_k||
+                coeff_proj, *_ = np.linalg.lstsq(basis_k.T, f, rcond=None)
+                f_proj = basis_k.T @ coeff_proj
 
+                proj_err = np.linalg.norm(f - f_proj) / np.linalg.norm(f)
+                max_proj_err = max(max_proj_err, proj_err)
 
-        plt.tight_layout()
-        fig_greedy_vecs.show()
+            proj_errors.append(max_proj_err)
 
+        def stack_greedy_errors(node):
+            # if leaf node
+            if hasattr(node, "errors"):
+                return node.errors
+            # otherwise, concatenate the errors of children
+            errs = []
+            if hasattr(node, "children"):
+                for child in node.children:
+                    errs = np.hstack([errs, stack_greedy_errors(child)])
 
-        if save_greedy_vecs_fig:
-            os.makedirs('Images/Greedy_vectors', exist_ok=True)
-            plt.savefig(f'Images/Greedy_vectors/Greedy_vectors_{property}_M={self.total_mass}_ecc=[{min(self.ecc_ref_parameter_space_input)}_{max(self.ecc_ref_parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_parameter_space_input)}_ms={self.minimum_spacing_greedy}.png')
-            print('Greedy vectors fig saved to Images/Greedy_vectors')
-            # plt.close('all')
+            return errs
 
-    def _plot_greedy_errors(self, greedy_errors, property, save_greedy_fig):
-        """Function to plot and option to save the greedy errors."""
-        N_basis_vectors = np.arange(1, len(greedy_errors) + 1)
+        stacked_proj_errors = stack_greedy_errors(reduced_basis_object.tree)
 
-        fig_greedy_errors = plt.figure(figsize=(7, 5))
-        plt.plot(N_basis_vectors, greedy_errors, label='Greedy Errors')
-        plt.scatter(N_basis_vectors, greedy_errors, s=4)
-        # for i, label in enumerate(self.ecc_ref_parameter_space_input[greedy_parameters_idx]):
-        #     plt.annotate(label, (N_basis_vectors[i], greedy_errors[i]), textcoords="offset points", xytext=(5, 5), ha='center', fontsize=5.5)
-        plt.xlabel('Number of Waveforms')
-        if property == 'phase':
-            plt.ylabel(f'Greedy error $\Delta \phi$')
-        elif property == 'amplitude':
-            plt.ylabel(f'Greedy error $\Delta A$')
-        plt.yscale('log')
-        # plt.title('Greedy errors of residual {} for N = {}'.format(property, len(greedy_errors)-1))
-        plt.grid(True)
-        fig_greedy_errors.show()
+        fig_greedy_errors, ax = plt.subplots(2, 1, figsize=(12,6))
+        ax[0].semilogy(np.arange(len(stacked_proj_errors)), stacked_proj_errors, label='greedy error', lw=1.8, color='blue')
+        ax[0].set_yscale('log')
+        ax[0].set_ylabel('Greedy error')
+        ax[0].set_title(f'Greedy error per section for max_tree_depth = {reduced_basis_object.lmax}, tree_leaves = {len(reduced_basis_object.tree.leaves)}')
+        ax[0].legend()
+
+        ax[1].semilogy(np.arange(len(proj_errors)), proj_errors, label='greedy error', lw=1.8, color='blue')
+        ax[1].set_xlabel('# of greedy vectors')
+        ax[1].set_yscale('log')
+        ax[1].set_ylabel('Greedy error')
+        ax[1].set_title('Greedy error over the full basis')
+        ax[1].legend()
 
         if save_greedy_fig:
             os.makedirs('Images/Greedy_errors', exist_ok=True)
-            plt.savefig(f'Images/Greedy_errors/Greedy_error_{property}_M={self.total_mass}_ecc=[{min(self.ecc_ref_parameter_space_input)}_{max(self.ecc_ref_parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_parameter_space_input)}_gerr={min(greedy_errors)}_ms={self.minimum_spacing_greedy}.png')
+            filename = f'Greedy_error_{property}_M={self.total_mass}_ecc=[{min(self.ecc_ref_parameter_space_input)}_{max(self.ecc_ref_parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_parameter_space_input)}_gerr={min(proj_errors)}_ms={self.minimum_spacing_greedy}.png'
             
-            print('Greedy error fig saved to Images/Greedy_errors')
+            fig_greedy_errors.savefig(f'Images/Greedy_errors/{filename}')
+            
+            print(self.colored_text(f'Greedy error fig saved to Images/Greedy_errors/{filename}', 'blue'))
             # plt.close('all')
+
+        return proj_errors
+
+    def _plot_SVD_matrix(self, dataset, property, save_SVD_matrix_fig=False):
+        """Function to plot the SVD matrix of the dataset. Option to save figure in Images/SVD_matrices."""
+
+        # Perform SVD on the dataset
+        U, S, Vt = np.linalg.svd(dataset, full_matrices=False)
+
+
+        fig_SVD_matrix, axes = plt.subplots(1, 3, figsize=(18,4))
+
+        # Construct the importance spectrum plot (singular values)
+        axes[0].semilogy(S, marker='o')
+        axes[0].set_xlabel("Mode index")
+        axes[0].set_ylabel("Singular value")
+        axes[0].set_title("Singular Value Spectrum")
+        axes[0].grid(True)
+
+
+        n_modes_to_plot = 3
+
+        for i in range(n_modes_to_plot):
+            # Plot the 3 vectors corresponding to the largest singular values (most dominant coherent structure)
+            axes[1].plot(gt.time, Vt[i], label=f"Mode {i+1}") 
+
+            axes[1].set_xlabel("Time")
+            axes[1].set_ylabel("Mode amplitude")
+            axes[1].set_title("Dominant Time Modes")
+            axes[1].legend()
+            axes[1].grid(True)
+
+
+        for i in range(n_modes_to_plot):
+            # Plot the coefficients of the 3 most dominant modes as a function of eccentricity
+            axes[2].plot(ecc_ref_parameterspace, U[:, i], label=f"Mode {i+1}")
+
+        axes[2].set_xlabel("Eccentricity")
+        axes[2].set_ylabel("Mode coefficient")
+        axes[2].set_title("Mode Amplitude vs Eccentricity")
+        axes[2].legend()
+        axes[2].grid(True)
+
+        plt.tight_layout()
+
+
+        if save_SVD_matrix_fig:
+            os.makedirs('Images/Greedy_vectors/SVD_matrices', exist_ok=True)
+            filename = f'SVD_matrix_greedy_basis_{property}_M={self.total_mass}_ecc=[{min(self.ecc_ref_parameter_space_input)}_{max(self.ecc_ref_parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_parameter_space_input)}.png'
+            
+            fig_SVD_matrix.savefig(f'Images/Greedy_vectors/SVD_matrices/{filename}')
+            
+            print(self.colored_text(f'SVD matrix fig saved to Images/SVD_matrices/{filename}', 'blue'))
+            # plt.close('all')
+
+    # def _plot_greedy_vectors(self, reduced_basis_object, property, save_greedy_vecs_fig, U=None, show_legend=True):
+    #     """Function to plot and option to save the greedy basis vectors. If U is specified, also plot complete dataset before greedy algorithm."""
+      
+    #     fig_greedy_vecs, (ax_main, ax_bottom) = plt.subplots(
+    #         2, 1, figsize=(12, 6),
+    #         gridspec_kw={'height_ratios': [4, 0.5]}
+    #     )
+
+    #     # --- Top plot: dataset and greedy basis vectors ---
+    #     if U is not None:
+    #         for i, vec in enumerate(U):
+    #             ax_main.plot(vec, color='grey', alpha=0.3, label='Vector dataset' if i == 0 else None)
+
+    #     for j in range(len(reduced_basis_object.tree.leaves)):
+    #         for i, vec in enumerate(reduced_basis_object.tree.leaves[j].basis):
+    #             ax_main.plot(vec, linewidth=0.6,
+    #                         label=f'$e$={round(self.ecc_ref_parameter_space_input[self.best_rep_parameters_idx[i]], 3)}')
+    
+        
+
+    #     ax_main.set_ylabel('Vector Value')
+    #     ax_main.set_title(f'Greedy Basis Vectors ({len(self.best_rep_parameters_idx)} vectors) for {property}')
+    #     if show_legend:
+    #         ax_main.legend()
+    #     ax_main.grid(True)
+
+    #     # --- Bottom plot: eccentric points and greedy indices ---
+    #     ecc_values = self.ecc_ref_parameter_space_input # assuming first component = eccentricity
+    #     y = np.zeros(len(self.ecc_ref_parameter_space_input))
+
+    #     # All dataset points
+    #     ax_bottom.plot(ecc_values, y, color='grey', alpha=0.6, label='Dataset points')
+
+    #     # Greedy-selected points
+    #     ax_bottom.scatter(ecc_values[self.best_rep_parameters_idx], y[self.best_rep_parameters_idx], color='red', s=20, label='Greedy parameters')
+
+    #     ax_bottom.set_yticks([])
+    #     ax_bottom.set_xlabel('Vector index / parameter')
+    #     ax_bottom.grid(True, axis='x', linestyle='--', alpha=0.5)
+    #     if show_legend:
+    #         ax_main.legend(loc='best', ncol=3, fontsize='small')
+
+
+    #     plt.tight_layout()
+    #     fig_greedy_vecs.show()
+
+
+    #     if save_greedy_vecs_fig:
+    #         os.makedirs('Images/Greedy_vectors', exist_ok=True)
+    #         figname = f'Images/Greedy_vectors/Greedy_vectors_{property}_M={self.total_mass}_ecc=[{min(self.ecc_ref_parameter_space_input)}_{max(self.ecc_ref_parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_parameter_space_input)}_ms={self.minimum_spacing_greedy}.png'
+
+    #         plt.savefig(figname)
+            
+    #         print(self.colored_text(f'Greedy vectors fig saved to {figname}', 'blue'))
+    #         # plt.close('all')
+
+    def _plot_greedy_vectors(self, reduced_basis_object, property, save_greedy_vecs_fig, U=None, show_legend=True):
+        """Function to plot and optionally save the greedy basis vectors.
+        If U is specified, also plot complete dataset before greedy algorithm.
+        """
+
+        # Detect tree size from number of leaves
+        children = len(reduced_basis_object.tree.leaves)
+        print(f'Number of child nodes: {children}')
+
+        # Base figure size
+        base_width = 30
+        base_height = 5
+
+        # Extend height with number of leaves
+        fig_height = base_height + 2.5*children if children > 0 else base_height
+
+        fig_greedy_vecs, (ax_main, ax_bottom) = plt.subplots(
+            2, 1,
+            figsize=(base_width, fig_height),
+            gridspec_kw={'height_ratios': [5, 2]}
+        )
+
+        # --------------------------------------------------
+        # Top plot
+        # --------------------------------------------------
+        if U is not None:
+            for i, vec in enumerate(U):
+                ax_main.plot(
+                    vec,
+                    color='grey',
+                    alpha=0.3,
+                    label='Vector dataset' if i == 0 else None
+                )
+
+        for j in range(len(reduced_basis_object.tree.leaves)):
+            leaf = reduced_basis_object.tree.leaves[j]
+            for i, vec in enumerate(leaf.basis):
+                label = None
+                if i < len(self.best_rep_parameters_idx):
+                    label = f'$e$={round(self.ecc_ref_parameter_space_input[self.best_rep_parameters_idx[i]], 3)}'
+                ax_main.plot(vec, linewidth=0.6, label=label)
+
+        ax_main.set_ylabel('Vector Value')
+        ax_main.set_title(
+            f'Greedy Basis Vectors ({len(self.best_rep_parameters_idx)} vectors) for {property}'
+        )
+
+        if show_legend:
+            ax_main.legend(loc='best', ncol=3)
+
+        ax_main.grid(True)
+
+        # --------------------------------------------------
+        # Bottom plot: visualize tree splitting
+        # --------------------------------------------------
+
+        # First pass:
+        # traverse the tree, assign one unique color per node, and collect counts by depth
+        traversal = []
+        depth_counts = {}
+
+        color_counter = 0
+        stack = [(reduced_basis_object.tree, 0, f"C{color_counter}")]
+
+        while stack:
+            node, depth, color = stack.pop()
+            traversal.append((node, depth, color))
+
+            if hasattr(node, 'indices') and node.indices is not None:
+                n_greedy = len(node.indices)
+            else:
+                n_greedy = 0
+
+            if depth not in depth_counts:
+                depth_counts[depth] = []
+            depth_counts[depth].append(n_greedy)
+
+            # Assign globally unique colors to children
+            if hasattr(node, 'children') and node.children is not None:
+                for child in reversed(node.children):
+                    color_counter += 1
+                    stack.append((child, depth + 1, f"C{color_counter}"))
+            else:
+                # Fallback for split flags without explicit child objects
+                if hasattr(node, 'idxs_subspace1') and node.idxs_subspace1 is not None:
+                    color_counter += 1
+                    stack.append((node, depth + 1, f"C{color_counter}"))
+                if hasattr(node, 'idxs_subspace0') and node.idxs_subspace0 is not None:
+                    color_counter += 1
+                    stack.append((node, depth + 1, f"C{color_counter}"))
+
+        # Build one greedy label per depth
+        depth_labels = {}
+        for d, counts in depth_counts.items():
+            counts_str = ", ".join(str(c) for c in counts)
+            point_word = "point" if len(counts) == 1 and counts[0] == 1 else "points"
+            depth_labels[d] = f"Greedy picks (depth {d}: {counts_str} {point_word})"
+
+        used_depth_labels = set()
+        used_dataset_label = False
+
+        # Second pass: actual plotting
+        for node, depth, color in traversal:
+            x = np.asarray(node.train_parameters).squeeze()
+
+            ax_bottom.scatter(
+                x,
+                [depth] * len(x),
+                s=20,
+                alpha=0.3,
+                color='grey',
+                label=f"Node depth {depth} ({len(x)} pts)" if (depth == 0 and not used_dataset_label) else None
+            )
+
+            if depth == 0:
+                used_dataset_label = True
+
+            if hasattr(node, 'indices') and node.indices is not None:
+                greedy_params = x[node.indices]
+
+                ax_bottom.scatter(
+                    greedy_params,
+                    [depth] * len(greedy_params),
+                    s=80,
+                    edgecolor='k',
+                    facecolor=color,
+                    label=depth_labels[depth] if depth not in used_depth_labels else None
+                )
+
+                used_depth_labels.add(depth)
+
+        ax_bottom.set_xlabel("Eccentricity")
+        ax_bottom.set_ylabel("Tree depth")
+        ax_bottom.grid(True, axis='x', linestyle='--', alpha=0.5)
+
+
+        ax_bottom.legend(loc='best')
+
+        plt.tight_layout()
+
+        if save_greedy_vecs_fig:
+            os.makedirs('Images/Greedy_vectors', exist_ok=True)
+            figname = (
+                f'Images/Greedy_vectors/Greedy_vectors_{property}'
+                f'_M={self.total_mass}'
+                f'_ecc=[{min(self.ecc_ref_parameter_space_input)}_{max(self.ecc_ref_parameter_space_input)}]'
+                f'_f_lower={self.f_lower}'
+                f'_f_ref={self.f_ref}'
+                f'_iN={len(self.ecc_ref_parameter_space_input)}'
+                f'_ms={self.minimum_spacing_greedy}.png'
+            )
+
+            plt.savefig(figname)
+            print(self.colored_text(f'Greedy vectors fig saved to {figname}', 'blue'))
+
+        fig_greedy_vecs.show()
+
+    # def get_greedy_parameters(self, U, property, min_greedy_error=None, N_greedy_vecs=None, reg=1e-6, plot_greedy_error=False, save_greedy_error_fig=False, plot_greedy_vectors=False, save_greedy_vecs_fig=False, plot_greedy_basis_formation=False, minimum_spacing=None):
+    #     """
+    #     Greedy algorithm to select representative vectors from U using an orthonormal basis.
+
+    #     Parameters
+    #     ----------
+    #     U : ndarray, shape (num_vectors, vector_length)
+    #         Dataset of vectors to build the greedy basis from.
+    #     N_greedy_vecs : int, optional
+    #         Maximum number of vectors to include in the greedy basis.
+    #     tol : float, optional
+    #         Stop when the maximum residual norm falls below this tolerance.
+    #     minimum_spacing : float, optional
+    #         If not None, greedy points are picked with a minimum spacing in between points.
+
+    #     Returns
+    #     -------
+    #     greedy_basis : ndarray
+    #         Orthonormal greedy basis vectors.
+    #     greedy_indices : list
+    #         Indices of the vectors chosen from U.
+    #     residuals : list
+    #         Maximum residual norm at each iteration.
+    #     """
+
+    #     if minimum_spacing is None:
+    #         minimum_spacing = self.minimum_spacing_greedy
+    #         print('minimum spacing: ', minimum_spacing)
+
+    #     # Make a copy of U and normalize each vector to avoid scale issues
+    #     U = U.copy()
+    #     time_array = self.time
+    #     folder_img = f'test_{property}_{N_greedy_vecs}'
+
+    #     U_normalized = normalize(U, axis=1)[1:] # Skip the first row (zero vector of ecc=0) to prevent false uniqueness due to inner product of zero vectors
+    #     num_vectors = U.shape[0]
+
+    #     greedy_basis_orthonormal = []
+    #     greedy_basis = []
+    #     greedy_indices = []
+    #     greedy_errors = []
+        
+    #     # Get delta ecc_ref for application of minimum_spacing
+    #     delta_ecc_ref = self.ecc_ref_parameter_space_input[1] - self.ecc_ref_parameter_space_input[0]
+    #     minimum_spacing_idx = int(minimum_spacing / delta_ecc_ref)
+        
+    #     # Mask to track valid vectors (True = can be picked)
+    #     valid_mask = np.ones(U_normalized.shape[0], dtype=bool)
+
+    #     for step in range(num_vectors):
+    #         # Stop if no more valid vectors due to minimum spacing
+    #         if not valid_mask.any():
+    #             print(self.colored_text(f'WARNING: break in get_greedy_params at N_greedy_vecs = {len(greedy_indices)}. No more valid vectors due to minimum spacing constraint of {minimum_spacing}.', 'red'))
+    #             if property == 'phase':
+    #                 self.N_basis_vecs_phase = len(greedy_indices)
+    #             elif property == 'amplitude':
+    #                 self.N_basis_vecs_amp = len(greedy_indices)
+
+    #             break
+
+    #         # Compute residuals: h - sum_i <h, e_i> e_i for all vectors h in U
+    #         if len(greedy_basis_orthonormal) == 0:
+    #             # First iteration: residuals are just the norms of U
+    #             residual_norms = np.linalg.norm(U_normalized, axis=1)
+
+    #         else:
+                
+
+    #             # Stack basis for matrix operations
+    #             B = np.vstack(greedy_basis_orthonormal)  # shape: (m, vector_length)
+    #             # Compute inner products <h, e_i> for all h in U
+    #             coeffs = U_normalized @ B.T      # shape: (num_vectors, m)
+    #             # Reconstruct projections
+    #             U_proj = coeffs @ B              # shape: (num_vectors, vector_length)
+    #             # Residuals
+    #             residual_norms = np.linalg.norm(U_normalized - U_proj, axis=1)
+
+    #             # Accumulated rounding error
+    #             # orth_err = np.linalg.norm(B @ B.T - np.eye(len(B)), 'fro')
+    #             # print("orthogonal error:", orth_err)
+                
+    #             if plot_greedy_basis_formation:
+    #                 max_idx = np.argmax(residual_norms)
+
+    #                 fig_comp_greedy, axs = plt.subplots(4, 1, figsize=(15, 15))
+
+    #                 print('shapes: ', coeffs.shape, U_proj.shape, residual_norms.shape)
+    #                 axs[0].scatter(self.ecc_ref_parameter_space_input[greedy_indices], np.zeros(len(greedy_indices)), label=f'current greedy indices, i={step}')
+    #                 axs[0].scatter(self.ecc_ref_parameter_space_input[0], 0, c='orange', label='minimum spacing')
+    #                 axs[0].scatter(self.ecc_ref_parameter_space_input[minimum_spacing_idx], 0, c='orange')
+    #                 axs[0].plot(self.ecc_ref_parameter_space_input[1:], residual_norms,  label=f'step = {step}')
+    #                 axs[0].set_xlabel('ecc')
+    #                 axs[0].set_ylabel('residuals norm')
+    #                 axs[0].legend()
+
+    #                 axs[1].scatter(self.ecc_ref_parameter_space_input[greedy_indices], np.zeros(len(greedy_indices)))
+    #                 for i in range(len(U_normalized)):
+    #                     axs[1].plot(time_array, U_normalized.T, color='grey')
+    #                 for j in range(step):
+    #                     axs[1].plot(time_array, U_normalized[greedy_indices[j] - 1], color='red')
+    #                 axs[1].plot(time_array, U_normalized[greedy_indices[-1] - 1], label='last added vec', color='blue')
+    #                 # axs[1].plot(self.ecc_ref_parameter_space_input[1:], residual_norms,  label=f'step = {step}')
+    #                 axs[1].set_ylabel('residuals diff')
+    #                 axs[1].legend()
+
+
+    #                 axs[2].scatter(self.ecc_ref_parameter_space_input[greedy_indices], np.zeros(len(greedy_indices)), label=f'current greedy indices, i={step}')
+    #                 axs[2].plot(self.ecc_ref_parameter_space_input[1:], coeffs)
+    #                 axs[2].set_ylabel('coeffs')
+    #                 axs[2].legend()
+
+    #                 colors = plt.cm.tab10.colors[:7]
+    #                 for i,c in zip([1, 2, 3, 4, 5, 6, max_idx], colors):
+    #                     # axs[3].plot(U_normalized[i], label="U_normalized", c=c)
+    #                     # axs[3].plot(U_proj[i], label="U_proj", c=c)
+    #                     axs[3].plot(U_normalized[i] - U_proj[i], label=f"residual {str(i)}", c=c)
+    #                 axs[3].legend()
+    #                 axs[3].set_ylabel('residuals vec')
+    #                 axs[3].set_xlabel('time')
+
+    #                 os.makedirs(f'Images/{folder_img}/', exist_ok=True)
+    #                 fig_comp_greedy.savefig(f'Images/{folder_img}/test_greedy_{step}.png')
+
+    #                 plt.close('all')
+
+
+
+    #         # Apply mask: exclude already-picked vectors + minimum spacing. Set non pick to -infinity so they are never picked.
+    #         masked_residuals = np.where(valid_mask, residual_norms, -np.inf)
+
+    #         # Find the vector with the largest residual
+    #         max_idx = np.argmax(masked_residuals)
+    #         max_res = residual_norms[max_idx]
+
+    #         # Save highest residual --> greedy error
+    #         greedy_errors.append(round(float(max_res), 6)) 
+    #         greedy_indices.append(int(max_idx + 1))  # +1 to account for the zero vector at index 0. int for clearer show of greedy incidces
+    #         greedy_basis.append(U[max_idx + 1])  # Store the original vector from U
+
+    #         # Add new vector to the orthonormal basis
+    #         new_vec = U_normalized[max_idx].copy()
+
+    #         # Modified Gram-Schmidt: single pass
+    #         for b in greedy_basis_orthonormal:   # use the orthonormal vectors
+    #             new_vec -= np.dot(new_vec, b) * b
+
+    #         # second pass (re-orthogonalize to remove numerical residue)
+    #         for b in greedy_basis_orthonormal:
+    #             new_vec -= np.dot(new_vec, b) * b
+
+    #         # Normalise vector
+    #         norm = np.linalg.norm(new_vec)
+    #         new_vec /= norm
+
+    #         greedy_basis_orthonormal.append(new_vec)
+
+    #         # Update mask to enforce minimum spacing around this index
+    #         start = max(0, max_idx - minimum_spacing_idx)
+    #         end = min(valid_mask.size, max_idx + minimum_spacing_idx + 1)
+    #         valid_mask[start:end] = False
+
+    #         # --- Check stopping conditions ---
+    #         if min_greedy_error is not None and (max_res <= min_greedy_error or len(greedy_basis) == len(U)):
+    #             break
+    #         if N_greedy_vecs is not None and len(greedy_basis) >= N_greedy_vecs:
+    #             break
+            
+
+    #     # Stack basis for convenience
+    #     greedy_basis = np.vstack(greedy_basis)
+    #     greedy_basis_orthonormal = np.vstack(greedy_basis_orthonormal)
+
+    #     #  Plot greedy errors if requested
+    #     if plot_greedy_error:
+    #         self._plot_greedy_errors(greedy_errors, property, save_greedy_error_fig)
+
+    #     if plot_greedy_vectors:
+    #         # self._plot_greedy_vectors(U, greedy_basis_orthonormal, greedy_indices, property, save_greedy_vecs_fig)
+    #         self._plot_greedy_vectors(U=U, greedy_basis=greedy_basis, greedy_parameters_idx=greedy_indices, property=property, save_greedy_vecs_fig=save_greedy_vecs_fig)
+
+    #     print(f'Highest error of best approximation of the basis: {round(np.min(greedy_errors), 5)} | {len(greedy_basis)} basis vectors')
+    #     print(greedy_indices, greedy_errors)
+
+    #     return greedy_indices, greedy_basis_orthonormal
+
+
+    # def _plot_greedy_vectors(self, greedy_basis, greedy_parameters_idx, property, save_greedy_vecs_fig, U=None):
+    #     """Function to plot and option to save the greedy basis vectors. If U is specified, also plot complete dataset before greedy algorithm."""
+
+    #     fig_greedy_vecs, (ax_main, ax_bottom) = plt.subplots(
+    #         2, 1, figsize=(12, 6),
+    #         gridspec_kw={'height_ratios': [4, 0.5]}
+    #     )
+
+    #     # --- Top plot: dataset and greedy basis vectors ---
+    #     if U is not None:
+    #         for i, vec in enumerate(U):
+    #             ax_main.plot(vec, color='grey', alpha=0.3, label='Vector dataset' if i == 0 else None)
+
+    #     for i, vec in enumerate(greedy_basis):
+    #         ax_main.plot(vec, color='red', linewidth=0.6,
+    #                     label=f'{self.ecc_ref_parameter_space_input[greedy_parameters_idx[i]]}')
+
+        
+
+    #     ax_main.set_ylabel('Vector Value')
+    #     ax_main.set_title(f'Greedy Basis Vectors ({len(greedy_basis)} vectors) for {property}')
+    #     ax_main.legend()
+    #     ax_main.grid(True)
+
+    #     # --- Bottom plot: eccentric points and greedy indices ---
+    #     ecc_values = self.ecc_ref_parameter_space_input # assuming first component = eccentricity
+    #     y = np.zeros(len(self.ecc_ref_parameter_space_input))
+
+    #     # All dataset points
+    #     ax_bottom.plot(ecc_values, y, color='grey', alpha=0.6, label='Dataset points')
+
+    #     # Greedy-selected points
+    #     ax_bottom.scatter(ecc_values[greedy_parameters_idx], y[greedy_parameters_idx], color='red', s=50, label='Greedy parameters')
+
+    #     ax_bottom.set_yticks([])
+    #     ax_bottom.set_xlabel('Vector index / parameter')
+    #     ax_bottom.grid(True, axis='x', linestyle='--', alpha=0.5)
+    #     ax_main.legend(loc='best', ncol=3, fontsize='small')
+
+
+    #     plt.tight_layout()
+    #     fig_greedy_vecs.show()
+
+
+    #     if save_greedy_vecs_fig:
+    #         os.makedirs('Images/Greedy_vectors', exist_ok=True)
+    #         plt.savefig(f'Images/Greedy_vectors/Greedy_vectors_{property}_M={self.total_mass}_ecc=[{min(self.ecc_ref_parameter_space_input)}_{max(self.ecc_ref_parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_parameter_space_input)}_ms={self.minimum_spacing_greedy}.png')
+    #         print('Greedy vectors fig saved to Images/Greedy_vectors')
+    #         # plt.close('all')
+
+    # def _plot_greedy_errors(self, greedy_errors, property, save_greedy_fig):
+    #     """Function to plot and option to save the greedy errors."""
+
+    #     N_basis_vectors = np.arange(1, len(greedy_errors) + 1)
+
+    #     fig_greedy_errors = plt.figure(figsize=(7, 5))
+    #     plt.plot(N_basis_vectors, greedy_errors, label='Greedy Errors')
+    #     plt.scatter(N_basis_vectors, greedy_errors, s=4)
+    #     # for i, label in enumerate(self.ecc_ref_parameter_space_input[greedy_parameters_idx]):
+    #     #     plt.annotate(label, (N_basis_vectors[i], greedy_errors[i]), textcoords="offset points", xytext=(5, 5), ha='center', fontsize=5.5)
+    #     plt.xlabel('Number of Waveforms')
+    #     if property == 'phase':
+    #         plt.ylabel(f'Greedy error $\Delta \phi$')
+    #     elif property == 'amplitude':
+    #         plt.ylabel(f'Greedy error $\Delta A$')
+    #     plt.yscale('log')
+    #     # plt.title('Greedy errors of residual {} for N = {}'.format(property, len(greedy_errors)-1))
+    #     plt.grid(True)
+    #     fig_greedy_errors.show()
+
+    #     if save_greedy_fig:
+    #         os.makedirs('Images/Greedy_errors', exist_ok=True)
+    #         plt.savefig(f'Images/Greedy_errors/Greedy_error_{property}_M={self.total_mass}_ecc=[{min(self.ecc_ref_parameter_space_input)}_{max(self.ecc_ref_parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_parameter_space_input)}_gerr={min(greedy_errors)}_ms={self.minimum_spacing_greedy}.png')
+            
+    #         print('Greedy error fig saved to Images/Greedy_errors')
+    #         # plt.close('all')
         
 
     def _plot_validation_errors(self, validation_vecs, greedy_basis, trivial_basis, property, save_validation_fig):
@@ -1256,7 +1657,173 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         
     #     return emp_nodes_idx
 
-    def get_empirical_nodes(self, reduced_basis, property, plot_emp_nodes_at_ecc=True, save_fig=True):
+    # def get_empirical_nodes(self, reduced_basis, property, plot_emp_nodes_at_ecc=True, save_fig=True):
+    #     """
+    #     Calculate the empirical nodes for a given dataset based on a reduced basis of residual properties.
+
+    #     Parameters:
+    #     ----------------
+    #     - reduced_basis (numpy.ndarray): Reduced basis of residual properties (phase or amplitude).
+    #     - property (str): Waveform property to evaluate, options are "phase" or "amplitude".
+    #     - plot_emp_nodes_at_ecc (float, optional): If set, plots the empirical nodes at a specified eccentricity value.
+    #     - save_fig (bool, optional): Saves the empirical nodes plot if set to True.
+
+    #     Returns:
+    #     ----------------
+    #     - emp_nodes_idx (list): Indices of empirical nodes for the given dataset.
+    #     """
+
+    #     # Set number of nodes based on property
+    #     if property == 'phase':
+    #         N_nodes = self.N_basis_vecs_phase
+    #     elif property == 'amplitude':
+    #         N_nodes = self.N_basis_vecs_amp
+    #     else:
+    #         raise ValueError("Property must be 'phase' or 'amplitude'.")
+
+    #     # -------------------------------
+    #     # Preprocess the basis
+    #     # -------------------------------
+
+    #     # 1️⃣ Remove zero or near-zero vectors
+    #     nonzero_idx = [k for k, vec in enumerate(reduced_basis) if np.linalg.norm(vec) > 1e-14]
+    #     reduced_basis = reduced_basis[nonzero_idx]
+
+    #     # 2️⃣ Orthonormalize with scipy.linalg.orth
+    #     reduced_basis = orth(reduced_basis.T).T
+
+    #     for k in range(reduced_basis.shape[0]):
+    #         print(f"Basis {k} norm: {np.linalg.norm(reduced_basis[k]):.2e}, max: {np.max(np.abs(reduced_basis[k])):.2e}")
+
+    #     # -------------------------------
+    #     # Helper: empirical interpolant
+    #     # -------------------------------
+    #     def calc_empirical_interpolant(property_array, reduced_basis, emp_nodes_idx):
+    #         m = len(emp_nodes_idx)
+    #         V = np.array([[reduced_basis[i, emp_nodes_idx[k]] for k in range(m)] for i in range(m)])
+    #         cond_V = np.linalg.cond(V)
+    #         print(f"Step m={m}: cond(V) = {cond_V:.2e}")
+    #         V_inv = np.linalg.pinv(V)
+    #         B_j_vec = reduced_basis[:m, :].T @ V_inv
+    #         empirical_interpolant = B_j_vec @ property_array[emp_nodes_idx[:m]]
+    #         print(f"calc_empirical_interpolant: m={m}, V.shape={V.shape}, B_j_vec.shape={B_j_vec.shape}, interpolant norm={np.linalg.norm(empirical_interpolant):.2e}")
+    #         return empirical_interpolant
+
+    #     # -------------------------------
+    #     # Initialize empirical nodes
+    #     # -------------------------------
+    #     i = np.argmax(np.abs(reduced_basis[0]))
+    #     emp_nodes_idx = [i]
+    #     EI_error = []
+
+    #     # -------------------------------
+    #     # Main loop for empirical nodes
+    #     # -------------------------------
+    #     print(f"Starting empirical interpolation with {N_nodes} nodes...", "reduced_basis shape:", reduced_basis.shape)
+    #     for j in range(1, N_nodes):
+    #     #     # Plot basis vectors
+    #     #     fig_basis = plt.figure(figsize=(8, 4))
+    #     #     for k in range(j + 1):
+    #     #         plt.plot(reduced_basis[k], label=f'Basis {k}')
+    #     #     plt.title(f"Reduced Basis Vectors up to Step {j}")
+    #     #     plt.xlabel("Sample index")
+    #     #     plt.ylabel("Basis value")
+    #     #     plt.legend()
+    #     #     plt.tight_layout()
+    #     #     fig_basis.savefig(f'Images/Empirical_nodes/basis_vectors_step_{j}.png')
+    #     #     plt.close(fig_basis)
+
+    #     #     # Plot current empirical nodes
+    #     #     fig_nodes = plt.figure(figsize=(8, 4))
+    #     #     for k in range(j + 1):
+    #     #         plt.plot(reduced_basis[k], label=f'Basis {k}')
+    #     #     plt.scatter(emp_nodes_idx, [reduced_basis[0][idx] for idx in emp_nodes_idx],
+    #     #                 color='red', marker='o', s=50, label='Empirical nodes')
+    #     #     plt.title(f"Empirical Nodes Selected up to Step {j}")
+    #     #     plt.xlabel("Sample index")
+    #     #     plt.ylabel("Basis value")
+    #     #     plt.legend()
+    #     #     plt.tight_layout()
+    #     #     fig_nodes.savefig(f'Images/Empirical_nodes/nodes_up_to_step_{j}.png')
+    #     #     plt.close(fig_nodes)
+
+    #         # Compute empirical interpolant
+    #         empirical_interpolant = calc_empirical_interpolant(
+    #             reduced_basis[j],
+    #             reduced_basis[:j],
+    #             emp_nodes_idx[:j]
+    #         )
+
+    #         # Plot interpolation fit
+    #         # fig_interp = plt.figure(figsize=(8, 4))
+    #         # plt.plot(reduced_basis[j], label="Target (true)", lw=2)
+    #         # plt.plot(empirical_interpolant, '--', label="Interpolant", lw=2)
+    #         # plt.scatter(emp_nodes_idx, reduced_basis[j][emp_nodes_idx], color='red', label="Empirical nodes")
+    #         # plt.title(f"Interpolation Fit at Step {j}")
+    #         # plt.xlabel("Sample index")
+    #         # plt.ylabel("Value")
+    #         # plt.legend()
+    #         # plt.tight_layout()
+    #         # fig_interp.savefig(f'Images/Empirical_nodes/interp_fit_step_{j}.png')
+    #         # plt.close(fig_interp)
+
+    #         # Compute residuals
+    #         residuals = reduced_basis[j] - empirical_interpolant
+    #         EI_error.append(np.linalg.norm(residuals))
+
+    #         # Identify next empirical node
+    #         next_idx = np.argmax(np.abs(residuals))
+    #         emp_nodes_idx.append(next_idx)
+
+    #         # Plot residual evolution
+    #         # fig_residuals = plt.figure(figsize=(8, 4))
+    #         for k in range(1, j + 1):
+    #             if k < len(EI_error):
+    #                 try:
+    #                     prev_residual = np.load(f'Images/Empirical_nodes/residual_values_step_{k}.npy')
+    #                     # plt.plot(np.abs(prev_residual).flatten(), alpha=0.4, label=f'Step {k}')
+    #                 except FileNotFoundError:
+    #                     pass
+    #     #     plt.plot(np.abs(residuals).flatten(), label=f"Step {j} (current)", lw=2)
+    #     #     plt.axvline(next_idx, color='r', linestyle='--', label=f"New node {next_idx}")
+    #     #     plt.title(f"Residual Evolution up to Step {j}")
+    #     #     plt.xlabel("Sample index")
+    #     #     plt.ylabel("|Residual|")
+    #     #     plt.legend()
+    #     #     plt.tight_layout()
+    #     #     fig_residuals.savefig(f'Images/Empirical_nodes/residuals_up_to_step_{j}.png')
+    #     #     np.save(f'Images/Empirical_nodes/residual_values_step_{j}.npy', residuals)
+    #     #     plt.close(fig_residuals)
+
+    #     # # Plot EI error convergence
+    #     # fig_error = plt.figure(figsize=(6, 4))
+    #     # plt.semilogy(EI_error, marker='o')
+    #     # plt.title("Empirical Interpolation Error Convergence")
+    #     # plt.xlabel("Iteration")
+    #     # plt.ylabel("‖Residual‖₂")
+    #     # plt.grid(True, which='both', ls='--')
+    #     # fig_error.savefig('Images/Empirical_nodes/test_error.png')
+
+    #     # # Compare 3rd waveform as example
+    #     # j = 2
+    #     # wf_true = reduced_basis[j]
+    #     # wf_interp = calc_empirical_interpolant(wf_true, reduced_basis[:j], emp_nodes_idx[:j])
+    #     # fig_compare = plt.figure(figsize=(8, 4))
+    #     # plt.plot(wf_true, label="True waveform", lw=2)
+    #     # plt.plot(wf_interp, '--', label="Interpolated", lw=2)
+    #     # plt.scatter(emp_nodes_idx[:j], wf_true[emp_nodes_idx[:j]], color='red', label="Empirical nodes")
+    #     # plt.title(f"Empirical Interpolation at Step {j}")
+    #     # plt.legend()
+    #     # plt.tight_layout()
+    #     # fig_compare.savefig('Images/Empirical_nodes/test_compare.png')
+
+    #     # Optional: plot empirical nodes at eccentricity
+    #     if plot_emp_nodes_at_ecc:
+    #         self._plot_empirical_nodes(emp_nodes_idx, property, plot_emp_nodes_at_ecc, save_fig)
+
+    #     return emp_nodes_idx
+
+    def get_empirical_nodes(self, reduced_basis_object, property, plot_emp_nodes_at_ecc=True, save_fig=True, plot_interpolation_matrix=False, save_interpolation_matrix_fig=False, plot_proj_vs_eim_error=False, save_proj_vs_eim_error_fig=False):
         """
         Calculate the empirical nodes for a given dataset based on a reduced basis of residual properties.
 
@@ -1280,148 +1847,157 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         else:
             raise ValueError("Property must be 'phase' or 'amplitude'.")
 
-        # -------------------------------
-        # Preprocess the basis
-        # -------------------------------
+        eim = EmpiricalInterpolation(reduced_basis_object)
+        eim.fit()
 
-        # 1️⃣ Remove zero or near-zero vectors
-        nonzero_idx = [k for k, vec in enumerate(reduced_basis) if np.linalg.norm(vec) > 1e-14]
-        reduced_basis = reduced_basis[nonzero_idx]
-
-        # 2️⃣ Orthonormalize with scipy.linalg.orth
-        reduced_basis = orth(reduced_basis.T).T
-
-        for k in range(reduced_basis.shape[0]):
-            print(f"Basis {k} norm: {np.linalg.norm(reduced_basis[k]):.2e}, max: {np.max(np.abs(reduced_basis[k])):.2e}")
-
-        # -------------------------------
-        # Helper: empirical interpolant
-        # -------------------------------
-        def calc_empirical_interpolant(property_array, reduced_basis, emp_nodes_idx):
-            m = len(emp_nodes_idx)
-            V = np.array([[reduced_basis[i, emp_nodes_idx[k]] for k in range(m)] for i in range(m)])
-            cond_V = np.linalg.cond(V)
-            print(f"Step m={m}: cond(V) = {cond_V:.2e}")
-            V_inv = np.linalg.pinv(V)
-            B_j_vec = reduced_basis[:m, :].T @ V_inv
-            empirical_interpolant = B_j_vec @ property_array[emp_nodes_idx[:m]]
-            print(f"calc_empirical_interpolant: m={m}, V.shape={V.shape}, B_j_vec.shape={B_j_vec.shape}, interpolant norm={np.linalg.norm(empirical_interpolant):.2e}")
-            return empirical_interpolant
-
-        # -------------------------------
-        # Initialize empirical nodes
-        # -------------------------------
-        i = np.argmax(np.abs(reduced_basis[0]))
-        emp_nodes_idx = [i]
-        EI_error = []
-
-        # -------------------------------
-        # Main loop for empirical nodes
-        # -------------------------------
-        print(f"Starting empirical interpolation with {N_nodes} nodes...", "reduced_basis shape:", reduced_basis.shape)
-        for j in range(1, N_nodes):
-        #     # Plot basis vectors
-        #     fig_basis = plt.figure(figsize=(8, 4))
-        #     for k in range(j + 1):
-        #         plt.plot(reduced_basis[k], label=f'Basis {k}')
-        #     plt.title(f"Reduced Basis Vectors up to Step {j}")
-        #     plt.xlabel("Sample index")
-        #     plt.ylabel("Basis value")
-        #     plt.legend()
-        #     plt.tight_layout()
-        #     fig_basis.savefig(f'Images/Empirical_nodes/basis_vectors_step_{j}.png')
-        #     plt.close(fig_basis)
-
-        #     # Plot current empirical nodes
-        #     fig_nodes = plt.figure(figsize=(8, 4))
-        #     for k in range(j + 1):
-        #         plt.plot(reduced_basis[k], label=f'Basis {k}')
-        #     plt.scatter(emp_nodes_idx, [reduced_basis[0][idx] for idx in emp_nodes_idx],
-        #                 color='red', marker='o', s=50, label='Empirical nodes')
-        #     plt.title(f"Empirical Nodes Selected up to Step {j}")
-        #     plt.xlabel("Sample index")
-        #     plt.ylabel("Basis value")
-        #     plt.legend()
-        #     plt.tight_layout()
-        #     fig_nodes.savefig(f'Images/Empirical_nodes/nodes_up_to_step_{j}.png')
-        #     plt.close(fig_nodes)
-
-            # Compute empirical interpolant
-            empirical_interpolant = calc_empirical_interpolant(
-                reduced_basis[j],
-                reduced_basis[:j],
-                emp_nodes_idx[:j]
-            )
-
-            # Plot interpolation fit
-            # fig_interp = plt.figure(figsize=(8, 4))
-            # plt.plot(reduced_basis[j], label="Target (true)", lw=2)
-            # plt.plot(empirical_interpolant, '--', label="Interpolant", lw=2)
-            # plt.scatter(emp_nodes_idx, reduced_basis[j][emp_nodes_idx], color='red', label="Empirical nodes")
-            # plt.title(f"Interpolation Fit at Step {j}")
-            # plt.xlabel("Sample index")
-            # plt.ylabel("Value")
-            # plt.legend()
-            # plt.tight_layout()
-            # fig_interp.savefig(f'Images/Empirical_nodes/interp_fit_step_{j}.png')
-            # plt.close(fig_interp)
-
-            # Compute residuals
-            residuals = reduced_basis[j] - empirical_interpolant
-            EI_error.append(np.linalg.norm(residuals))
-
-            # Identify next empirical node
-            next_idx = np.argmax(np.abs(residuals))
-            emp_nodes_idx.append(next_idx)
-
-            # Plot residual evolution
-            # fig_residuals = plt.figure(figsize=(8, 4))
-            for k in range(1, j + 1):
-                if k < len(EI_error):
-                    try:
-                        prev_residual = np.load(f'Images/Empirical_nodes/residual_values_step_{k}.npy')
-                        # plt.plot(np.abs(prev_residual).flatten(), alpha=0.4, label=f'Step {k}')
-                    except FileNotFoundError:
-                        pass
-        #     plt.plot(np.abs(residuals).flatten(), label=f"Step {j} (current)", lw=2)
-        #     plt.axvline(next_idx, color='r', linestyle='--', label=f"New node {next_idx}")
-        #     plt.title(f"Residual Evolution up to Step {j}")
-        #     plt.xlabel("Sample index")
-        #     plt.ylabel("|Residual|")
-        #     plt.legend()
-        #     plt.tight_layout()
-        #     fig_residuals.savefig(f'Images/Empirical_nodes/residuals_up_to_step_{j}.png')
-        #     np.save(f'Images/Empirical_nodes/residual_values_step_{j}.npy', residuals)
-        #     plt.close(fig_residuals)
-
-        # # Plot EI error convergence
-        # fig_error = plt.figure(figsize=(6, 4))
-        # plt.semilogy(EI_error, marker='o')
-        # plt.title("Empirical Interpolation Error Convergence")
-        # plt.xlabel("Iteration")
-        # plt.ylabel("‖Residual‖₂")
-        # plt.grid(True, which='both', ls='--')
-        # fig_error.savefig('Images/Empirical_nodes/test_error.png')
-
-        # # Compare 3rd waveform as example
-        # j = 2
-        # wf_true = reduced_basis[j]
-        # wf_interp = calc_empirical_interpolant(wf_true, reduced_basis[:j], emp_nodes_idx[:j])
-        # fig_compare = plt.figure(figsize=(8, 4))
-        # plt.plot(wf_true, label="True waveform", lw=2)
-        # plt.plot(wf_interp, '--', label="Interpolated", lw=2)
-        # plt.scatter(emp_nodes_idx[:j], wf_true[emp_nodes_idx[:j]], color='red', label="Empirical nodes")
-        # plt.title(f"Empirical Interpolation at Step {j}")
-        # plt.legend()
-        # plt.tight_layout()
-        # fig_compare.savefig('Images/Empirical_nodes/test_compare.png')
+        emp_nodes_idx = []
+        # Stack all empirical nodes from all leaves (greedy parameters sections) in the tree
+        for i in range(len(reduced_basis_object.tree.leaves)):
+            emp_nodes_idx.extend(reduced_basis_object.tree.leaves[i].empirical_nodes)
+        emp_nodes_idx = np.array(emp_nodes_idx).astype(int)
+    
+        # print('Empirical nodes:', emp_nodes_idx,
+        #     '\nlength of empirical nodes:', len(emp_nodes_idx),
+        #     '\nlength of reduced basis:', len(reduced_basis_object.tree.leaves[i].indices)) # .indices refers to the indices of the greedy basis vectors
+        
 
         # Optional: plot empirical nodes at eccentricity
+        if plot_interpolation_matrix:
+            self._plot_interpolation_matrix(reduced_basis_object, save_fig=save_interpolation_matrix_fig)
+
+        if plot_proj_vs_eim_error:
+            self._plot_projection_vs_eim_error(reduced_basis_object, save_fig=save_proj_vs_eim_error_fig)
+
         if plot_emp_nodes_at_ecc:
             self._plot_empirical_nodes(emp_nodes_idx, property, plot_emp_nodes_at_ecc, save_fig)
 
         return emp_nodes_idx
 
+    # def _plot_interpolation_matrix(self, reduced_basis_object, save_fig=False):
+    #     print(len(reduced_basis_object.tree.leaves))
+    #     fig, ax = plt.subplots(len(reduced_basis_object.tree.leaves), 1, figsize=(6,5))
+
+    #     for i in range(len(reduced_basis_object.tree.leaves)):
+    #         reduced_basis = reduced_basis_object.tree.leaves[i].basis # ORTHONORMALIZED basis functions 
+    #         eim_nodes = reduced_basis_object.tree.leaves[i].empirical_nodes # indices of empirical nodes
+
+    #         # Interpolation matrix: V_{ij} = φ_i(t_j)
+    #         V = reduced_basis[:, eim_nodes]
+
+    #         im = ax.imshow(V, aspect='auto', origin='lower')
+
+    #         ax[0].set_title("EIM interpolation matrix")
+    #         ax[i].set_xlabel("Empirical node index")
+    #         ax[i].set_ylabel("Basis index")
+
+    #     fig.colorbar(im, ax=ax)
+
+    #     plt.tight_layout()
+
+    #     if save_fig:
+    #         fig_path = f'Images/Empirical_nodes/EIM_interpolation_matrix_M={self.total_mass}_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_parameter_space_input)}_gN={len(self.best_rep_parameters_idx)}_ms={self.minimum_spacing_greedy}.png'
+    #         os.makedirs(os.path.dirname(fig_path), exist_ok=True)
+    #         fig.savefig(fig_path)
+    #         print(f'Figure is saved in {fig_path}')
+
+    #     return V
+
+    def _plot_interpolation_matrix(self, reduced_basis_object, save_fig=False):
+        n_leaves = len(reduced_basis_object.tree.leaves)
+
+        fig, ax = plt.subplots(n_leaves, 1, squeeze=False)
+        ax = ax.ravel()
+
+        for i, leaf in enumerate(reduced_basis_object.tree.leaves):
+            reduced_basis = leaf.basis
+            eim_nodes = leaf.empirical_nodes
+
+            # Assuming basis shape = (n_basis, n_samples)
+            V = reduced_basis[:, eim_nodes]
+
+            im = ax[i].imshow(V, aspect='auto', origin='lower')
+            ax[i].set_title(f"EIM interpolation matrix (leaf {i})")
+            ax[i].set_xlabel("Empirical node index")
+            ax[i].set_ylabel("Basis index")
+
+        fig.colorbar(im, ax=ax)
+
+        plt.tight_layout()
+
+        if save_fig:
+            fig_path = (
+                f"Images/Empirical_nodes/"
+                f"EIM_interpolation_matrix_M={self.total_mass}"
+                f"_f_lower={self.f_lower}"
+                f"_f_ref={self.f_ref}"
+                f"_iN={len(self.ecc_ref_parameter_space_input)}"
+                f"_gN={len(self.best_rep_parameters_idx)}"
+                f"_ms={self.minimum_spacing_greedy}.png"
+            )
+            os.makedirs(os.path.dirname(fig_path), exist_ok=True)
+            fig.savefig(fig_path)
+            print(self.colored_text(f"Figure is saved in {fig_path}", "blue"))
+
+    
+    def _plot_projection_vs_eim_error(self, reduced_basis_object, save_fig=False):
+        fig_proj_vs_eim_error, axs = plt.subplots(len(reduced_basis_object.tree.leaves), 1)
+        
+        for i in range(len(reduced_basis_object.tree.leaves)):
+            reduced_basis = reduced_basis_object.tree.leaves[i].basis # ORTHONORMALIZED basis functions 
+            eim_nodes = reduced_basis_object.tree.leaves[i].empirical_nodes
+
+            proj_errors = []
+            eim_errors = []
+
+            for k in range(1, len(eim_nodes) + 1):
+                basis_k = reduced_basis[:k]                        # (k, n_time)
+                nodes_k = eim_nodes[:k]
+
+                # EIM interpolation operator, matching your implementation
+                V_k = np.array([[basis_k[m, t] for t in nodes_k] for m in range(k)])
+                invVt_k = np.linalg.inv(V_k.T)
+                interpolant_k = basis_k.T @ invVt_k              # (n_time, k)
+
+                max_proj_err = 0.0
+                max_eim_err = 0.0
+
+                for f in reduced_basis:  # Loop over all basis functions as test functions
+                    # --- Best projection onto span(basis_k) ---
+                    # Solve min ||f - c @ basis_k||
+                    coeff_proj, *_ = np.linalg.lstsq(basis_k.T, f, rcond=None)
+                    f_proj = basis_k.T @ coeff_proj
+
+                    proj_err = np.linalg.norm(f - f_proj) / np.linalg.norm(f)
+                    max_proj_err = max(max_proj_err, proj_err)
+
+                    # --- EIM reconstruction from node values only ---
+                    f_nodes = f[nodes_k]
+                    f_eim = interpolant_k @ f_nodes
+
+                    eim_err = np.linalg.norm(f - f_eim) / np.linalg.norm(f)
+                    max_eim_err = max(max_eim_err, eim_err)
+
+                proj_errors.append(max_proj_err)
+                eim_errors.append(max_eim_err)
+        
+            axs[i].semilogy(range(1, len(eim_nodes)+1), proj_errors, marker='o', label='Projection error')
+            axs[i].semilogy(range(1, len(eim_nodes)+1), eim_errors, marker='s', label='EIM error')
+            axs[i].set_xlabel("Number of modes / EIM nodes")
+            axs[i].set_ylabel("Max relative error")
+
+        axs[0].set_title("Projection error vs EIM error")
+        axs[0].grid(True)
+        plt.legend()
+
+        fig_proj_vs_eim_error.tight_layout()
+
+        if save_fig:
+            fig_path = f'Images/Empirical_nodes/EIM_projection_vs_eim_error_M={self.total_mass}_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_parameter_space_input)}_gN={len(self.best_rep_parameters_idx)}_ms={self.minimum_spacing_greedy}.png'
+            os.makedirs(os.path.dirname(fig_path), exist_ok=True)
+            fig_proj_vs_eim_error.savefig(fig_path)
+            print(self.colored_text(f'Figure is saved in {fig_path}', 'blue'))
+
+        return proj_errors, eim_errors
 
     def _plot_empirical_nodes(self, emp_nodes_idx, property, eccentricity, save_fig):
         """
@@ -1623,16 +2199,28 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 sampling_frequency = 2048 # or 4096
 duration = 4 # seconds
 time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
+print(f'time-array: [{round(SecondtoMass(time_array, 60)[0], 2)}, {round(SecondtoMass(time_array, 60)[-1], 2)}] seconds, with {len(time_array)} points')
+ecc_ref_parameterspace=np.linspace(0.001, 0.1, num=200)
 
-gt = Generate_TrainingSet(time_array=time_array, ecc_ref_parameterspace=np.linspace(0, 0.3, num=10), mean_ano_parameterspace=[0], N_basis_vecs_amp=20, N_basis_vecs_phase=20,
+gt = Generate_TrainingSet(time_array=time_array, ecc_ref_parameterspace=ecc_ref_parameterspace, mean_ano_parameterspace=[0], N_basis_vecs_amp=20, N_basis_vecs_phase=20,
                           minimum_spacing_greedy=0.003 )
-res_ds_phase = gt.generate_property_dataset(np.linspace(0, 0.3, num=10), 'phase', plot_residuals_time_evolv=True, save_fig_time_evolve=True, plot_residuals_eccentric_evolv=True, save_fig_eccentric_evolv=True)
-res_ds_amp = gt.generate_property_dataset(np.linspace(0, 0.3, num=10), 'amplitude', plot_residuals_time_evolv=True, save_fig_time_evolve=True, plot_residuals_eccentric_evolv=True, save_fig_eccentric_evolv=True)
-# hp, hc = gt.simulate_inspiral(0.3, geometric_units=True)
-# res_ds_amp = gt.calculate_residual(hp, hc, 0.3, 'amplitude', plot_residual=True, save_fig=True)
-# gt.get_greedy_parameters(U=res_ds_phase, property='phase', N_greedy_vecs=21)
-# gt.get_greedy_parameters(U=res_ds_amp, property='amplitude', N_greedy_vecs=21)
-# gt.get_empirical_nodes(res_ds_phase, 'phase', plot_emp_nodes_at_ecc=0.1, save_fig=True)
+res_ds_phase = gt.generate_property_dataset(ecc_ref_parameterspace, 'phase', plot_residuals_time_evolv=True, plot_residuals_eccentric_evolv=True, show_legend=False)
+# res_ds_amp = gt.generate_property_dataset(ecc_ref_parameterspace, 'amplitude', plot_residuals_time_evolv=True, plot_residuals_eccentric_evolv=True, show_legend=False)
+
+# sampling_frequency = 2048 # or 4096
+# duration = 4 # seconds
+# time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
+
+# gt = Generate_TrainingSet(time_array=time_array, ecc_ref_parameterspace=np.linspace(0, 0.3, num=40), mean_ano_parameterspace=[0], N_basis_vecs_amp=20, N_basis_vecs_phase=20,
+#                           minimum_spacing_greedy=0.003 )
+# res_ds_phase = gt.generate_property_dataset(np.linspace(0, 0.3, num=40), 'phase', plot_residuals_time_evolv=True, save_fig_time_evolve=True, plot_residuals_eccentric_evolv=True, save_fig_eccentric_evolv=True)
+# res_ds_amp = gt.generate_property_dataset(np.linspace(0, 0.3, num=40), 'amplitude', plot_residuals_time_evolv=True, save_fig_time_evolve=True, plot_residuals_eccentric_evolv=True, save_fig_eccentric_evolv=True)
+# # hp, hc = gt.simulate_inspiral(0.3, geometric_units=True)
+# # res_ds_amp = gt.calculate_residual(hp, hc, 0.3, 'amplitude', plot_residual=True, save_fig=True)
+rb = gt.get_greedy_parameters(U=res_ds_phase, property='phase', min_greedy_error=1e-10, N_greedy_vecs=50,plot_greedy_error=True, max_tree_depth=0, save_greedy_error_fig=True, plot_greedy_vectors=True, save_greedy_vecs_fig=True, normalize=False, plot_SVD_matrix=True, save_SVD_matrix_fig=True,show_legend=False)
+# gt.get_greedy_parameters(U=res_ds_amp, property='amplitude', min_greedy_error=1e-10, N_greedy_vecs=80, plot_greedy_error=True, tree_depth=3, save_greedy_error_fig=True, plot_greedy_vectors=True, save_greedy_vecs_fig=True, normalize=False, show_legend=False)
+gt.get_empirical_nodes(rb, 'phase', plot_interpolation_matrix=True, save_interpolation_matrix_fig=True, plot_proj_vs_eim_error=True, save_proj_vs_eim_error_fig=True)
+
 # gt.get_empirical_nodes(res_ds_amp, 'amplitude', plot_emp_nodes_at_ecc=0.1, save_fig=True)
 
 # hp, hc = gt.simulate_inspiral(0.0)
