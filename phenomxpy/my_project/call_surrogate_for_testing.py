@@ -8,11 +8,17 @@ class Generate_Online_Surrogate_Testing(Load_Offline_Surrogate):
     def __init__(
         self,
         time_array,
-        ecc_ref_parameterspace_range=[0.0, 0.3],
+        mass_ratio_range=[1, 20], 
+        ecc_ref_range=[0.0, 0.3], 
+        mean_ano_ref_range=[0.0, 2*np.pi], 
+        chi1_range=[-0.995, 0.995], 
+        chi2_range=[-0.995, 0.995], 
         amount_input_wfs=60,
         amount_output_wfs=500,
         N_basis_vecs_amp=40,
         N_basis_vecs_phase=40,
+        min_greedy_error_amp=1e-8,
+        min_greedy_error_phase=1e-6,
         training_set_selection='GPR_opt',
         minimum_spacing_greedy=0.008,
         ecc_ref=None,
@@ -20,14 +26,11 @@ class Generate_Online_Surrogate_Testing(Load_Offline_Surrogate):
         luminosity_distance=None,
         f_lower=10,
         f_ref=20,
-        chi1=0,
-        chi2=0,
         phiRef=0.,
-        rel_anomaly=0.,
         inclination=0.,
         truncate_at_ISCO=True,
         truncate_at_tmin=True,
-        **kwargs
+        geometric_units=True
     ):
         self.total_mass = total_mass
         self.output_ecc_ref = ecc_ref
@@ -35,25 +38,31 @@ class Generate_Online_Surrogate_Testing(Load_Offline_Surrogate):
 
         self._printed_surrogate_loaded = False
 
+        
+        
         Load_Offline_Surrogate.__init__(
             self,
-            time_array=time_array,
-            ecc_ref_parameterspace_range=ecc_ref_parameterspace_range,
+            time_array,
+            mass_ratio_range=mass_ratio_range, 
+            ecc_ref_range=ecc_ref_range, 
+            mean_ano_ref_range=mean_ano_ref_range, 
+            chi1_range=chi1_range, 
+            chi2_range=chi2_range, 
             amount_input_wfs=amount_input_wfs,
             amount_output_wfs=amount_output_wfs,
-            N_basis_vecs_amp=N_basis_vecs_amp,
-            N_basis_vecs_phase=N_basis_vecs_phase,
-            training_set_selection=training_set_selection,
-            minimum_spacing_greedy=minimum_spacing_greedy,
             f_lower=f_lower,
             f_ref=f_ref,
-            chi1=chi1,
-            chi2=chi2,
             phiRef=phiRef,
-            rel_anomaly=rel_anomaly,
             inclination=inclination,
+            N_basis_vecs_amp=N_basis_vecs_amp,
+            N_basis_vecs_phase=N_basis_vecs_phase,
+            min_greedy_error_amp=min_greedy_error_amp,
+            min_greedy_error_phase=min_greedy_error_phase,
+            training_set_selection=training_set_selection,
+            minimum_spacing_greedy=minimum_spacing_greedy,
             truncate_at_ISCO=truncate_at_ISCO,
             truncate_at_tmin=truncate_at_tmin,
+            geometric_units=geometric_units
         )
 
 
@@ -231,7 +240,7 @@ class Generate_Online_Surrogate_Testing(Load_Offline_Surrogate):
         plt.tight_layout()
 
         if save_fig_datapiece is True:
-            figname = f'Images/Surrogate_datapiece_Single/Surrogate_{property}_ecc_ref={self.output_ecc_ref}_M={self.total_mass}_l_dist={self.luminosity_distance}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_parameter_space_input)}_{max(self.ecc_ref_parameter_space_input)}_Ni={len(self.ecc_ref_parameter_space_input)}]_No={len(self.ecc_ref_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_basis_vecs_phase}_Nga={self.N_basis_vecs_amp}.png'
+            figname = f'Images/Surrogate_datapiece_Single/Surrogate_{property}_ecc_ref={self.output_ecc_ref}_M={self.total_mass}_l_dist={self.luminosity_distance}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}_Ni={len(self.ecc_ref_space)}]_No={len(self.ecc_ref_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_basis_vecs_phase}_Nga={self.N_basis_vecs_amp}.png'
             
             # Ensure the directory exists, creating it if necessary and save
             os.makedirs('Images/Surrogate_datapieces_Single', exist_ok=True)
@@ -326,7 +335,7 @@ class Generate_Online_Surrogate_Testing(Load_Offline_Surrogate):
         #     computation_time_amp = end_time_amp - start_time_amp
         #     computation_time_phase = end_time_phase - start_time_phase
 
-        # filename = f'Straindata/Surrogate_datapieces/Surrogate_datapieces_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_parameter_space_input)}_{max(self.ecc_ref_parameter_space_input)}_N={len(self.ecc_ref_parameter_space_input)}]_No={len(self.ecc_ref_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_basis_vecs_phase}_Nga={self.N_basis_vecs_amp}.npz'
+        # filename = f'Straindata/Surrogate_datapieces/Surrogate_datapieces_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}_N={len(self.ecc_ref_space)}]_No={len(self.ecc_ref_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_basis_vecs_phase}_Nga={self.N_basis_vecs_amp}.npz'
         # if save_surr_to_file is True and not os.path.isfile(filename):
         #     # Ensure the directory exists, creating it if necessary and save
         #     os.makedirs('Straindata/Surrogate_datapieces', exist_ok=True)
@@ -407,7 +416,7 @@ class Generate_Online_Surrogate_Testing(Load_Offline_Surrogate):
 
 
         if save_fig_surr is True:
-            figname = f'Images/Surrogate_wf/Surrogate_wf_ecc_ref={self.output_ecc_ref}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_parameter_space_input)}_{max(self.ecc_ref_parameter_space_input)}_Ni={len(self.ecc_ref_parameter_space_input)}]_No={len(self.ecc_ref_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_basis_vecs_phase}_Nga={self.N_basis_vecs_amp}.png'
+            figname = f'Images/Surrogate_wf/Surrogate_wf_ecc_ref={self.output_ecc_ref}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}_Ni={len(self.ecc_ref_space)}]_No={len(self.ecc_ref_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_basis_vecs_phase}_Nga={self.N_basis_vecs_amp}.png'
             
             # Ensure the directory exists, creating it if necessary and save
             os.makedirs('Images/Surrogate_wf', exist_ok=True)
@@ -484,11 +493,17 @@ class Call_Surrogate_Testing(Generate_Online_Surrogate_Testing):
     def __init__(
         self,
         time_array,
-        ecc_ref_parameterspace_range=[0.0, 0.3],
+        mass_ratio_range=[1, 20], 
+        ecc_ref_range=[0.0, 0.3], 
+        mean_ano_ref_range=[0.0, 2*np.pi], 
+        chi1_range=[-0.995, 0.995], 
+        chi2_range=[-0.995, 0.995],
         amount_input_wfs=60,
         amount_output_wfs=500,
         N_basis_vecs_amp=40,
         N_basis_vecs_phase=40,
+        min_greedy_error_amp=1e-8,
+        min_greedy_error_phase=1e-6,
         training_set_selection='GPR_opt',
         minimum_spacing_greedy=0.008,
         ecc_ref=None,
@@ -496,10 +511,7 @@ class Call_Surrogate_Testing(Generate_Online_Surrogate_Testing):
         luminosity_distance=None,
         f_lower=10,
         f_ref=20,
-        chi1=0,
-        chi2=0,
         phiRef=0.,
-        rel_anomaly=0.,
         inclination=0.,
         truncate_at_ISCO=True,
         truncate_at_tmin=True,
@@ -510,12 +522,18 @@ class Call_Surrogate_Testing(Generate_Online_Surrogate_Testing):
 
         Generate_Online_Surrogate_Testing.__init__(
             self,
-            time_array=time_array,
-            ecc_ref_parameterspace_range=ecc_ref_parameterspace_range,
+            time_array,
+            mass_ratio_range=mass_ratio_range, 
+            ecc_ref_range=ecc_ref_range, 
+            mean_ano_ref_range=mean_ano_ref_range, 
+            chi1_range=chi1_range, 
+            chi2_range=chi2_range, 
             amount_input_wfs=amount_input_wfs,
             amount_output_wfs=amount_output_wfs,
             N_basis_vecs_amp=N_basis_vecs_amp,
             N_basis_vecs_phase=N_basis_vecs_phase,
+            min_greedy_error_amp=min_greedy_error_amp,
+            min_greedy_error_phase=min_greedy_error_phase,
             training_set_selection=training_set_selection,
             minimum_spacing_greedy=minimum_spacing_greedy,
             ecc_ref=ecc_ref,
@@ -523,13 +541,11 @@ class Call_Surrogate_Testing(Generate_Online_Surrogate_Testing):
             luminosity_distance=luminosity_distance,
             f_lower=f_lower,
             f_ref=f_ref,
-            chi1=chi1,
-            chi2=chi2,
             phiRef=phiRef,
-            rel_anomaly=rel_anomaly,
             inclination=inclination,
             truncate_at_ISCO=truncate_at_ISCO,
             truncate_at_tmin=truncate_at_tmin,
+            geometric_units=geometric_units
         )
 
         
@@ -568,8 +584,8 @@ class Call_Surrogate_Testing(Generate_Online_Surrogate_Testing):
             self.B_matrix_phase = data['B_matrix_phase']
 
             # Indices and time array
-            self.best_rep_parameters_idx_amp = data['best_rep_parameters_idx_amp']
-            self.best_rep_parameters_idx_phase = data['best_rep_parameters_idx_phase']
+            self.indices_basis_amp = data['best_rep_parameters_idx_amp']
+            self.indices_basis_phase = data['best_rep_parameters_idx_phase']
             self.best_rep_parameters_amp = data['best_rep_parameters_amp']
             self.best_rep_parameters_phase = data['best_rep_parameters_phase']
 
@@ -591,8 +607,8 @@ class Call_Surrogate_Testing(Generate_Online_Surrogate_Testing):
                 self._plot_empirical_nodes(self.empirical_nodes_idx_phase, 'phase', eccentricity=plot_empirical_nodes_at_ecc, save_fig=save_fig_empirical_nodes)
             
             if plot_greedy_vectors is True:
-                self._plot_greedy_vectors(greedy_basis=self.residual_reduced_basis_amp, greedy_parameters_idx=self.best_rep_parameters_idx_amp, property='amplitude', save_basis_vecs_fig=save_fig_greedy_vectors)
-                self._plot_greedy_vectors(greedy_basis=self.residual_reduced_basis_phase, greedy_parameters_idx=self.best_rep_parameters_idx_phase, property='phase', save_basis_vecs_fig=save_fig_greedy_vectors)
+                self._plot_greedy_vectors(greedy_basis=self.residual_reduced_basis_amp, greedy_parameters_idx=self.indices_basis_amp, property='amplitude', save_basis_vecs_fig=save_fig_greedy_vectors)
+                self._plot_greedy_vectors(greedy_basis=self.residual_reduced_basis_phase, greedy_parameters_idx=self.indices_basis_phase, property='phase', save_basis_vecs_fig=save_fig_greedy_vectors)
 
         except:
             print("Surrogate model not found. Generating new surrogate data...")

@@ -10,34 +10,67 @@ from mpl_toolkits.mplot3d import Axes3D  # activates 3D projection support
 
 class AnalyseSurrogate(Call_Surrogate_Testing):
 
-    def __init__(self, time_array, eccentric_paramspace, mass_ratio_paramspace, amount_input_wfs=60, amount_output_wfs=500, N_basis_vecs_amp=40, N_basis_vecs_phase=40, training_set_selection='GPR_opt', 
-                 minimum_spacing_greedy=0.008, ecc_ref=None, total_mass=None, luminosity_disytance=None, f_ref=20, f_lower=10, chi1=0, chi2=0, phiRef=0., rel_anomaly=0., inlcination=0., truncate_at_ISCO=True, truncate_at_tmin=True):
+    def __init__(self, 
+            time_array,
+            mass_ratio_range=[1, 20], 
+            ecc_ref_range=[0.0, 0.3], 
+            mean_ano_ref_range=[0.0, 2*np.pi], 
+            chi1_range=[-0.995, 0.995], 
+            chi2_range=[-0.995, 0.995],
+            amount_input_wfs=60,
+            amount_output_wfs=500,
+            N_basis_vecs_amp=40,
+            N_basis_vecs_phase=40,
+            min_greedy_error_amp=1e-8,
+            min_greedy_error_phase=1e-6,
+            training_set_selection='GPR_opt',
+            minimum_spacing_greedy=0.008,
+            ecc_ref=None,
+            total_mass=None,
+            luminosity_distance=None,
+            chi1=None,
+            chi2=None,
+            f_lower=10,
+            f_ref=20,
+            phiRef=0.,
+            inclination=0.,
+            truncate_at_ISCO=True,
+            truncate_at_tmin=True,
+            geometric_units=True
+                 ):
         
-        self.eccentric_paramspace = eccentric_paramspace
-        self.mass_ratio_paramspace = mass_ratio_paramspace
+        
+        self.eccentric_paramspace = np.linspace(*ecc_ref_range, amount_input_wfs)
+        self.mass_ratio_paramspace = np.linspace(*mass_ratio_range, amount_input_wfs)
 
         Call_Surrogate_Testing.__init__(
             self,
             time_array=time_array,
-            ecc_ref_parameterspace_range=[0.0, 0.3],
+            mass_ratio_range=mass_ratio_range, 
+            ecc_ref_range=ecc_ref_range, 
+            mean_ano_ref_range=mean_ano_ref_range, 
+            chi1_range=chi1_range, 
+            chi2_range=chi2_range,
             amount_input_wfs=amount_input_wfs,
             amount_output_wfs=amount_output_wfs,
             N_basis_vecs_amp=N_basis_vecs_amp, 
             N_basis_vecs_phase=N_basis_vecs_phase,
+            min_greedy_error_amp=min_greedy_error_amp,
+            min_greedy_error_phase=min_greedy_error_phase,
             training_set_selection=training_set_selection,
             minimum_spacing_greedy=minimum_spacing_greedy,
             ecc_ref=ecc_ref,
             total_mass=total_mass,
-            luminosity_distance=luminosity_disytance, 
+            luminosity_distance=luminosity_distance, 
             f_lower=f_lower,
             f_ref=f_ref,
             chi1=chi1,
             chi2=chi2,
             phiRef=phiRef,
-            rel_anomaly=rel_anomaly,
-            inclination=inlcination,
+            inclination=inclination,
             truncate_at_ISCO=truncate_at_ISCO,
-            truncate_at_tmin=truncate_at_tmin
+            truncate_at_tmin=truncate_at_tmin,
+            geometric_units=geometric_units
         )
 
     def calculate_mismatch(self, surrogate_waveform, true_waveform=None, ecc_ref=None):
@@ -201,7 +234,7 @@ class AnalyseSurrogate(Call_Surrogate_Testing):
 
             plt.tight_layout()
             
-            figname = f'Images/Errors_and_efficiency/Errors_and_efficiency_{self.training_set_selection}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_parameter_space_input)}_{max(self.ecc_ref_parameter_space_input)}_Ni={len(self.ecc_ref_parameter_space_input)}]_No={len(self.ecc_ref_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_basis_vecs_phase}_Nga={self.N_basis_vecs_amp}_ms={self.minimum_spacing_greedy}.png'
+            figname = f'Images/Errors_and_efficiency/Errors_and_efficiency_{self.training_set_selection}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}_Ni={len(self.ecc_ref_space)}]_No={len(self.ecc_ref_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_basis_vecs_phase}_Nga={self.N_basis_vecs_amp}_ms={self.minimum_spacing_greedy}.png'
             # Ensure the directory exists, creating it if necessary and save
             os.makedirs('Images/Errors_and_efficiency', exist_ok=True)
             plt.savefig(figname, dpi=300)
@@ -219,7 +252,7 @@ class AnalyseSurrogate(Call_Surrogate_Testing):
         self.minimum_spacing_greedy=minimum_spacing
 
         # Rebuild eccentricity grids
-        self.ecc_ref_parameter_space_input = np.linspace(
+        self.ecc_ref_space = np.linspace(
             self.ecc_ref_parameterspace_range[0],
             self.ecc_ref_parameterspace_range[1],
             amount_input_wfs
@@ -310,7 +343,7 @@ class AnalyseSurrogate(Call_Surrogate_Testing):
                     plt.xlabel('Mismatch')
                     plt.ylabel('Count')
 
-                    figname = f'Mismatch_distributions_{self.training_set_selection}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_parameter_space_input)}_{max(self.ecc_ref_parameter_space_input)}_Ni={len(self.ecc_ref_parameter_space_input)}]_No={len(self.ecc_ref_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_basis_vecs_phase}_Nga={self.N_basis_vecs_amp}_ms={self.minimum_spacing_greedy}.png'
+                    figname = f'Mismatch_distributions_{self.training_set_selection}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}_Ni={len(self.ecc_ref_space)}]_No={len(self.ecc_ref_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_basis_vecs_phase}_Nga={self.N_basis_vecs_amp}_ms={self.minimum_spacing_greedy}.png'
                     # Ensure the directory exists, creating it if necessary and save
                     os.makedirs('Images/Mismatch_distributions', exist_ok=True)
                     mismatch_distribution.savefig(f'Images/Mismatch_distributions/{figname}', dpi=300)
@@ -418,7 +451,7 @@ class AnalyseSurrogate(Call_Surrogate_Testing):
 
             # Save the figure
             os.makedirs("Images/Hyperparameter_3D", exist_ok=True)
-            figname = f'Hyperparameter_3D_opt_{self.training_set_selection}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_parameter_space_input)}_{max(self.ecc_ref_parameter_space_input)}_Ni={len(self.ecc_ref_parameter_space_input)}]_No={len(self.ecc_ref_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_basis_vecs_phase}_Nga={self.N_basis_vecs_amp}_ms={self.minimum_spacing_greedy}.png'
+            figname = f'Hyperparameter_3D_opt_{self.training_set_selection}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}_Ni={len(self.ecc_ref_space)}]_No={len(self.ecc_ref_parameter_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_basis_vecs_phase}_Nga={self.N_basis_vecs_amp}_ms={self.minimum_spacing_greedy}.png'
 
             plt.savefig(f'Images/Hyperparameter_3D/{figname}', dpi=300)
             print(f"Saved 3D plot for minimum_spacing={ms} to Images/Hyperparameter_3D/{figname}")
