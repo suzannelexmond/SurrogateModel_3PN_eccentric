@@ -32,7 +32,7 @@ class Generate_TrainingSet_GPR_Opt(Generate_Offline_Surrogate):
     #     empirical_nodes_idx [dimenionless], narray, int: Stores indices of empirical nodes, to be set during get_empirical_nodes().
 
     #     """
-    #     self.ecc_ref_parameter_space_input = ecc_ref_parameterspace
+    #     self.ecc_ref_space = ecc_ref_parameterspace
     #     self.minimum_spacing_greedy = minimum_spacing_greedy
 
     #     self.min_greedy_error_amp = min_greedy_error_amp
@@ -42,7 +42,7 @@ class Generate_TrainingSet_GPR_Opt(Generate_Offline_Surrogate):
 
     #     # To be stored parameters
     #     self.residual_reduced_basis = None
-    #     self.best_rep_parameters_idx = None
+    #     self.indices_basis = None
     #     self.empirical_nodes_idx = None
 
     #     self.highest_tmin_value = None
@@ -52,48 +52,44 @@ class Generate_TrainingSet_GPR_Opt(Generate_Offline_Surrogate):
     def __init__(
         self,
         time_array,
-        ecc_ref_parameterspace_range,
+        mass_ratio_range, 
+        ecc_ref_range, 
+        mean_ano_ref_range, 
+        chi1_range, 
+        chi2_range, 
         amount_input_wfs,
         amount_output_wfs,
-        N_basis_vecs_amp=None,
-        N_basis_vecs_phase=None,
-        min_greedy_error_amp=None,
-        min_greedy_error_phase=None,
-        minimum_spacing_greedy=0.005,
+        minimum_spacing_greedy=0.008,
         f_lower=10,
         f_ref=20,
-        chi1=0,
-        chi2=0,
         phiRef=0.,
-        rel_anomaly=0.,
         inclination=0.,
         truncate_at_ISCO=True,
-        truncate_at_tmin=True,
-        geometric_units=True
+        truncate_at_tmin=True
     ):
         
-        Generate_Offline_Surrogate.__init__(
-        self, 
-        time_array=time_array, 
-        ecc_ref_parameterspace_range=ecc_ref_parameterspace_range,
-        amount_input_wfs=amount_input_wfs,
-        amount_output_wfs=amount_output_wfs,
-        N_basis_vecs_amp=N_basis_vecs_amp,
-        N_basis_vecs_phase=N_basis_vecs_phase,
-        min_greedy_error_amp=min_greedy_error_amp,
-        min_greedy_error_phase=min_greedy_error_phase,
-        minimum_spacing_greedy=minimum_spacing_greedy,
-        f_ref=f_ref,
-        f_lower=f_lower,
-        chi1=chi1,
-        chi2=chi2,
-        phiRef=phiRef,
-        rel_anomaly=rel_anomaly,
-        inclination=inclination,
-        truncate_at_ISCO=truncate_at_ISCO,
-        truncate_at_tmin=truncate_at_tmin,
-        geometric_units=geometric_units
-        )
+        super().__init__(
+            time_array=time_array, 
+            mass_ratio_range=mass_ratio_range, 
+            ecc_ref_range=ecc_ref_range, 
+            mean_ano_ref_range=mean_ano_ref_range, 
+            chi1_range=chi1_range, 
+            chi2_range=chi2_range, 
+            f_lower=f_lower, 
+            f_ref=f_ref, 
+            phiRef=phiRef, 
+            inclination=inclination, 
+            amount_input_wfs=amount_input_wfs, 
+            amount_output_wfs=amount_output_wfs, 
+            N_basis_vecs_amp=None, 
+            N_basis_vecs_phase=None, 
+            min_greedy_error_amp=None, 
+            min_greedy_error_phase=None, 
+            training_set_selection='GPR_opt', 
+            minimum_spacing_greedy=minimum_spacing_greedy, 
+            truncate_at_ISCO=truncate_at_ISCO, 
+            truncate_at_tmin=truncate_at_tmin
+            )
 
 
     def fit_to_training_set_GPR_opt(self, property, N_GPR_basis_vecs, min_greedy_error=None, N_basis_vecs=None, training_set=None, X_train=None, save_fits_to_file=True, plot_kernels=False, 
@@ -115,7 +111,7 @@ class Generate_TrainingSet_GPR_Opt(Generate_Offline_Surrogate):
             try:
                 start = time.time()
 
-                filename = f'Straindata/GPRfits/GPRfits_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_parameter_space_input)}_{max(self.ecc_ref_parameter_space_input)}_N={self.amount_input_wfs}]_No={self.amount_output_wfs}_g_err={min_greedy_error}_Ng_vecs={N_basis_vecs}_min_s={self.minimum_spacing_greedy}.npz'
+                filename = f'Straindata/GPRfits/GPRfits_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}_N={self.amount_input_wfs}]_No={self.amount_output_wfs}_g_err={min_greedy_error}_Ng_vecs={N_basis_vecs}_min_s={self.minimum_spacing_greedy}.npz'
                 load_GPRfits = np.load(filename, allow_pickle=True)
                 
                 gaussian_fit = load_GPRfits['GPR_fit']
@@ -126,7 +122,7 @@ class Generate_TrainingSet_GPR_Opt(Generate_Offline_Surrogate):
                 self.phase_circ = load_GPRfits['phase_circ']
                 lml_fits = load_GPRfits['lml_fits']
                 training_set = load_GPRfits['training_set']
-                self.best_rep_parameters_idx = load_GPRfits['best_rep_parameters_idx']
+                self.indices_basis = load_GPRfits['best_rep_parameters_idx']
                 self.best_rep_parameters = load_GPRfits['best_rep_parameters']
                 uncertainty_region = load_GPRfits['uncertainty_region'].tolist()
 
@@ -160,19 +156,19 @@ class Generate_TrainingSet_GPR_Opt(Generate_Offline_Surrogate):
             self.residual_reduced_basis = np.vstack([self.residual_reduced_basis, opt_residual_basis_vector])
 
             # Update the best pick parameters 
-            self.best_rep_parameters_idx.append(worst_relative_GPR_error_idx)
+            self.indices_basis.append(worst_relative_GPR_error_idx)
             self.best_rep_parameters.append(self.ecc_ref_parameter_space_output[worst_relative_GPR_error_idx])
 
             #Generate the training set at empirical nodes for next GPR iteration
             residual_training_set = self.residual_reduced_basis[:, self.empirical_nodes_idx]
 
 
-# sampling_frequency = 2048 # or 4096
-# duration = 4 # seconds
-# time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
+sampling_frequency = 2048 # or 4096
+duration = 4 # seconds
+time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
 
-# gt = Generate_TrainingSet_GPR_Opt(time_array=time_array, ecc_ref_parameterspace_range=[0.0,0.3], amount_input_wfs=40, amount_output_wfs=500, N_basis_vecs_amp=25,
-#                                   N_basis_vecs_phase=25)
+gt = Generate_TrainingSet_GPR_Opt(time_array=time_array, ecc_ref_parameterspace_range=[0.0,0.3], amount_input_wfs=40, amount_output_wfs=500, N_basis_vecs_amp=25,
+                                  N_basis_vecs_phase=25)
 
-# gt.fit_to_training_set_GPR_opt('phase', N_GPR_basis_vecs=25, plot_GPR_fits=True, save_fig_GPR_fits=True, plot_emp_nodes_at_ecc=0.1, save_fig_emp_nodes=True)
-# gt.fit_to_training_set_GPR_opt('amplitude', N_GPR_basis_vecs=25, plot_GPR_fits=True, save_fig_GPR_fits=True, plot_emp_nodes_at_ecc=0.1, save_fig_emp_nodes=True)
+gt.fit_to_training_set_GPR_opt('phase', N_GPR_basis_vecs=25, plot_GPR_fits=True, save_fig_GPR_fits=True, plot_emp_nodes_at_ecc=0.1, save_fig_emp_nodes=True)
+gt.fit_to_training_set_GPR_opt('amplitude', N_GPR_basis_vecs=25, plot_GPR_fits=True, save_fig_GPR_fits=True, plot_emp_nodes_at_ecc=0.1, save_fig_emp_nodes=True)

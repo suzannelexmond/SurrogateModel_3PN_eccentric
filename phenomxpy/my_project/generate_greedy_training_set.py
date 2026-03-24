@@ -5,7 +5,127 @@ from scipy.linalg import orth
 from skreducedmodel.reducedbasis import ReducedBasis
 from skreducedmodel.empiricalinterpolation import EmpiricalInterpolation
 
-plt.switch_backend('WebAgg')
+# --------------------------------------------------------
+from dataclasses import dataclass
+
+from sklearn.model_selection import KFold
+from sklearn.preprocessing import StandardScaler
+from sklearn.gaussian_process import GaussianProcessRegressor
+from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
+
+from scipy.stats import skew, kurtosis, normaltest, norm
+
+# --------------------------------------------------------------------
+
+# plt.switch_backend('WebAgg')
+from dataclasses import dataclass, field
+from typing import Any, Optional
+
+
+@dataclass
+class TrainingSetParameters:
+    property: str = "phase"  # or "amplitude"
+    e: Any = field(default_factory=lambda: np.round(np.linspace(0.0, 0.3, num=100), 4))
+    l: Any = field(default_factory=lambda: np.round(np.linspace(0.0, 2*np.pi, num=100), 4))
+    q: Any = field(default_factory=lambda: np.round(np.linspace(1, 20, num=100), 4))
+    chi1: Any = field(default_factory=lambda: np.round(np.linspace(-0.995, 0.995, num=100), 4))
+    chi2: Any = field(default_factory=lambda: np.round(np.linspace(-0.995, 0.995, num=100), 4))
+    
+
+    Nb: Optional[int] = None
+    gerr: Optional[float] = None
+
+    fref: float = 20
+    flow: float = 10
+    phi: float = 0.0
+    inc: float = 0.0
+    isco: bool = True
+    tmin: bool = True
+
+    luminosity_distance: Optional[float] = None
+
+    # Calculated properties:
+    circ: Any = None # circular phase or amplitude
+    residuals: Any = None # residuals in the parameter space for the chosen property (phase or amplitude)
+    basis_indices: Any = None # indices of the selected greedy basis vectors in the original parameter space
+    empirical_indices: Any = None # indices of the empirical interpolation nodes in the original time array
+    residual_basis: Any = None # the reduced basis of the residuals in the parameter space for the chosen property (phase or amplitude)
+
+    def __post_init__(self):
+        self.e = np.round(np.asarray(self.e, dtype=float), 4)
+        self.l = np.round(np.asarray(self.l, dtype=float), 4)
+        self.q = np.round(np.asarray(self.q, dtype=float), 4)
+        self.chi1 = np.round(np.asarray(self.chi1, dtype=float), 4)
+        self.chi2 = np.round(np.asarray(self.chi2, dtype=float), 4)
+
+    @staticmethod
+    def _range_block(name, values):
+        values = np.asarray(values, dtype=float)
+        return f"{name}=[{values.min():g}_{values.max():g}_N={len(values)}]"
+
+    @staticmethod
+    def _scalar_block(name, value):
+        return f"{name}={value:g}"
+
+    def name_blocks(self):
+        blocks = [
+            self._range_block("e", self.e),
+            self._range_block("l", self.l),
+            self._range_block("q", self.q),
+            self._range_block("x1", self.chi1),
+            self._range_block("x2", self.chi2),
+            self._scalar_block("fr", self.fref),
+            self._scalar_block("fl", self.flow),
+        ]
+
+        if self.phi != 0:
+            blocks.append(self._scalar_block("phi", self.phi))
+        if self.inc != 0:
+            blocks.append(self._scalar_block("incl", self.inc))
+
+        if self.Nb is not None:
+            blocks.append(f"Nb={self.Nb}")
+        if self.gerr is not None:
+            blocks.append(f"gerr={self.gerr}")
+
+
+        if not self.isco:
+            blocks.append("noISCO")
+        if not self.tmin:
+            blocks.append("notmin")
+
+        if self.luminosity_distance is not None:
+            blocks.append("SI")
+
+        return blocks
+
+    def filename(self, prefix="data", ext="npz", directory=None):
+        name = f"{prefix}_{'_'.join(self.name_blocks())}.{ext}"
+        if directory is not None:
+            return f"{directory.rstrip('/')}/{name}"
+        return name
+
+    def figname(self, prefix="fig", ext="png", directory=None):
+        # Ensure the directory exists, creating it if necessary and save
+        if directory is not None:
+            os.makedirs(directory, exist_ok=True)
+
+        figname = self.filename(prefix=prefix, ext=ext, directory=directory)
+        w = Warnings()
+        print(w.colored_text(f"Figure is saved in {figname}", 'blue'))
+
+        return figname
+
+@dataclass
+class FlowDiagnosticResult:
+    mean_abs_skew: float
+    mean_abs_excess_kurtosis: float
+    frac_non_normal_nodes: float
+    mean_abs_offdiag_corr: float
+    max_abs_offdiag_corr: float
+    coverage_1sigma: float
+    coverage_2sigma: float
+    recommendation: str
 
 class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
     """
@@ -15,27 +135,57 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
     """
 
-    def __init__(self, time_array, ecc_ref_parameterspace, mean_ano_parameterspace, N_basis_vecs_amp=None, N_basis_vecs_phase=None, min_greedy_error_amp=None, min_greedy_error_phase=None, minimum_spacing_greedy=0.005, f_ref=20, f_lower=10, chi1=0, chi2=0, phiRef=0., rel_anomaly=0., inclination=0., truncate_at_ISCO=True, truncate_at_tmin=True):
+    def __init__(self, time_array, 
+                 ecc_ref_parameterspace=np.linspace(0.0, 0.3, num=100), 
+                 mean_ano_parameterspace=np.linspace(0.0, 2*np.pi, num=100), 
+                 mass_ratio_parameterspace=np.linspace(1, 20, num=100),
+                 chi1_parameterspace=np.linspace(-0.995, 0.995, num=100),
+                 chi2_parameterspace=np.linspace(-0.995, 0.995, num=100),
+                 N_basis_vecs_amp=None, 
+                 N_basis_vecs_phase=None, 
+                 min_greedy_error_amp=None, 
+                 min_greedy_error_phase=None, 
+                 minimum_spacing_greedy=0.005, 
+                 f_ref=20, 
+                 f_lower=10, 
+                 phiRef=0., 
+                 inclination=0., 
+                 truncate_at_ISCO=True, 
+                 truncate_at_tmin=True):
         """
         Parameters:
         ----------------
         time_array [s], np.array : Time array in seconds.
-        ecc_ref [dimensionless], float: Eccentricity of binary at start f_lower
-        total_mass [M_sun], int : Total mass of the binary in solar masses
+        ecc_ref_parameterspace [dimensionless], np.array : Array of reference eccentricities.
+        mean_ano_parameterspace [rad], np.array : Array of reference mean anomalies.
+        mass_ratio_parameterspace [dimensionless], np.array : Array of reference mass ratios.
+        chi1_parameterspace [dimensionless], np.array : Array of reference primary spins.
+        chi2_parameterspace [dimensionless], np.array : Array of reference secondary spins.
         f_lower [Hz], float: Start frequency of the waveform
         f_ref [Hz], float: Reference frequency at which the waveform parameters (eccentricity, spin, ...) are defined.
-        chi1 [dimensionless], float, ndarray : Spin of primary. If float, interpreted as z component
-        chi2 [dimensionless], float, ndarray : Spin of secondary. If float, interpreted as z component
-        rel_anomaly [rad], float : Relativistic anomaly. Radial phase which parametrizes the orbit within the Keplerian (relativistic) parametrization. Defaults to 0 (periastron).
         inclination [rad], float : Inclination angle of the binary system. Defaults to 0 (face-on).
-        luminosity_distance [Mpc], float : Luminosity distance of the binary in megap
-        parameter_space_input [dimensionless], float, ndarray : Numpy array of eccentric values used to calculate training set. MORE VALUES RESULTS IN LARGER COMPUTATIONAL TIME!
-        residual_greedy_basis [dimenionless OR rad], narray, float: Stores the residual greedy basis, set later during get_greedy_parameters().
-        greedy_parameters_idx [dimensionless], narray, float: Holds indices of greedy parameters, set later during get_greedy_parameters().
-        empirical_nodes_idx [dimenionless], narray, int: Stores indices of empirical nodes, to be set during get_empirical_nodes().
+        luminosity_distance [Mpc], float : Luminosity distance of the binary in megaparsecs. Defaults to 100 Mpc.
+        phiRef [rad], float : Reference phase of the waveform at the reference frequency. Defaults to 0.
+        truncate_at_ISCO [bool] : Whether to truncate the waveform at the ISCO. Defaults to True.
+        truncate_at_tmin [bool] : Whether to truncate the waveform at the minimum time in the time array. Defaults to True.
+        
+        !Either N_basis_vecs_amp or min_greedy_error_amp can be specified to set the stopping criterion for the greedy algorithm for amplitude residuals. If both are None, no stopping criterion is applied and all basis vectors will be selected.
+        !Either N_basis_vecs_phase or min_greedy_error_phase can be specified to set the stopping criterion for the greedy algorithm for phase residuals. If both are None, no stopping criterion is applied and all basis vectors will be selected.
 
+        N_basis_vecs_amp [int] : Maximum number of basis vectors for amplitude residuals. If None, no limit is applied.
+        N_basis_vecs_phase [int] : Maximum number of basis vectors for phase residuals. If None, no limit is applied.
+        min_greedy_error_amp [float] : Minimum greedy error for amplitude residuals. If None, no minimum error threshold is applied.
+        min_greedy_error_phase [float] : Minimum greedy error for phase residuals. If None, no minimum error threshold is applied.
+        
+        minimum_spacing_greedy [float] : Minimum spacing in eccentricity for greedy selection. Defaults to 0.005.
         """
-        self.ecc_ref_parameter_space_input = ecc_ref_parameterspace
+        # Check if property is valid and adjust settings accordingly
+        self.ecc_ref_space = self.allowed_eccentricity_warning(ecc_ref_parameterspace)
+        self.mass_ratio_space = self.allowed_mass_ratio_warning(mass_ratio_parameterspace)
+        self.mean_ano_ref_space = self.allowed_mean_anomaly_warning(mean_ano_parameterspace)
+        self.chi1_space = self.allowed_chispin_warning(chi1_parameterspace)
+        self.chi2_space = self.allowed_chispin_warning(chi2_parameterspace)
+
         self.minimum_spacing_greedy = minimum_spacing_greedy
 
         self.min_greedy_error_amp = min_greedy_error_amp
@@ -44,16 +194,33 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         self.N_basis_vecs_phase = N_basis_vecs_phase
 
         # To be stored parameters
+        self.residuals_space = None
         self.residual_reduced_basis = None
-        self.best_rep_parameters_idx = None
+        self.indices_basis = None
         self.best_rep_parameters = None
         self.empirical_nodes_idx = None
 
         self.highest_tmin_value = None
-        # Inherit parameters from all previously defined classes
-        Waveform_Properties.__init__(self, time_array=time_array, ecc_ref=None, total_mass=None, luminosity_distance=None, f_lower=f_lower, f_ref=f_ref, chi1=chi1, chi2=chi2, phiRef=phiRef, rel_anomaly=rel_anomaly, inclination=inclination, truncate_at_ISCO=truncate_at_ISCO, truncate_at_tmin=truncate_at_tmin)
+        
 
-    def generate_property_dataset(self, ecc_list, property, save_dataset_to_file=None, plot_residuals_time_evolv=False, plot_residuals_eccentric_evolv=False, save_fig_eccentric_evolv=False, save_fig_time_evolve=False, show_legend=True):
+        # Inherit parameters from all previously defined classes
+        super().__init__(time_array=time_array, 
+                         ecc_ref=None, 
+                         mean_anomaly_ref=0.,
+                         total_mass=None, 
+                         mass_ratio=1., 
+                         luminosity_distance=None, 
+                         f_lower=f_lower, 
+                         f_ref=f_ref, 
+                         chi1=0., 
+                         chi2=0., 
+                         phiRef=phiRef, 
+                         inclination=inclination, 
+                         truncate_at_ISCO=truncate_at_ISCO, 
+                         truncate_at_tmin=truncate_at_tmin,
+                         geometric_units=True)
+
+    def generate_property_dataset(self, property, ecc_ref_list=None, mass_ratios_list=None, chi1_list=None, chi2_list=None, save_dataset_to_file=None, plot_residuals_time_evolv=False, plot_residuals_eccentric_evolv=False, save_fig_eccentric_evolv=False, save_fig_time_evolve=False, show_legend=True):
         """
         Generates a dataset of waveform residuals based on the specified property for a certain range of eccentricities (ecc).
 
@@ -74,16 +241,58 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         -------
         residual_dataset : ndarray
             Array of residuals for each eccentricity.
-
         """
+        # Resolve the parameter space for eccentricities and mass ratios, using the provided lists or default spaces
+        ecc_ref_list = self.resolve_property(prop=ecc_ref_list, default=self.ecc_ref_space) 
+        mass_ratios_list = self.resolve_property(prop=mass_ratios_list, default=self.mass_ratio_space) 
+        chi1_list = self.resolve_property(prop=chi1_list, default=self.chi1_space)
+        chi2_list = self.resolve_property(prop=chi2_list, default=self.chi2_space)
 
-        try: 
-            # Attempt to load existing residual dataset
-            filename = f'Straindata/Residuals/residuals_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(ecc_list)}_{max(ecc_list)}_N={len(ecc_list)}].npz'
+        # Create training set objects 
+        common_params = dict(
+            e=ecc_ref_list,
+            q=mass_ratios_list,
+            chi1=chi1_list,
+            chi2=chi2_list,
+            fref=self.f_ref,
+            flow=self.f_lower,
+            phi=self.phiRef,
+            inc=self.inclination,
+            isco=self.truncate_at_ISCO,
+            tmin=self.truncate_at_tmin,
+        )
+
+        self.training_amp = TrainingSetParameters(**common_params, property="amplitude", Nb=self.N_basis_vecs_amp, gerr=self.min_greedy_error_amp)
+        self.training_phase = TrainingSetParameters(**common_params, property="phase", Nb=self.N_basis_vecs_phase, gerr=self.min_greedy_error_phase)
+
+        # training object for the chosen property (phase or amplitude)
+        tr_obj = self._get_training_obj(property)
+
+        try:
+            # filename = train_obj.filename(
+            #     prefix=f"residuals_{property}",
+            #     directory="Straindata/Residuals"
+            # )
+        
+        # Attempt to load existing residual dataset
+            filename = f'Straindata/Residuals/residuals_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(ecc_ref_list)}_{max(ecc_ref_list)}_N={len(ecc_ref_list)}].npz'
             load_residuals = np.load(filename)
+
+            tr_obj.residuals = load_residuals["residual"]
+            self.time = load_residuals["time"]
+
             
-            residual_dataset = load_residuals['residual']
-            self.time = load_residuals['time']
+
+        # except FileNotFoundError:
+        #     print(f"Could not find {filename}")
+
+        # try: 
+        #     # Attempt to load existing residual dataset
+        #     filename = f'Straindata/Residuals/residuals_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(ecc_ref_list)}_{max(ecc_ref_list)}_N={len(ecc_ref_list)}].npz'
+        #     load_residuals = np.load(filename)
+            
+        #     residual_dataset = load_residuals['residual']
+        #     self.time = load_residuals['time']
             
             print(f'Residual parameterspace dataset found for {property}')
             
@@ -91,22 +300,31 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             print(e)
 
             # If attempt to load residuals failed, generate polarisations and calculate residuals
-            hp_dataset, hc_dataset = self._generate_polarisation_data(ecc_list)
-            residual_dataset = self._calculate_residuals(ecc_list, hp_dataset, hc_dataset, property)
+            hp_dataset, hc_dataset = self._generate_polarisation_data(train_obj=tr_obj)
+            self._calculate_residuals(train_obj=tr_obj, 
+                                      hp_dataset=hp_dataset, 
+                                      hc_dataset=hc_dataset, 
+                                      save_dataset_to_file=save_dataset_to_file, 
+                                      plot_residuals_eccentric_evolv=plot_residuals_eccentric_evolv, 
+                                      plot_residuals_time_evolv=plot_residuals_time_evolv, 
+                                      save_fig_eccentric_evolv=save_fig_eccentric_evolv, 
+                                      save_fig_time_evolve=save_fig_time_evolve, 
+                                      show_legend=show_legend)
+            
             del hp_dataset, hc_dataset  # Free memory
 
-            print(f'Generated residual parameterspace dataset for {property} ', len(ecc_list), ' waveforms')
-            # If save_dataset_to_file is True save the residuals to file in Straindata/Residuals
-            if save_dataset_to_file is True and not os.path.isfile(f'Straindata/Residuals/residuals_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(ecc_list)}_{max(ecc_list)}_N={len(ecc_list)}].npz'):
-                self._save_residual_dataset(ecc_list, property, residual_dataset)
+        #     print(f'Generated residual parameterspace dataset for {property} ', len(ecc_ref_list), ' waveforms')
+        #     # If save_dataset_to_file is True save the residuals to file in Straindata/Residuals
+        #     if save_dataset_to_file is True and not os.path.isfile(f'Straindata/Residuals/residuals_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(ecc_ref_list)}_{max(ecc_ref_list)}_N={len(ecc_ref_list)}].npz'):
+        #         self._save_residual_dataset(ecc_ref_list, property, residual_dataset)
 
-        # If plot_residuals is True, plot whole residual dataset
-        if (plot_residuals_eccentric_evolv is True) or (plot_residuals_time_evolv is True):
-            self._plot_residuals(residual_dataset, ecc_list, property, plot_residuals_eccentric_evolv, plot_residuals_time_evolv, save_fig_eccentric_evolv, save_fig_time_evolve, show_legend=show_legend )
+        # # If plot_residuals is True, plot whole residual dataset
+        # if (plot_residuals_eccentric_evolv is True) or (plot_residuals_time_evolv is True):
+        #     self._plot_residuals(residual_dataset, ecc_ref_list, property, plot_residuals_eccentric_evolv, plot_residuals_time_evolv, save_fig_eccentric_evolv, save_fig_time_evolve, show_legend=show_legend )
         
-        return residual_dataset
+        return tr_obj.residuals
     
-    def _generate_polarisation_data(self, ecc_list):
+    def _generate_polarisation_data(self, train_obj):
         """
         Helper function to generate polarisation data for a list of eccentricities.
 
@@ -123,9 +341,12 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             Cross polarisation data.
 
         """
+
         try:
             # Attempt to load existing polarisation dataset
-            load_polarisations = np.load(f'Straindata/Polarisations/polarisations_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(ecc_list)}_{max(ecc_list)}_N={len(ecc_list)}]_t_lower={int(self.time[0])}.npz', allow_pickle=True)
+            # filename = training_obj.filename(prefix=f"polarisation", directory="Straindata/Polarisations")
+            filename = f'Straindata/Polarisations/polarisations_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(train_obj.e)}_{max(train_obj.e)}_N={len(train_obj.e)}]_t_lower={int(self.time[0])}.npz'
+            load_polarisations = np.load(filename, allow_pickle=True)
             hp_dataset = load_polarisations['hp']
             hc_dataset = load_polarisations['hc']
             self.time = load_polarisations['time']
@@ -134,21 +355,21 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
         except:
             # Get waveform size for truncated ISCO waveform of smallest waveform
-            sorted_ecc_list = np.sort(ecc_list)
+            sorted_ecc_list = np.sort(train_obj.e)
 
             ISCO_ecc = sorted_ecc_list[-1] # Highest eccentricity in the list --> earliest ISCO cut-off
-            hp_ISCO, hc_ISCO = self.simulate_inspiral(ecc_ref=ISCO_ecc, truncate_at_ISCO=True, truncate_at_tmin=True)
+            hp_ISCO, hc_ISCO, _ = self.simulate_inspiral(ecc_ref=ISCO_ecc, mass_ratio=1, chi1=0, chi2=0, truncate_at_ISCO=True, truncate_at_tmin=True, update_results=True)
             
-            hp_dataset = np.zeros((len(ecc_list), len(self.time))) 
-            hc_dataset = np.zeros((len(ecc_list), len(self.time)))
+            hp_dataset = np.zeros((len(train_obj.e), len(self.time))) 
+            hc_dataset = np.zeros((len(train_obj.e), len(self.time)))
 
-            for i, ecc in enumerate(ecc_list):
+            for i, ecc in enumerate(train_obj.e):
                 if ecc == ISCO_ecc:
                     # Store first waveform in dataset
                     hp_dataset[i] = hp_ISCO
                     hc_dataset[i] = hc_ISCO
                 else:
-                    hp, hc = self.simulate_inspiral(ecc_ref=ecc, truncate_at_ISCO=False, truncate_at_tmin=False)
+                    hp, hc, _ = self.simulate_inspiral(ecc_ref=ecc, truncate_at_ISCO=False, truncate_at_tmin=False, update_results=False) # Simulate full waveform without truncation to ensure we have the full length of the waveform for all eccentricities  
 
                     hp_dataset[i] = hp[:len(hp_ISCO)]  # Ensure the waveform length matches the shortest time array
                     hc_dataset[i] = hc[:len(hp_ISCO)]  # Ensure the waveform length matches the shortest time array
@@ -159,11 +380,12 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
             # Ensure the directory exists, creating it if necessary and save
             os.makedirs('Straindata/Polarisations', exist_ok=True)
-            np.savez(f'Straindata/Polarisations/polarisations_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(ecc_list)}_{max(ecc_list)}_N={len(ecc_list)}]_t_lower={int(self.time[0])}.npz', hp=hp_dataset, hc=hc_dataset, time=self.time)
+            # filename = train_obj.filename(prefix=f"polarisation", directory="Straindata/Polarisations")
+            np.savez(f'Straindata/Polarisations/polarisations_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(train_obj.e)}_{max(train_obj.e)}_N={len(train_obj.e)}]_t_lower={int(self.time[0])}.npz', hp=hp_dataset, hc=hc_dataset, time=self.time)
 
         return hp_dataset, hc_dataset
 
-    def _calculate_residuals(self, ecc_list, hp_dataset, hc_dataset, property):
+    def _calculate_residuals(self, train_obj, hp_dataset, hc_dataset, save_dataset_to_file=False, plot_residuals_eccentric_evolv=False, plot_residuals_time_evolv=False, save_fig_eccentric_evolv=False, save_fig_time_evolve=False, show_legend=True):
         """
         Helper function to calculate residuals for a property given polarisation data.
 
@@ -184,36 +406,59 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             Array of residuals for each eccentricity.
             
         """
+
         self.circulair_wf()
 
         # Create empty residual dataset
-        residual_dataset = np.zeros((len(ecc_list), len(self.time)))
+        residual_dataset = np.zeros((len(train_obj.e), len(self.time)))
 
         # Fill residual dataset with residuals of chosen property for given eccentric parameter space
-        for i, ecc in enumerate(ecc_list):
-            residual = self.calculate_residual(hp_dataset[i], hc_dataset[i], ecc, property)
+        for i, ecc in enumerate(train_obj.e):
+            residual = self.calculate_residual(hp_dataset[i], hc_dataset[i], ecc, train_obj.property)
             residual_dataset[i] = residual
 
             del residual
+
+        # Assign the calculated residual dataset to the corresponding training object
+        train_obj.residuals = residual_dataset
+
+        print(f'Generated residual parameterspace dataset for {train_obj.property} ', len(train_obj.e), ' waveforms')
+
+        # If save_dataset_to_file is True save the residuals to file in Straindata/Residuals
+        # filename = train_obj.filename(prefix=f"residuals_{train_obj.property}", directory="Straindata/Residuals")
+        filename = f'Straindata/Residuals/residuals_{train_obj.property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(train_obj.e)}_{max(train_obj.e)}_N={len(train_obj.e)}].npz'
+        if save_dataset_to_file is True and not os.path.isfile(filename):
+            self._save_residual_dataset(train_obj)
+
+        # If plot_residuals is True, plot whole residual dataset
+        if (plot_residuals_eccentric_evolv is True) or (plot_residuals_time_evolv is True):
+            self._plot_residuals(train_obj, plot_residuals_eccentric_evolv, plot_residuals_time_evolv, save_fig_eccentric_evolv, save_fig_time_evolve, show_legend=show_legend)
+        
+        self.residuals_space = residual_dataset # Store the residual dataset as an attribute for later use in greedy algorithm
+
         return residual_dataset
     
-    def _plot_residuals(self, residual_dataset, ecc_list, property, plot_eccentric_evolv=False, plot_time_evolve=False, save_fig_eccentric_evolve=False, save_fig_time_evolve=False, show_legend=True):
+
+    def _plot_residuals(self, train_obj, plot_eccentric_evolv=False, plot_time_evolve=False, save_fig_eccentric_evolve=False, save_fig_time_evolve=False, show_legend=True):
         """Function to plot residuals dataset including save figure option."""
+        ecc_list = train_obj.e
+        residual_dataset = train_obj.residuals
+
         if plot_eccentric_evolv is True:
             fig_residuals_ecc = plt.figure()
             for i in range(0, len(self.time), 100):
-                plt.plot(ecc_list, residual_dataset.T[i], label='t/M = ' + f'{round(self.time[i], 1)}', linewidth=0.6)
+                plt.plot(ecc_list, train_obj.residuals.T[i], label='t/M = ' + f'{round(self.time[i], 1)}', linewidth=0.6)
                 
             plt.xlabel('eccentricity')
-            if property == 'phase':
+            if train_obj.property == 'phase':
                 plt.ylabel(' $\Delta \phi_{22}$ [radians]')
-            elif property == 'amplitude':
+            elif train_obj.property == 'amplitude':
                 plt.ylabel('$\Delta A_{22}$')
             else:
-                print('Choose property = "phase", "amplitude"', property)
+                print('Choose property = "phase", "amplitude"', train_obj.property)
                 sys.exit(1)
 
-            plt.title(f'Residuals {property}')
+            plt.title(f'Residuals {train_obj.property}')
             plt.grid(True)
 
             if show_legend:
@@ -225,13 +470,9 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
                 ISCO = '' if self.truncate_at_ISCO else 'NO_ISCO_'
                 tmin = '' if self.truncate_at_tmin else 'NO_tmin_'
 
-                figname = f'Images/Residuals/Residuals_eccentric_evolv_{property}_{ISCO}_{tmin}_M={self.total_mass}_ecc_list=[{round(min(ecc_list), 2)}_{round(max(ecc_list), 2)}_N={len(self.ecc_ref_parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}.png'
-               
-                # Ensure the directory exists, creating it if necessary and save
-                os.makedirs('Images/Residuals', exist_ok=True)
+                figname = train_obj.figname(prefix=f'Residuals_eccentric_evolv', directory='Images/Residuals') # Use the filename method of the training object to generate a consistent filename
                 fig_residuals_ecc.savefig(figname)
 
-                print(self.colored_text(f'Figure is saved in {figname}', 'blue'))
                 # plt.close('all') # Clean up plot
 
         if plot_time_evolve is True:
@@ -241,15 +482,15 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
                 plt.plot(self.time, residual_dataset[i], label='e$_{ref}$' + f' = {round(ecc_list[i], 3)}', linewidth=0.6)
                
             plt.xlabel('t [M]')
-            if property == 'phase':
+            if train_obj.property == 'phase':
                 plt.ylabel(' $\Delta \phi_{22}$ [radians]')
-            elif property == 'amplitude':
+            elif train_obj.property == 'amplitude':
                 plt.ylabel('$\Delta A_{22}$')
             else:
-                print('Choose property = "phase", "amplitude"', property)
+                print('Choose property = "phase", "amplitude"', train_obj.property)
                 sys.exit(1)
 
-            plt.title(f'Residuals {property}')
+            plt.title(f'Residuals {train_obj.property}')
             plt.grid(True)
 
             if show_legend:
@@ -261,26 +502,35 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
                 ISCO = '' if self.truncate_at_ISCO else 'NO_ISCO'
                 tmin = '' if self.truncate_at_tmin else 'NO_tmin'
 
-
-
-                figname = f'Images/Residuals/Residuals_time_evolv_{property}_{ISCO}_{tmin}_M={self.total_mass}_ecc_list=[{min(ecc_list)}_{max(ecc_list)}_N={len(self.ecc_ref_parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}.png'
-
-                # Ensure the directory exists, creating it if necessary and save
-                os.makedirs('Images/Residuals', exist_ok=True)
+                figname = train_obj.figname(prefix=f'Residuals_time_evolv', directory='Images/Residuals') # Use the filename method of the training object to generate a consistent filename
                 fig_residuals_t.savefig(figname)
 
-                print(self.colored_text(f'Figure is saved in {figname}', 'blue'))
                 # plt.close('all')
     
-    def _save_residual_dataset(self, ecc_list, property, residual_dataset):
+
+    def _save_residual_dataset(self, train_obj):
         """Function to save residual dataset to file."""
 
+        ecc_list = train_obj.ecc_list
+        residual_dataset = train_obj.residuals
+
         os.makedirs('Straindata/Residuals', exist_ok=True)
-        file_path = f'Straindata/Residuals/residuals_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(ecc_list)}_{max(ecc_list)}_N={len(ecc_list)}].npz'
+        # train_obj.filename(prefix=f"residuals", directory="Straindata/Residuals")
+        file_path = f'Straindata/Residuals/residuals_{train_obj.property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(ecc_list)}_{max(ecc_list)}_N={len(ecc_list)}].npz'
         np.savez(file_path, residual=residual_dataset, time=self.time, eccentricities=ecc_list)
         print('Residuals saved to Straindata/Residuals')
 
-    def get_greedy_parameters(self, U, property, min_greedy_error=None, N_greedy_vecs=None, normalize=True, max_tree_depth=1, plot_greedy_error=False, save_greedy_error_fig=False, plot_greedy_vectors=False, save_greedy_vecs_fig=False, plot_SVD_matrix=False, save_SVD_matrix_fig=False, show_legend=False):
+
+    def _get_training_obj(self, property):
+        if property == "amplitude":
+            return self.training_amp
+        elif property == "phase":
+            return self.training_phase
+        else:
+            raise ValueError(f"Unknown property: {property}")
+        
+
+    def get_greedy_parameters(self, training_object, min_greedy_error=None, N_greedy_vecs=None, normalize=True, max_tree_depth=0, plot_greedy_error=False, save_greedy_error_fig=False, plot_greedy_vectors=False, save_greedy_vecs_fig=False, plot_SVD_matrix=False, save_SVD_matrix_fig=False, show_legend=False):
             """
             Greedy algorithm to select representative vectors from U using an orthonormal basis.
 
@@ -304,11 +554,11 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             residuals : list
                 Maximum residual norm at each iteration.
             """
-            dataset = U.copy()
-            greedy_tol = min_greedy_error if min_greedy_error is not None else -np.inf
-            nmax = N_greedy_vecs if N_greedy_vecs is not None else dataset.shape[0]
-            parameters = self.ecc_ref_parameter_space_input[self.ecc_ref_parameter_space_input != 0]
-
+            dataset = training_object.residuals.copy()
+            greedy_tol = self.resolve_property(prop=min_greedy_error, default=-np.inf) 
+            nmax = self.resolve_property(prop=N_greedy_vecs, default=dataset.shape[0])
+            
+            parameters = self.ecc_ref_space[self.ecc_ref_space != 0]
             reduced_basis_object = ReducedBasis(greedy_tol=greedy_tol, normalize=normalize, nmax=nmax, lmax=max_tree_depth)
 
             reduced_basis_object.fit(training_set = dataset,
@@ -316,47 +566,42 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
                 physical_points = self.time
                 )
             
-            greedy_indices = []
+            self.indices_basis = []
 
             for i in range(len(reduced_basis_object.tree.leaves)):
                 # print(f'Leaf {i} leaf indices: {leaf.indices}, leaf error: {leaf.errors}')    
-                greedy_indices.extend(reduced_basis_object.tree.leaves[i].indices)
+                self.indices_basis.extend(reduced_basis_object.tree.leaves[i].indices)
 
-            self.best_rep_parameters_idx = greedy_indices
 
             if plot_greedy_error:
-                self._plot_greedy_errors(reduced_basis_object=reduced_basis_object, dataset=dataset, property=property, save_greedy_fig=save_greedy_error_fig)
+                self._plot_greedy_errors(reduced_basis_object=reduced_basis_object, training_object=training_object, save_greedy_fig=save_greedy_error_fig)
             
             if plot_greedy_vectors:
-                self._plot_greedy_vectors(reduced_basis_object=reduced_basis_object, property=property, save_greedy_vecs_fig=save_greedy_vecs_fig, U=None, show_legend=show_legend)
+                self._plot_greedy_vectors(reduced_basis_object=reduced_basis_object, training_object=training_object, save_greedy_vecs_fig=save_greedy_vecs_fig, U=None, show_legend=show_legend)
             
             if plot_SVD_matrix:
                 self._plot_SVD_matrix(dataset=dataset, property=property, save_SVD_matrix_fig=save_SVD_matrix_fig)
             
             return reduced_basis_object
 
-    def _plot_greedy_errors(self, reduced_basis_object, dataset, property=None, save_greedy_fig=False):
+    def _plot_greedy_errors(self, reduced_basis_object, training_object, save_greedy_fig=False):
         """Function to plot greedy errors of the reduced basis. Option to save figure in Images/Greedy_errors.
         
         Properties:
         - reduced_basis_object: ReducedBasis object from which to extract the greedy basis and calculate projection errors.
-        - dataset: ndarray, shape (num_vectors, vector_length), the dataset of vectors used to build the greedy basis.
-        - property: 'phase' or 'amplitude', used for labeling the y-axis and saving the figure with the correct name.
+        - training_object: object containing the dataset of vectors used to build the greedy basis.
         - save_greedy_fig: bool, if True, saves the figure in Images/Greedy_errors with a name that includes the property and other relevant parameters.
 
         Returns:
         - proj_errors: list of projection errors for each number of greedy basis vectors.
         """
 
-        self.property_warning(property) # checks if property is correctly specified for greedy error plot
-
         reduced_basis = []
         for i in range(len(reduced_basis_object.tree.leaves)):
                 # print(f'Leaf {i} leaf indices: {leaf.indices}, leaf error: {leaf.errors}')    
                 reduced_basis.extend(reduced_basis_object.tree.leaves[i].basis)
-        print(0)
         reduced_basis = np.array(reduced_basis) # (n_greedy_vecs, n_time)
-        print(len(reduced_basis), ' greedy basis vectors selected')
+
         # Greedy errors
         proj_errors = []
 
@@ -364,7 +609,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             basis_k = reduced_basis[:k]                        # (k, n_time)
             max_proj_err = 0.0
 
-            for f in dataset:
+            for f in training_object.residuals: # Loop over all vectors in the original dataset
                 # --- Best projection onto span(basis_k) ---
                 # Solve min ||f - c @ basis_k||
                 coeff_proj, *_ = np.linalg.lstsq(basis_k.T, f, rcond=None)
@@ -404,21 +649,18 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         ax[1].legend()
 
         if save_greedy_fig:
-            os.makedirs('Images/Greedy_errors', exist_ok=True)
-            filename = f'Greedy_error_{property}_M={self.total_mass}_ecc=[{min(self.ecc_ref_parameter_space_input)}_{max(self.ecc_ref_parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_parameter_space_input)}_gerr={min(proj_errors)}_ms={self.minimum_spacing_greedy}.png'
-            
-            fig_greedy_errors.savefig(f'Images/Greedy_errors/{filename}')
-            
-            print(self.colored_text(f'Greedy error fig saved to Images/Greedy_errors/{filename}', 'blue'))
+            figname = training_object.figname(prefix=f'Greedy_error', directory='Images/Greedy_errors') # Use the figname method of the training object to generate a consistent filename
+            fig_greedy_errors.savefig(figname)
+
             # plt.close('all')
 
         return proj_errors
 
-    def _plot_SVD_matrix(self, dataset, property, save_SVD_matrix_fig=False):
+    def _plot_SVD_matrix(self, training_object, save_SVD_matrix_fig=False):
         """Function to plot the SVD matrix of the dataset. Option to save figure in Images/SVD_matrices."""
 
         # Perform SVD on the dataset
-        U, S, Vt = np.linalg.svd(dataset, full_matrices=False)
+        U, S, Vt = np.linalg.svd(training_object.residuals, full_matrices=False)
 
 
         fig_SVD_matrix, axes = plt.subplots(1, 3, figsize=(18,4))
@@ -435,7 +677,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
         for i in range(n_modes_to_plot):
             # Plot the 3 vectors corresponding to the largest singular values (most dominant coherent structure)
-            axes[1].plot(gt.time, Vt[i], label=f"Mode {i+1}") 
+            axes[1].plot(self.time, Vt[i], label=f"Mode {i+1}") 
 
             axes[1].set_xlabel("Time")
             axes[1].set_ylabel("Mode amplitude")
@@ -446,7 +688,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
         for i in range(n_modes_to_plot):
             # Plot the coefficients of the 3 most dominant modes as a function of eccentricity
-            axes[2].plot(ecc_ref_parameterspace, U[:, i], label=f"Mode {i+1}")
+            axes[2].plot(self.ecc_ref_parameterspace, U[:, i], label=f"Mode {i+1}")
 
         axes[2].set_xlabel("Eccentricity")
         axes[2].set_ylabel("Mode coefficient")
@@ -458,12 +700,9 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
 
         if save_SVD_matrix_fig:
-            os.makedirs('Images/Greedy_vectors/SVD_matrices', exist_ok=True)
-            filename = f'SVD_matrix_greedy_basis_{property}_M={self.total_mass}_ecc=[{min(self.ecc_ref_parameter_space_input)}_{max(self.ecc_ref_parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_parameter_space_input)}.png'
-            
-            fig_SVD_matrix.savefig(f'Images/Greedy_vectors/SVD_matrices/{filename}')
-            
-            print(self.colored_text(f'SVD matrix fig saved to Images/SVD_matrices/{filename}', 'blue'))
+            figname = training_object.figname(prefix=f'SVD_matrix', directory='Images/SVD_matrices') # Use the figname method of the training object to generate a consistent filename            
+            fig_SVD_matrix.savefig(figname)
+
             # plt.close('all')
 
     # def _plot_greedy_vectors(self, reduced_basis_object, property, save_greedy_vecs_fig, U=None, show_legend=True):
@@ -482,25 +721,25 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
     #     for j in range(len(reduced_basis_object.tree.leaves)):
     #         for i, vec in enumerate(reduced_basis_object.tree.leaves[j].basis):
     #             ax_main.plot(vec, linewidth=0.6,
-    #                         label=f'$e$={round(self.ecc_ref_parameter_space_input[self.best_rep_parameters_idx[i]], 3)}')
+    #                         label=f'$e$={round(self.ecc_ref_space[self.indices_basis[i]], 3)}')
     
         
 
     #     ax_main.set_ylabel('Vector Value')
-    #     ax_main.set_title(f'Greedy Basis Vectors ({len(self.best_rep_parameters_idx)} vectors) for {property}')
+    #     ax_main.set_title(f'Greedy Basis Vectors ({len(self.indices_basis)} vectors) for {property}')
     #     if show_legend:
     #         ax_main.legend()
     #     ax_main.grid(True)
 
     #     # --- Bottom plot: eccentric points and greedy indices ---
-    #     ecc_values = self.ecc_ref_parameter_space_input # assuming first component = eccentricity
-    #     y = np.zeros(len(self.ecc_ref_parameter_space_input))
+    #     ecc_values = self.ecc_ref_space # assuming first component = eccentricity
+    #     y = np.zeros(len(self.ecc_ref_space))
 
     #     # All dataset points
     #     ax_bottom.plot(ecc_values, y, color='grey', alpha=0.6, label='Dataset points')
 
     #     # Greedy-selected points
-    #     ax_bottom.scatter(ecc_values[self.best_rep_parameters_idx], y[self.best_rep_parameters_idx], color='red', s=20, label='Greedy parameters')
+    #     ax_bottom.scatter(ecc_values[self.indices_basis], y[self.indices_basis], color='red', s=20, label='Greedy parameters')
 
     #     ax_bottom.set_yticks([])
     #     ax_bottom.set_xlabel('Vector index / parameter')
@@ -515,14 +754,14 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
     #     if save_greedy_vecs_fig:
     #         os.makedirs('Images/Greedy_vectors', exist_ok=True)
-    #         figname = f'Images/Greedy_vectors/Greedy_vectors_{property}_M={self.total_mass}_ecc=[{min(self.ecc_ref_parameter_space_input)}_{max(self.ecc_ref_parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_parameter_space_input)}_ms={self.minimum_spacing_greedy}.png'
+    #         figname = f'Images/Greedy_vectors/Greedy_vectors_{property}_M={self.total_mass}_ecc=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_space)}_ms={self.minimum_spacing_greedy}.png'
 
     #         plt.savefig(figname)
             
     #         print(self.colored_text(f'Greedy vectors fig saved to {figname}', 'blue'))
     #         # plt.close('all')
 
-    def _plot_greedy_vectors(self, reduced_basis_object, property, save_greedy_vecs_fig, U=None, show_legend=True):
+    def _plot_greedy_vectors(self, reduced_basis_object, training_object, save_greedy_vecs_fig, U=None, show_legend=True):
         """Function to plot and optionally save the greedy basis vectors.
         If U is specified, also plot complete dataset before greedy algorithm.
         """
@@ -560,13 +799,13 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             leaf = reduced_basis_object.tree.leaves[j]
             for i, vec in enumerate(leaf.basis):
                 label = None
-                if i < len(self.best_rep_parameters_idx):
-                    label = f'$e$={round(self.ecc_ref_parameter_space_input[self.best_rep_parameters_idx[i]], 3)}'
+                if i < len(self.indices_basis):
+                    label = f'$e$={round(self.ecc_ref_space[self.indices_basis[i]], 3)}'
                 ax_main.plot(vec, linewidth=0.6, label=label)
 
         ax_main.set_ylabel('Vector Value')
         ax_main.set_title(
-            f'Greedy Basis Vectors ({len(self.best_rep_parameters_idx)} vectors) for {property}'
+            f'Greedy Basis Vectors ({len(self.indices_basis)} vectors for {training_object.property})'
         )
 
         if show_legend:
@@ -663,21 +902,9 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         plt.tight_layout()
 
         if save_greedy_vecs_fig:
-            os.makedirs('Images/Greedy_vectors', exist_ok=True)
-            figname = (
-                f'Images/Greedy_vectors/Greedy_vectors_{property}'
-                f'_M={self.total_mass}'
-                f'_ecc=[{min(self.ecc_ref_parameter_space_input)}_{max(self.ecc_ref_parameter_space_input)}]'
-                f'_f_lower={self.f_lower}'
-                f'_f_ref={self.f_ref}'
-                f'_iN={len(self.ecc_ref_parameter_space_input)}'
-                f'_ms={self.minimum_spacing_greedy}.png'
-            )
-
+            figname = training_object.figname(prefix=f'Greedy_vectors', directory='Images/Greedy_vectors') # Use the figname method of the training object to generate a consistent filename
             plt.savefig(figname)
-            print(self.colored_text(f'Greedy vectors fig saved to {figname}', 'blue'))
 
-        fig_greedy_vecs.show()
 
     # def get_greedy_parameters(self, U, property, min_greedy_error=None, N_greedy_vecs=None, reg=1e-6, plot_greedy_error=False, save_greedy_error_fig=False, plot_greedy_vectors=False, save_greedy_vecs_fig=False, plot_greedy_basis_formation=False, minimum_spacing=None):
     #     """
@@ -722,7 +949,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
     #     greedy_errors = []
         
     #     # Get delta ecc_ref for application of minimum_spacing
-    #     delta_ecc_ref = self.ecc_ref_parameter_space_input[1] - self.ecc_ref_parameter_space_input[0]
+    #     delta_ecc_ref =self.ecc_ref_space[1] -self.ecc_ref_space[0]
     #     minimum_spacing_idx = int(minimum_spacing / delta_ecc_ref)
         
     #     # Mask to track valid vectors (True = can be picked)
@@ -766,27 +993,27 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
     #                 fig_comp_greedy, axs = plt.subplots(4, 1, figsize=(15, 15))
 
     #                 print('shapes: ', coeffs.shape, U_proj.shape, residual_norms.shape)
-    #                 axs[0].scatter(self.ecc_ref_parameter_space_input[greedy_indices], np.zeros(len(greedy_indices)), label=f'current greedy indices, i={step}')
-    #                 axs[0].scatter(self.ecc_ref_parameter_space_input[0], 0, c='orange', label='minimum spacing')
-    #                 axs[0].scatter(self.ecc_ref_parameter_space_input[minimum_spacing_idx], 0, c='orange')
-    #                 axs[0].plot(self.ecc_ref_parameter_space_input[1:], residual_norms,  label=f'step = {step}')
+    #                 axs[0].scatter(self.ecc_ref_space[greedy_indices], np.zeros(len(greedy_indices)), label=f'current greedy indices, i={step}')
+    #                 axs[0].scatter(self.ecc_ref_space[0], 0, c='orange', label='minimum spacing')
+    #                 axs[0].scatter(self.ecc_ref_space[minimum_spacing_idx], 0, c='orange')
+    #                 axs[0].plot(self.ecc_ref_space[1:], residual_norms,  label=f'step = {step}')
     #                 axs[0].set_xlabel('ecc')
     #                 axs[0].set_ylabel('residuals norm')
     #                 axs[0].legend()
 
-    #                 axs[1].scatter(self.ecc_ref_parameter_space_input[greedy_indices], np.zeros(len(greedy_indices)))
+    #                 axs[1].scatter(self.ecc_ref_space[greedy_indices], np.zeros(len(greedy_indices)))
     #                 for i in range(len(U_normalized)):
     #                     axs[1].plot(time_array, U_normalized.T, color='grey')
     #                 for j in range(step):
     #                     axs[1].plot(time_array, U_normalized[greedy_indices[j] - 1], color='red')
     #                 axs[1].plot(time_array, U_normalized[greedy_indices[-1] - 1], label='last added vec', color='blue')
-    #                 # axs[1].plot(self.ecc_ref_parameter_space_input[1:], residual_norms,  label=f'step = {step}')
+    #                 # axs[1].plot(self.ecc_ref_space[1:], residual_norms,  label=f'step = {step}')
     #                 axs[1].set_ylabel('residuals diff')
     #                 axs[1].legend()
 
 
-    #                 axs[2].scatter(self.ecc_ref_parameter_space_input[greedy_indices], np.zeros(len(greedy_indices)), label=f'current greedy indices, i={step}')
-    #                 axs[2].plot(self.ecc_ref_parameter_space_input[1:], coeffs)
+    #                 axs[2].scatter(self.ecc_ref_space[greedy_indices], np.zeros(len(greedy_indices)), label=f'current greedy indices, i={step}')
+    #                 axs[2].plot(self.ecc_ref_space[1:], coeffs)
     #                 axs[2].set_ylabel('coeffs')
     #                 axs[2].legend()
 
@@ -880,7 +1107,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
     #     for i, vec in enumerate(greedy_basis):
     #         ax_main.plot(vec, color='red', linewidth=0.6,
-    #                     label=f'{self.ecc_ref_parameter_space_input[greedy_parameters_idx[i]]}')
+    #                     label=f'{elf.ecc_ref_space[greedy_parameters_idx[i]]}')
 
         
 
@@ -890,8 +1117,8 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
     #     ax_main.grid(True)
 
     #     # --- Bottom plot: eccentric points and greedy indices ---
-    #     ecc_values = self.ecc_ref_parameter_space_input # assuming first component = eccentricity
-    #     y = np.zeros(len(self.ecc_ref_parameter_space_input))
+    #     ecc_values =self.ecc_ref_space # assuming first component = eccentricity
+    #     y = np.zeros(len(self.ecc_ref_space))
 
     #     # All dataset points
     #     ax_bottom.plot(ecc_values, y, color='grey', alpha=0.6, label='Dataset points')
@@ -911,7 +1138,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
     #     if save_greedy_vecs_fig:
     #         os.makedirs('Images/Greedy_vectors', exist_ok=True)
-    #         plt.savefig(f'Images/Greedy_vectors/Greedy_vectors_{property}_M={self.total_mass}_ecc=[{min(self.ecc_ref_parameter_space_input)}_{max(self.ecc_ref_parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_parameter_space_input)}_ms={self.minimum_spacing_greedy}.png')
+    #         plt.savefig(f'Images/Greedy_vectors/Greedy_vectors_{property}_M={self.total_mass}_ecc=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_space)}_ms={self.minimum_spacing_greedy}.png')
     #         print('Greedy vectors fig saved to Images/Greedy_vectors')
     #         # plt.close('all')
 
@@ -923,7 +1150,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
     #     fig_greedy_errors = plt.figure(figsize=(7, 5))
     #     plt.plot(N_basis_vectors, greedy_errors, label='Greedy Errors')
     #     plt.scatter(N_basis_vectors, greedy_errors, s=4)
-    #     # for i, label in enumerate(self.ecc_ref_parameter_space_input[greedy_parameters_idx]):
+    #     # for i, label in enumerate(self.ecc_ref_space[greedy_parameters_idx]):
     #     #     plt.annotate(label, (N_basis_vectors[i], greedy_errors[i]), textcoords="offset points", xytext=(5, 5), ha='center', fontsize=5.5)
     #     plt.xlabel('Number of Waveforms')
     #     if property == 'phase':
@@ -937,7 +1164,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
     #     if save_greedy_fig:
     #         os.makedirs('Images/Greedy_errors', exist_ok=True)
-    #         plt.savefig(f'Images/Greedy_errors/Greedy_error_{property}_M={self.total_mass}_ecc=[{min(self.ecc_ref_parameter_space_input)}_{max(self.ecc_ref_parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_parameter_space_input)}_gerr={min(greedy_errors)}_ms={self.minimum_spacing_greedy}.png')
+    #         plt.savefig(f'Images/Greedy_errors/Greedy_error_{property}_M={self.total_mass}_ecc=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_space)}_gerr={min(greedy_errors)}_ms={self.minimum_spacing_greedy}.png')
             
     #         print('Greedy error fig saved to Images/Greedy_errors')
     #         # plt.close('all')
@@ -977,7 +1204,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
         if save_validation_fig:
             os.makedirs('Images/Validation_errors', exist_ok=True)
-            plt.savefig(f'Images/Validation_errors/Validation_error_{property}_M={self.total_mass}_ecc=[{min(self.ecc_ref_parameter_space_input)}_{max(self.ecc_ref_parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_parameter_space_input)}.png')
+            plt.savefig(f'Images/Validation_errors/Validation_error_{property}_M={self.total_mass}_ecc=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_space)}.png')
         
         # plt.close('all')
 
@@ -1823,7 +2050,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
     #     return emp_nodes_idx
 
-    def get_empirical_nodes(self, reduced_basis_object, property, plot_emp_nodes_at_ecc=True, save_fig=True, plot_interpolation_matrix=False, save_interpolation_matrix_fig=False, plot_proj_vs_eim_error=False, save_proj_vs_eim_error_fig=False):
+    def get_empirical_nodes(self, reduced_basis_object, property, plot_emp_nodes_on_basis=False, save_emp_nodes_on_basis_fig=False, plot_interpolation_matrix=False, save_interpolation_matrix_fig=False, plot_proj_vs_eim_error=False, save_proj_vs_eim_error_fig=False):
         """
         Calculate the empirical nodes for a given dataset based on a reduced basis of residual properties.
 
@@ -1839,13 +2066,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         - emp_nodes_idx (list): Indices of empirical nodes for the given dataset.
         """
 
-        # Set number of nodes based on property
-        if property == 'phase':
-            N_nodes = self.N_basis_vecs_phase
-        elif property == 'amplitude':
-            N_nodes = self.N_basis_vecs_amp
-        else:
-            raise ValueError("Property must be 'phase' or 'amplitude'.")
+        train_obj = self._get_training_obj(property).Nb
 
         eim = EmpiricalInterpolation(reduced_basis_object)
         eim.fit()
@@ -1866,12 +2087,62 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             self._plot_interpolation_matrix(reduced_basis_object, save_fig=save_interpolation_matrix_fig)
 
         if plot_proj_vs_eim_error:
-            self._plot_projection_vs_eim_error(reduced_basis_object, save_fig=save_proj_vs_eim_error_fig)
+            self._plot_projection_vs_eim_error(reduced_basis_object=reduced_basis_object, training_object=train_obj, save_fig=save_proj_vs_eim_error_fig)
 
-        if plot_emp_nodes_at_ecc:
-            self._plot_empirical_nodes(emp_nodes_idx, property, plot_emp_nodes_at_ecc, save_fig)
+        if plot_emp_nodes_on_basis:
+            self._plot_emp_nodes_on_basis(reduced_basis_object, save_fig=save_emp_nodes_on_basis_fig)
+        
+        # if plot_emp_nodes_at_ecc:
+        #     self._plot_empirical_nodes(emp_nodes_idx, property, plot_emp_nodes_at_ecc, save_fig)
 
         return emp_nodes_idx
+
+
+    def _plot_emp_nodes_on_basis(self, reduced_basis_object, save_fig=False):
+        """  
+        Plot the empirical nodes on top of the reduced basis functions for each leaf in the tree.
+        """
+        for i, leaf in enumerate(reduced_basis_object.tree.leaves):
+            reduced_basis = leaf.basis # ORTHONORMALIZED basis functions
+            eim_nodes = leaf.empirical_nodes
+
+            fig_emp_nodes, ax = plt.subplots(figsize=(20,5))
+
+            # Plot basis functions
+            for j in range(len(eim_nodes)):
+                ax.plot(
+                    self.time,
+                    reduced_basis[j],
+                    alpha=0.7,
+                    lw=1.5
+                )
+
+                # Mark node for that basis function
+                ax.scatter(
+                    self.time[eim_nodes[j]],
+                    reduced_basis[j, eim_nodes[j]],
+                    color="red",
+                    zorder=5
+                )
+
+            # Vertical lines for all nodes
+            for node in eim_nodes:
+                ax.axvline(self.time[node], color='red', alpha=0.2)
+
+            ax.set_ylabel("Basis function amplitude")
+            ax.set_xlabel("time [M]")
+            ax.set_title(f"Reduced basis functions and empirical interpolation nodes: leaf {i}")
+
+            fig_emp_nodes.tight_layout()
+
+            if save_fig:
+                fig_path = f'Images/Empirical_nodes/RB_functions_with_emp_nodes_leaf_{i}_e=[{min(self.ecc_ref_space)}, {max(self.ecc_ref_space)}, N={len(self.ecc_ref_space)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_gN={len(self.indices_basis)}.png'
+                os.makedirs(os.path.dirname(fig_path), exist_ok=True)
+                fig_emp_nodes.savefig(fig_path)
+                self.colored_text(f'Figure is saved in {fig_path}', "blue")
+
+
+
 
     # def _plot_interpolation_matrix(self, reduced_basis_object, save_fig=False):
     #     print(len(reduced_basis_object.tree.leaves))
@@ -1895,7 +2166,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
     #     plt.tight_layout()
 
     #     if save_fig:
-    #         fig_path = f'Images/Empirical_nodes/EIM_interpolation_matrix_M={self.total_mass}_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_parameter_space_input)}_gN={len(self.best_rep_parameters_idx)}_ms={self.minimum_spacing_greedy}.png'
+    #         fig_path = f'Images/Empirical_nodes/EIM_interpolation_matrix_M={self.total_mass}_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_space)}_gN={len(self.indices_basis)}_ms={self.minimum_spacing_greedy}.png'
     #         os.makedirs(os.path.dirname(fig_path), exist_ok=True)
     #         fig.savefig(fig_path)
     #         print(f'Figure is saved in {fig_path}')
@@ -1926,78 +2197,279 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
         if save_fig:
             fig_path = (
-                f"Images/Empirical_nodes/"
+                f"Images/Empirical_nodes/Interpolation_matrix/"
                 f"EIM_interpolation_matrix_M={self.total_mass}"
                 f"_f_lower={self.f_lower}"
                 f"_f_ref={self.f_ref}"
-                f"_iN={len(self.ecc_ref_parameter_space_input)}"
-                f"_gN={len(self.best_rep_parameters_idx)}"
+                f"_iN={len(self.ecc_ref_space)}"
+                f"_gN={len(self.indices_basis)}"
                 f"_ms={self.minimum_spacing_greedy}.png"
             )
             os.makedirs(os.path.dirname(fig_path), exist_ok=True)
             fig.savefig(fig_path)
             print(self.colored_text(f"Figure is saved in {fig_path}", "blue"))
 
-    
-    def _plot_projection_vs_eim_error(self, reduced_basis_object, save_fig=False):
-        fig_proj_vs_eim_error, axs = plt.subplots(len(reduced_basis_object.tree.leaves), 1)
-        
-        for i in range(len(reduced_basis_object.tree.leaves)):
-            reduced_basis = reduced_basis_object.tree.leaves[i].basis # ORTHONORMALIZED basis functions 
-            eim_nodes = reduced_basis_object.tree.leaves[i].empirical_nodes
+    # def _plot_projection_vs_eim_error(self, reduced_basis_object, dataset, property=None, save_fig=False):
+    #     """
+    #     Compare best projection error and EIM interpolation error
+    #     on the same dataset, leaf by leaf.
+
+    #     Parameters
+    #     ----------
+    #     reduced_basis_object : ReducedBasis
+    #         Object containing leaf bases and empirical nodes.
+    #     dataset : ndarray, shape (num_vectors, vector_length)
+    #         Dataset used to test the approximation errors.
+    #     property : str, optional
+    #         'phase' or 'amplitude', only used for labeling/saving.
+    #     save_fig : bool, optional
+    #         If True, save figure.
+
+    #     Returns
+    #     -------
+    #     all_proj_errors : list of lists
+    #         Projection errors per leaf.
+    #     all_eim_errors : list of lists
+    #         EIM errors per leaf.
+    #     """
+    #     self.property_warning(property)
+
+    #     n_leaves = len(reduced_basis_object.tree.leaves)
+    #     fig, axs = plt.subplots(n_leaves, 1, figsize=(8, 4 * n_leaves))
+    #     axs = np.atleast_1d(axs)
+
+    #     all_proj_errors = []
+    #     all_eim_errors = []
+
+    #     for i, leaf in enumerate(reduced_basis_object.tree.leaves):
+    #         reduced_basis = np.asarray(leaf.basis)              # (n_basis, n_time)
+    #         eim_nodes = np.asarray(leaf.empirical_nodes)
+    #         print(np.asarray(dataset), dataset.shape)
+    #         leaf_dataset = np.asarray(dataset)[leaf.indices]    # test only on this leaf's data
+
+    #         proj_errors = []
+    #         eim_errors = []
+
+    #         for k in range(1, len(eim_nodes) + 1):
+    #             basis_k = reduced_basis[:k]                     # (k, n_time)
+    #             nodes_k = eim_nodes[:k]
+
+    #             # Interpolation matrix
+    #             V_k = basis_k[:, nodes_k]                       # (k, k)
+
+    #             max_proj_err = 0.0
+    #             max_eim_err = 0.0
+
+    #             for f in leaf_dataset:
+    #                 norm_f = np.linalg.norm(f)
+    #                 if norm_f == 0:
+    #                     continue
+
+    #                 # Best projection
+    #                 coeff_proj, *_ = np.linalg.lstsq(basis_k.T, f, rcond=None)
+    #                 f_proj = basis_k.T @ coeff_proj
+    #                 proj_err = np.linalg.norm(f - f_proj) / norm_f
+    #                 max_proj_err = max(max_proj_err, proj_err)
+
+    #                 # EIM approximation
+    #                 f_nodes = f[nodes_k]
+    #                 coeff_eim = np.linalg.solve(V_k.T, f_nodes)
+    #                 f_eim = basis_k.T @ coeff_eim
+    #                 eim_err = np.linalg.norm(f - f_eim) / norm_f
+    #                 max_eim_err = max(max_eim_err, eim_err)
+
+    #             proj_errors.append(max_proj_err)
+    #             eim_errors.append(max_eim_err)
+
+    #         all_proj_errors.append(proj_errors)
+    #         all_eim_errors.append(eim_errors)
+
+    #         axs[i].semilogy(range(1, len(eim_nodes)), proj_errors[:-1], marker='o', label='Projection error')
+    #         axs[i].semilogy(range(1, len(eim_nodes)), eim_errors[:-1], marker='s', label='EIM error')
+    #         axs[i].set_xlabel("Number of modes / EIM nodes")
+    #         axs[i].set_ylabel("Max relative error")
+    #         axs[i].set_title(f"Leaf {i} (last dataset point has been ignored for better visualization)")
+    #         axs[i].grid(True)
+    #         axs[i].legend()
+
+    #     fig.suptitle("Projection error vs EIM error", y=1.02)
+    #     fig.tight_layout()
+
+    #     if save_fig:
+    #         fig_path = (
+    #             f'Images/Empirical_nodes/Errors/'
+    #             f'EIM_projection_vs_eim_error_{property}_'
+    #             f'M={self.total_mass}_f_lower={self.f_lower}_f_ref={self.f_ref}_'
+    #             f'iN={len(self.ecc_ref_space)}_'
+    #             f'gN={len(self.indices_basis)}_'
+    #             f'ms={self.minimum_spacing_greedy}.png'
+    #         )
+    #         os.makedirs(os.path.dirname(fig_path), exist_ok=True)
+    #         fig.savefig(fig_path)
+    #         print(self.colored_text(f'Figure is saved in {fig_path}', 'blue'))
+
+    #     return all_proj_errors, all_eim_errors
+
+    def _plot_projection_vs_eim_error(self, reduced_basis_object, training_object, save_fig=False):
+        self.property_warning(property)
+
+        dataset = np.asarray(training_object.residuals)
+
+        all_proj_errors = []
+        all_eim_errors = []
+        all_ratios = []
+
+        for i, leaf in enumerate(reduced_basis_object.tree.leaves):
+            reduced_basis = np.asarray(leaf.basis)          # (n_basis, n_time)
+            eim_nodes = np.asarray(leaf.empirical_nodes)
+            leaf_dataset = dataset[leaf.indices]            # data belonging to this leaf
 
             proj_errors = []
             eim_errors = []
+            ratios = []
 
             for k in range(1, len(eim_nodes) + 1):
-                basis_k = reduced_basis[:k]                        # (k, n_time)
+                basis_k = reduced_basis[:k]                 # (k, n_time)
                 nodes_k = eim_nodes[:k]
 
-                # EIM interpolation operator, matching your implementation
-                V_k = np.array([[basis_k[m, t] for t in nodes_k] for m in range(k)])
-                invVt_k = np.linalg.inv(V_k.T)
-                interpolant_k = basis_k.T @ invVt_k              # (n_time, k)
+                # Interpolation matrix
+                V_k = basis_k[:, nodes_k]                   # (k, k)
 
                 max_proj_err = 0.0
                 max_eim_err = 0.0
 
-                for f in reduced_basis:  # Loop over all basis functions as test functions
-                    # --- Best projection onto span(basis_k) ---
-                    # Solve min ||f - c @ basis_k||
+                for f in leaf_dataset:
+                    norm_f = np.linalg.norm(f)
+                    if norm_f == 0:
+                        continue
+
+                    # Best projection
                     coeff_proj, *_ = np.linalg.lstsq(basis_k.T, f, rcond=None)
                     f_proj = basis_k.T @ coeff_proj
-
-                    proj_err = np.linalg.norm(f - f_proj) / np.linalg.norm(f)
+                    proj_err = np.linalg.norm(f - f_proj) / norm_f
                     max_proj_err = max(max_proj_err, proj_err)
 
-                    # --- EIM reconstruction from node values only ---
+                    # EIM approximation
                     f_nodes = f[nodes_k]
-                    f_eim = interpolant_k @ f_nodes
-
-                    eim_err = np.linalg.norm(f - f_eim) / np.linalg.norm(f)
+                    coeff_eim = np.linalg.solve(V_k.T, f_nodes)
+                    f_eim = basis_k.T @ coeff_eim
+                    eim_err = np.linalg.norm(f - f_eim) / norm_f
                     max_eim_err = max(max_eim_err, eim_err)
 
                 proj_errors.append(max_proj_err)
                 eim_errors.append(max_eim_err)
+
+                if max_proj_err > 0:
+                    ratios.append(max_eim_err / max_proj_err)
+                else:
+                    ratios.append(np.nan)
+
+            all_proj_errors.append(proj_errors)
+            all_eim_errors.append(eim_errors)
+            all_ratios.append(ratios)
+
+            # --- Plot for this leaf ---
+            fig, axs = plt.subplots(
+                2, 1,
+                figsize=(8, 6),
+                sharex=True,
+                gridspec_kw={"height_ratios": [3, 1]}
+            )
+
+            x = np.arange(1, len(eim_nodes) + 1)
+
+            # Error plot
+            axs[0].semilogy(x, proj_errors, marker='o', label='Projection error')
+            axs[0].semilogy(x, eim_errors, marker='s', label='EIM error')
+            axs[0].set_ylabel("Max relative error")
+            axs[0].set_title(f"Projection error vs EIM error — Leaf {i}")
+            axs[0].grid(True)
+            axs[0].legend()
+   
+            # Ratio plot
+            axs[1].plot(x, ratios, marker='^', label='EIM / Projection')
+            axs[1].set_xlabel("Number of modes / EIM nodes")
+            axs[1].set_ylabel("Ratio")
+            axs[1].grid(True)
+            axs[1].legend()
+
+            fig.tight_layout()
+
+            if save_fig:
+                fig_path = (
+                    f'Images/Empirical_nodes/Errors/'
+                    f'EIM_projection_vs_eim_error_leaf={i}_{property}_'
+                    f'M={self.total_mass}_f_lower={self.f_lower}_f_ref={self.f_ref}_'
+                    f'iN={len(self.ecc_ref_space)}_'
+                    f'gN={len(self.indices_basis)}_'
+                    f'ms={self.minimum_spacing_greedy}.png'
+                )
+                os.makedirs(os.path.dirname(fig_path), exist_ok=True)
+                fig.savefig(fig_path)
+                print(self.colored_text(f'Figure for leaf {i} is saved in {fig_path}', 'blue'))
+
+        return all_proj_errors, all_eim_errors, all_ratios
+
+    # def _plot_projection_vs_eim_error(self, reduced_basis_object, save_fig=False):
+    #     fig_proj_vs_eim_error, axs = plt.subplots(len(reduced_basis_object.tree.leaves), 1)
+    #     axs = np.atleast_1d(axs) # In case there's only one leaf, ensure axs is always an array for consistent indexing
+
+    #     for i in range(len(reduced_basis_object.tree.leaves)):
+    #         reduced_basis = reduced_basis_object.tree.leaves[i].basis # ORTHONORMALIZED basis functions 
+    #         eim_nodes = reduced_basis_object.tree.leaves[i].empirical_nodes
+
+    #         proj_errors = []
+    #         eim_errors = []
+
+    #         for k in range(1, len(eim_nodes) + 1):
+    #             basis_k = reduced_basis[:k]                        # (k, n_time)
+    #             nodes_k = eim_nodes[:k]
+
+    #             # EIM interpolation operator, matching your implementation
+    #             V_k = np.array([[basis_k[m, t] for t in nodes_k] for m in range(k)])
+    #             invVt_k = np.linalg.inv(V_k.T)
+    #             interpolant_k = basis_k.T @ invVt_k              # (n_time, k)
+
+    #             max_proj_err = 0.0
+    #             max_eim_err = 0.0
+
+    #             for f in reduced_basis:  # Loop over all basis functions as test functions
+    #                 # --- Best projection onto span(basis_k) ---
+    #                 # Solve min ||f - c @ basis_k||
+    #                 coeff_proj, *_ = np.linalg.lstsq(basis_k.T, f, rcond=None)
+    #                 f_proj = basis_k.T @ coeff_proj
+
+    #                 proj_err = np.linalg.norm(f - f_proj) / np.linalg.norm(f)
+    #                 max_proj_err = max(max_proj_err, proj_err)
+
+    #                 # --- EIM reconstruction from node values only ---
+    #                 f_nodes = f[nodes_k]
+    #                 f_eim = interpolant_k @ f_nodes
+
+    #                 eim_err = np.linalg.norm(f - f_eim) / np.linalg.norm(f)
+    #                 max_eim_err = max(max_eim_err, eim_err)
+
+    #             proj_errors.append(max_proj_err)
+    #             eim_errors.append(max_eim_err)
         
-            axs[i].semilogy(range(1, len(eim_nodes)+1), proj_errors, marker='o', label='Projection error')
-            axs[i].semilogy(range(1, len(eim_nodes)+1), eim_errors, marker='s', label='EIM error')
-            axs[i].set_xlabel("Number of modes / EIM nodes")
-            axs[i].set_ylabel("Max relative error")
+    #         axs[i].semilogy(range(1, len(eim_nodes)), proj_errors[:-1], marker='o', label='Projection error')
+    #         axs[i].semilogy(range(1, len(eim_nodes)), eim_errors[:-1], marker='s', label='EIM error')
+    #         axs[i].set_xlabel("Number of modes / EIM nodes")
+    #         axs[i].set_ylabel("Max relative error")
 
-        axs[0].set_title("Projection error vs EIM error")
-        axs[0].grid(True)
-        plt.legend()
+    #     axs[0].set_title("Projection error vs EIM error")
+    #     axs[0].grid(True)
+    #     plt.legend()
 
-        fig_proj_vs_eim_error.tight_layout()
+    #     fig_proj_vs_eim_error.tight_layout()
 
-        if save_fig:
-            fig_path = f'Images/Empirical_nodes/EIM_projection_vs_eim_error_M={self.total_mass}_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_parameter_space_input)}_gN={len(self.best_rep_parameters_idx)}_ms={self.minimum_spacing_greedy}.png'
-            os.makedirs(os.path.dirname(fig_path), exist_ok=True)
-            fig_proj_vs_eim_error.savefig(fig_path)
-            print(self.colored_text(f'Figure is saved in {fig_path}', 'blue'))
+    #     if save_fig:
+    #         fig_path = f'Images/Empirical_nodes/Errors/EIM_projection_vs_eim_error_M={self.total_mass}_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_space)}_gN={len(self.indices_basis)}_ms={self.minimum_spacing_greedy}.png'
+    #         os.makedirs(os.path.dirname(fig_path), exist_ok=True)
+    #         fig_proj_vs_eim_error.savefig(fig_path)
+    #         print(self.colored_text(f'Figure is saved in {fig_path}', 'blue'))
 
-        return proj_errors, eim_errors
+    #     return proj_errors, eim_errors
 
     def _plot_empirical_nodes(self, emp_nodes_idx, property, eccentricity, save_fig):
         """
@@ -2011,7 +2483,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         - save_fig (bool): If True, saves the plot to a file.
         """
         # Get the waveform at the requested eccentricity
-        hp, hc = self.simulate_inspiral(ecc_ref=eccentricity)
+        hp, hc, _ = self.simulate_inspiral(ecc_ref=eccentricity)
 
         fig, ax = plt.subplots(figsize=(12, 6))
 
@@ -2026,7 +2498,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
         # IF savefig is set to True, save the figure
         if save_fig:
-            fig_path = f'Images/Empirical_nodes/EIM_{property}_e={eccentricity}_M={self.total_mass}_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_parameter_space_input)}_gN={len(self.best_rep_parameters_idx)}_ms={self.minimum_spacing_greedy}.png'
+            fig_path = f'Images/Empirical_nodes/EIM_{property}_e={eccentricity}_M={self.total_mass}_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_space)}_gN={len(self.indices_basis)}_ms={self.minimum_spacing_greedy}.png'
             os.makedirs(os.path.dirname(fig_path), exist_ok=True)
             fig.savefig(fig_path)
             print(self.colored_text(f'Figure is saved in {fig_path}', 'blue'))
@@ -2043,7 +2515,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         - save_fig (bool): If True, saves the plot to a file.
         """
         # Get the waveform at the requested eccentricity
-        hp, hc = self.simulate_inspiral(ecc_ref=eccentricity)
+        hp, hc, _ = self.simulate_inspiral(ecc_ref=eccentricity)
 
         fig, ax = plt.subplots(figsize=(12, 6))
 
@@ -2058,7 +2530,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
 
         # IF savefig is set to True, save the figure
         if save_fig:
-            fig_path = f'Images/Empirical_nodes/EIM_dataset_{property}_e={eccentricity}_M={self.total_mass}_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_parameter_space_input)}_gN={len(self.best_rep_parameters_idx)}_ms={self.minimum_spacing_greedy}.png'
+            fig_path = f'Images/Empirical_nodes/EIM_dataset_{property}_e={eccentricity}_M={self.total_mass}_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_space)}_gN={len(self.indices_basis)}_ms={self.minimum_spacing_greedy}.png'
             os.makedirs(os.path.dirname(fig_path), exist_ok=True)
             fig.savefig(fig_path)
             print(self.colored_text(f'Figure is saved in {fig_path}', 'blue'))
@@ -2066,7 +2538,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
   
     
     def get_training_set_greedy(self, property, emp_nodes_of_full_dataset=False, min_greedy_error=None, N_greedy_vecs=None, plot_training_set=False, 
-                        plot_greedy_error=False, save_fig_greedy_error=False, plot_emp_nodes_at_ecc=False, save_fig_emp_nodes=False, save_fig_training_set=False, 
+                        plot_greedy_error=False, save_fig_greedy_error=False, plot_emp_nodes_on_basis=False, save_fig_emp_nodes_on_basis=False, plot_emp_nodes_at_ecc=False, save_fig_emp_nodes_at_ecc=False, save_fig_training_set=False, 
                         save_dataset_to_file=True, save_fig_residuals_eccentric=False, save_fig_residuals_time=False, plot_greedy_vecs=False, save_fig_greedy_vecs=False):
         """
         Generate a training set for the surrogate model by calculating residuals, selecting greedy parameters, and determining empirical nodes.
@@ -2098,7 +2570,8 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         
         # Step 1: Generate residuals for the full parameter space
         residual_parameterspace_input = self.generate_property_dataset(
-            ecc_list=self.ecc_ref_parameter_space_input,
+            ecc_ref_list=self.ecc_ref_space,
+            mass_ratios_list=self.mass_ratio_space,
             property=property,
             save_dataset_to_file=save_dataset_to_file,
             plot_residuals_eccentric_evolv=True,
@@ -2107,9 +2580,12 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             save_fig_time_evolve=save_fig_residuals_time
         )
         
+        # Get the training object for the specified property (phase or amplitude)
+        train_obj = self._get_training_obj(property)
+
         # Step 2: Select the best representative parameters using a greedy algorithm
         print('Calculating greedy parameters...')
-        self.best_rep_parameters_idx, residual_greedy_basis_orthonormal = self.get_greedy_parameters(
+        reduced_basis_object = self.get_greedy_parameters(
             U=residual_parameterspace_input,
             property=property,
             N_greedy_vecs=N_greedy_vecs,
@@ -2119,33 +2595,32 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
             plot_greedy_vectors=plot_greedy_vecs,
             save_greedy_vecs_fig=save_fig_greedy_vecs
         )
+        print(f'Greedy parameters {property}: {train_obj.basis_indices}, length: {len(train_obj.basis_indices)}  ')
+        # self.basis_indices = reduced_basis_object.indices, residual_greedy_basis_orthonormal
 
-        self.residual_reduced_basis = residual_parameterspace_input[self.best_rep_parameters_idx]
-        self.best_rep_parameters = list(self.ecc_ref_parameter_space_input[self.best_rep_parameters_idx])
-        # self.best_rep_parameters_idx, self.residual_reduced_basis = self.get_greedy_parameters(
-        #     U=residual_parameterspace_input,
-        #     min_greedy_error=min_greedy_error,
-        #     N_greedy_vecs=N_greedy_vecs,
-        #     property=property,
-        #     plot_greedy_error=plot_greedy_error,
-        #     save_greedy_fig=save_fig_greedy_error,
-        # )
+        self.best_rep_parameters = list(self.ecc_ref_space[train_obj.basis_indices])
+        print(0, len(self.best_rep_parameters))
+
         
         # Step 3: Calculate empirical nodes of the greedy basis
         print('Calculating empirical nodes...')
         if emp_nodes_of_full_dataset:
-            self.empirical_nodes_idx = self.empirical_interpolation_from_dataset(
+            train_obj.empirical_indices = self.empirical_interpolation_from_dataset(
             waveforms_dataset=residual_parameterspace_input,
             property=property,
             plot_emp_nodes_at_ecc=plot_emp_nodes_at_ecc,
-            save_fig=save_fig_emp_nodes
+            save_fig=save_fig_emp_nodes_at_ecc
         )
         else:
-            self.empirical_nodes_idx = self.get_empirical_nodes(
-                reduced_basis=residual_greedy_basis_orthonormal,
+            train_obj.empirical_indices = self.get_empirical_nodes(
+                reduced_basis_object=reduced_basis_object,
                 property=property,
-                plot_emp_nodes_at_ecc=plot_emp_nodes_at_ecc,
-                save_fig=save_fig_emp_nodes
+                plot_emp_nodes_on_basis=plot_emp_nodes_on_basis,
+                save_emp_nodes_on_basis_fig=save_fig_emp_nodes_on_basis,
+                plot_interpolation_matrix=False,
+                save_interpolation_matrix_fig=False,
+                plot_proj_vs_eim_error=False,
+                save_proj_vs_eim_error_fig=False
             )
 
         # self.empirical_nodes_idx = self.get_empirical_nodes_test(
@@ -2156,16 +2631,20 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         # )
 
 
-        # print(f'emp nodes: {self.empirical_nodes_idx}, {empirical_nodes_idx}')
+        print(f'emp nodes {property}: {train_obj.empirical_indices}, length: {len(train_obj.empirical_indices)}  ')
         
         # Step 4: Generate the training set at empirical nodes
-        residual_training_set = self.residual_reduced_basis[:, self.empirical_nodes_idx]
-        self.time_training = self.time[self.empirical_nodes_idx]
+        residual_basis = self.residuals_space[self.indices_basis] # shape (n_greedy_vecs, n_time)
+        residual_training_set = residual_basis[:, train_obj.empirical_indices]
+        self.time_training = self.time[train_obj.empirical_indices]
 
         # Optionally plot the training set
         if plot_training_set:
             self._plot_training_set(property, save_fig_training_set)
-        print('vecs:', self.N_basis_vecs_phase, self.N_basis_vecs_amp)
+
+        # Clean memory of objects that are no longer needed
+        del train_obj.residuals, residual_basis
+
         return residual_training_set
 
     def _plot_training_set(self, property, save_fig):
@@ -2178,11 +2657,12 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         - property (str): The waveform property ('phase' or 'amplitude').
         - save_fig (bool): If True, saves the plot to a file.
         """
+        train_obj = self._get_training_obj(property)
         fig, ax = plt.subplots()
 
-        for i, idx in enumerate(self.best_rep_parameters_idx):
-            ax.plot(self.time, self.residual_reduced_basis[i], label=f'e={round(self.ecc_ref_parameter_space_input[idx], 3)}', linewidth=0.6)
-            ax.scatter(self.time[self.empirical_nodes_idx], self.residual_reduced_basis[i][self.empirical_nodes_idx])
+        for i, idx in enumerate(train_obj.indices_basis):
+            ax.plot(self.time, train_obj.residual_basis[i], label=f'e={round(self.ecc_ref_space[idx], 3)}', linewidth=0.6)
+            ax.scatter(self.time[train_obj.empirical_indices], train_obj.residual_basis[i][train_obj.empirical_indices])
 
         ax.set_xlabel('t [M]')
         ax.set_ylabel('greedy residual')
@@ -2191,21 +2671,1003 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Inspiral):
         ax.grid(True)
 
         if save_fig:
-            figname = f'Images/Trainingset/Training_set_{property}_M={self.total_mass}_ecc_list=[{min(self.ecc_ref_parameter_space_input)}_{max(self.ecc_ref_parameter_space_input)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_gN={len(self.best_rep_parameters_idx)}.png'
-            os.makedirs('Images/TrainingSet', exist_ok=True)
+            figname = train_obj.figname(prefix='Training_set', directory='Images/TrainingSet')
             fig.savefig(figname)
-            print(self.colored_text(f'Figure is saved in {figname}', 'blue'))
+
+    def _build_default_gp(self, n_input_dims):
+        kernel = (
+            ConstantKernel(1.0, (1e-3, 1e3))
+            * Matern(
+                length_scale=np.ones(n_input_dims),
+                length_scale_bounds=(1e-3, 1e3),
+                nu=2.5,
+            )
+            + WhiteKernel(noise_level=1e-8, noise_level_bounds=(1e-12, 1e-2))
+        )
+
+        return GaussianProcessRegressor(
+            kernel=kernel,
+            normalize_y=True,
+            n_restarts_optimizer=1,
+            random_state=0,
+        )
+
+
+    def _get_regression_parameter_matrix(self):
+        """
+        Build parameter matrix X with one row per waveform.
+        For your current class this is just eccentricity.
+        """
+        X = np.asarray(self.ecc_ref_space, dtype=float).reshape(-1, 1)
+        return X
+
+    def test_GPR_quality(
+        self,
+        U,
+        property,
+        min_greedy_error=None,
+        N_greedy_vecs=None,
+        normalize=True,
+        max_tree_depth=1,
+        n_splits=5,
+        max_nodes=None,
+        random_state=0,
+        verbose=True,
+        make_plots=True,
+        save_figs=False,
+        fig_dir="flow_diagnostic_figures",
+    ):
+        U = np.asarray(U, dtype=float)
+        X = self._get_regression_parameter_matrix()
+
+        if U.shape[0] != X.shape[0]:
+            raise ValueError(
+                f"Mismatch: U has {U.shape[0]} rows but parameter matrix has {X.shape[0]} rows."
+            )
+
+        if verbose:
+            print(f"U shape = {U.shape}")
+            print(f"X shape = {X.shape}")
+            print(f"Running diagnostic for property = {property}")
+
+        rb_obj = self.get_greedy_parameters(
+            U=U,
+            property=property,
+            min_greedy_error=min_greedy_error,
+            N_greedy_vecs=N_greedy_vecs,
+            normalize=normalize,
+            max_tree_depth=max_tree_depth,
+            plot_greedy_error=False,
+            save_greedy_error_fig=False,
+            plot_greedy_vectors=False,
+            save_greedy_vecs_fig=False,
+            plot_SVD_matrix=False,
+            save_SVD_matrix_fig=False,
+            show_legend=False,
+        )
+
+        emp_nodes_idx = self.get_empirical_nodes(
+            reduced_basis_object=rb_obj,
+            property=property,
+            plot_emp_nodes_at_ecc=False,
+            save_fig=False,
+            plot_interpolation_matrix=False,
+            save_interpolation_matrix_fig=False,
+            plot_proj_vs_eim_error=False,
+            save_proj_vs_eim_error_fig=False,
+        )
+
+        emp_nodes_idx = np.unique(np.asarray(emp_nodes_idx, dtype=int))
+
+        if max_nodes is not None:
+            emp_nodes_idx = emp_nodes_idx[:max_nodes]
+
+        if len(emp_nodes_idx) == 0:
+            raise ValueError("No empirical nodes returned.")
+
+        self.empirical_nodes_idx = emp_nodes_idx
+
+        if verbose:
+            print(f"Using {len(emp_nodes_idx)} empirical nodes")
+
+        Y_nodes = U[:, emp_nodes_idx]
+
+        n_samples, n_nodes = Y_nodes.shape
+        n_params = X.shape[1]
+
+        pred_mean = np.zeros_like(Y_nodes)
+        pred_std = np.zeros_like(Y_nodes)
+
+        kf = KFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+
+        for fold, (train_idx, test_idx) in enumerate(kf.split(X), start=1):
+            if verbose:
+                print(f"Fold {fold}/{n_splits}")
+
+            X_train, X_test = X[train_idx], X[test_idx]
+            Y_train = Y_nodes[train_idx]
+
+            scaler = StandardScaler()
+            X_train_s = scaler.fit_transform(X_train)
+            X_test_s = scaler.transform(X_test)
+
+            for j in range(n_nodes):
+                gp = self._build_default_gp(n_params)
+                gp.fit(X_train_s, Y_train[:, j])
+
+                mu, std = gp.predict(X_test_s, return_std=True)
+                pred_mean[test_idx, j] = mu
+                pred_std[test_idx, j] = np.maximum(std, 1e-12)
+
+        resid = Y_nodes - pred_mean
+        z = resid / pred_std
+
+        # Identify worst time nodes
+        worst_node_indices, worst_node_diagnostics = self._get_worst_node_indices(
+            z_residuals=z,
+            pred_mean=pred_mean,
+            Y_nodes=Y_nodes,
+            top_k=min(5, Y_nodes.shape[1]),
+        )
+
+        # Identify hardest eccentric points
+        hardest_points = self._get_hardest_parameter_points(
+            X=X,
+            residuals=resid,
+            z_residuals=z,
+            top_k=min(10, X.shape[0]),
+        )
+
+        skew_vals = skew(z, axis=0, bias=False, nan_policy="omit")
+        kurt_vals = kurtosis(z, axis=0, fisher=True, bias=False, nan_policy="omit")
+
+        pvals = []
+        for j in range(n_nodes):
+            try:
+                _, p = normaltest(z[:, j], nan_policy="omit")
+            except Exception:
+                p = np.nan
+            pvals.append(p)
+        pvals = np.array(pvals)
+
+        if n_nodes > 1:
+            corr = np.corrcoef(z, rowvar=False)
+            offdiag = corr[~np.eye(n_nodes, dtype=bool)]
+            mean_abs_offdiag_corr = float(np.nanmean(np.abs(offdiag)))
+            max_abs_offdiag_corr = float(np.nanmax(np.abs(offdiag)))
+        else:
+            mean_abs_offdiag_corr = 0.0
+            max_abs_offdiag_corr = 0.0
+
+        coverage_1sigma = float(np.mean(np.abs(z) <= 1.0))
+        coverage_2sigma = float(np.mean(np.abs(z) <= 2.0))
+
+        mean_abs_skew = float(np.nanmean(np.abs(skew_vals)))
+        mean_abs_excess_kurtosis = float(np.nanmean(np.abs(kurt_vals)))
+        frac_non_normal_nodes = float(np.nanmean(pvals < 0.05))
+
+        reasons = []
+        if mean_abs_skew > 0.5:
+            reasons.append("residual skewness")
+        if mean_abs_excess_kurtosis > 1.0:
+            reasons.append("heavy tails")
+        if frac_non_normal_nodes > 0.3:
+            reasons.append("many nodes fail normality")
+        if mean_abs_offdiag_corr > 0.1:
+            reasons.append("correlated node residuals")
+        if not (0.63 <= coverage_1sigma <= 0.73):
+            reasons.append("1σ coverage is off")
+        if not (0.92 <= coverage_2sigma <= 0.98):
+            reasons.append("2σ coverage is off")
+
+        if reasons:
+            recommendation = (
+                "A conditional flow is worth testing because of: "
+                + ", ".join(reasons) + "."
+            )
+        else:
+            recommendation = (
+                "A flow probably will not help much: GP residuals already look fairly Gaussian and weakly correlated."
+            )
+
+        result = FlowDiagnosticResult(
+            mean_abs_skew=mean_abs_skew,
+            mean_abs_excess_kurtosis=mean_abs_excess_kurtosis,
+            frac_non_normal_nodes=frac_non_normal_nodes,
+            mean_abs_offdiag_corr=mean_abs_offdiag_corr,
+            max_abs_offdiag_corr=max_abs_offdiag_corr,
+            coverage_1sigma=coverage_1sigma,
+            coverage_2sigma=coverage_2sigma,
+            recommendation=recommendation,
+        )
+
+        if verbose:
+            print("\n=== Flow diagnostic summary ===")
+            print(f"mean |skew|               : {result.mean_abs_skew:.4f}")
+            print(f"mean |excess kurtosis|    : {result.mean_abs_excess_kurtosis:.4f}")
+            print(f"frac nodes p<0.05         : {result.frac_non_normal_nodes:.4f}")
+            print(f"mean |offdiag corr|       : {result.mean_abs_offdiag_corr:.4f}")
+            print(f"max  |offdiag corr|       : {result.max_abs_offdiag_corr:.4f}")
+            print(f"coverage |z|<=1           : {result.coverage_1sigma:.4f}")
+            print(f"coverage |z|<=2           : {result.coverage_2sigma:.4f}")
+            print(f"\nRecommendation: {result.recommendation}")
+
+            if make_plots:
+                if verbose:
+                    print(f"Worst node indices: {worst_node_indices}")
+
+                self._plot_worst_node_summary(
+                    node_indices=worst_node_indices,
+                    diagnostics=worst_node_diagnostics,
+                    property=property,
+                    save_fig=save_figs,
+                    fig_dir=fig_dir,
+                )
+
+                self._plot_gp_fits_for_nodes(
+                    X=X,
+                    Y_nodes=Y_nodes,
+                    pred_mean=pred_mean,
+                    pred_std=pred_std,
+                    node_indices=worst_node_indices,
+                    property=property,
+                    save_fig=save_figs,
+                    fig_dir=fig_dir,
+                )
+
+                self._plot_true_vs_pred_for_nodes(
+                    Y_nodes=Y_nodes,
+                    pred_mean=pred_mean,
+                    pred_std=pred_std,
+                    node_indices=worst_node_indices,
+                    property=property,
+                    save_fig=save_figs,
+                    fig_dir=fig_dir,
+                )
+
+                self._plot_residual_histograms_for_nodes(
+                    z_residuals=z,
+                    node_indices=worst_node_indices,
+                    property=property,
+                    save_fig=save_figs,
+                    fig_dir=fig_dir,
+                )
+
+                self._plot_residual_qq_for_nodes(
+                    z_residuals=z,
+                    node_indices=worst_node_indices,
+                    property=property,
+                    save_fig=save_figs,
+                    fig_dir=fig_dir,
+                )
+
+                self._plot_residual_corr_heatmap(
+                    z_residuals=z,
+                    property=property,
+                    save_fig=save_figs,
+                    fig_dir=fig_dir,
+                )
+
+                self._plot_coverage_curve(
+                    z_residuals=z,
+                    property=property,
+                    save_fig=save_figs,
+                    fig_dir=fig_dir,
+                )
+
+                self._plot_skew_kurtosis_scatter(
+                    z_residuals=z,
+                    property=property,
+                    save_fig=save_figs,
+                    fig_dir=fig_dir,
+                )
+
+                self._plot_residuals_vs_eccentricity_for_nodes(
+                    X=X,
+                    residuals=resid,
+                    node_indices=worst_node_indices,
+                    property=property,
+                    standardized=False,
+                    save_fig=save_figs,
+                    fig_dir=fig_dir,
+                )
+
+                self._plot_residuals_vs_eccentricity_for_nodes(
+                    X=X,
+                    residuals=z,
+                    node_indices=worst_node_indices,
+                    property=property,
+                    standardized=True,
+                    save_fig=save_figs,
+                    fig_dir=fig_dir,
+                )
+
+                self._plot_difficulty_vs_eccentricity(
+                    X=X,
+                    residuals=resid,
+                    z_residuals=z,
+                    property=property,
+                    save_fig=save_figs,
+                    fig_dir=fig_dir,
+                )
+
+                self._plot_residual_heatmap_vs_eccentricity(
+                    X=X,
+                    residuals=resid,
+                    property=property,
+                    standardized=False,
+                    save_fig=save_figs,
+                    fig_dir=fig_dir,
+                )
+
+                self._plot_residual_heatmap_vs_eccentricity(
+                    X=X,
+                    residuals=z,
+                    property=property,
+                    standardized=True,
+                    save_fig=save_figs,
+                    fig_dir=fig_dir,
+                )
+
+                self._plot_gp_fits_with_hard_points(
+                    X=X,
+                    Y_nodes=Y_nodes,
+                    pred_mean=pred_mean,
+                    pred_std=pred_std,
+                    z_residuals=z,
+                    node_indices=worst_node_indices,
+                    property=property,
+                    n_hard_points=3,
+                    save_fig=save_figs,
+                    fig_dir=fig_dir,
+                )
+
+        return {
+            "rb_object": rb_obj,
+            "emp_nodes_idx": emp_nodes_idx,
+            "Y_nodes": Y_nodes,
+            "pred_mean": pred_mean,
+            "pred_std": pred_std,
+            "residuals": resid,
+            "z_residuals": z,
+            "result": result,
+            "worst_node_indices": worst_node_indices,
+            "worst_node_diagnostics": worst_node_diagnostics,
+            "hardest_points": hardest_points,
+        }
+
+    
+    def _plot_residual_histograms_for_nodes(
+        self,
+        z_residuals,
+        node_indices,
+        property="amplitude",
+        save_fig=False,
+        fig_dir="Images/flow_diagnostic_figures",
+    ):
+
+        n_show = len(node_indices)
+        fig, axes = plt.subplots(n_show, 1, figsize=(7, 4 * n_show), squeeze=False)
+
+        xgrid = np.linspace(-5, 5, 400)
+
+        for ax, node_idx in zip(axes[:, 0], node_indices):
+            z = z_residuals[:, node_idx]
+            z = z[np.isfinite(z)]
+
+            ax.hist(z, bins=30, density=True, alpha=0.7, label="Standardized residuals")
+            ax.plot(xgrid, norm.pdf(xgrid), linewidth=2, label="Standard normal")
+            ax.set_xlabel("Standardized residual")
+            ax.set_ylabel("Density")
+            ax.set_title(f"{property.capitalize()} residual histogram at node {node_idx}")
+            ax.legend()
+
+        plt.tight_layout()
+
+        if save_fig:
+            os.makedirs(fig_dir, exist_ok=True)
+            plt.savefig(
+                os.path.join(fig_dir, f"{property}_residual_histograms_worst_nodes.png"),
+                dpi=200,
+                bbox_inches="tight",
+            )
+
+
+
+    def _plot_gp_fits_for_nodes(
+        self,
+        X,
+        Y_nodes,
+        pred_mean,
+        pred_std,
+        node_indices,
+        property="amplitude",
+        save_fig=False,
+        fig_dir="Images/flow_diagnostic_figures",
+    ):
+
+
+        x = X[:, 0]
+        order = np.argsort(x)
+        x_sorted = x[order]
+
+        n_show = len(node_indices)
+        fig, axes = plt.subplots(n_show, 1, figsize=(8, 4 * n_show), squeeze=False)
+
+        for ax, node_idx in zip(axes[:, 0], node_indices):
+            y_true = Y_nodes[order, node_idx]
+            y_pred = pred_mean[order, node_idx]
+            y_std = pred_std[order, node_idx]
+
+            ax.plot(x_sorted, y_true, "o", markersize=4, alpha=0.8, label="True")
+            ax.plot(x_sorted, y_pred, "-", linewidth=2, label="GP mean")
+            ax.fill_between(
+                x_sorted,
+                y_pred - 2.0 * y_std,
+                y_pred + 2.0 * y_std,
+                alpha=0.25,
+                label=r"GP $\pm 2\sigma$",
+            )
+            ax.set_xlabel("Eccentricity")
+            ax.set_ylabel(f"{property} value")
+            ax.set_title(f"{property.capitalize()} GP fit at EIM node {node_idx}")
+            ax.legend()
+
+        plt.tight_layout()
+
+        if save_fig:
+            os.makedirs(fig_dir, exist_ok=True)
+            plt.savefig(
+                os.path.join(fig_dir, f"{property}_gp_fits_worst_nodes.png"),
+                dpi=200,
+                bbox_inches="tight",
+            )
+
+        # plt.show()
+
+    def _plot_residual_corr_heatmap(
+        self,
+        z_residuals,
+        property="amplitude",
+        save_fig=False,
+        fig_dir="Images/flow_diagnostic_figures",
+    ):
+        corr = np.corrcoef(z_residuals, rowvar=False)
+
+        plt.figure(figsize=(7, 6))
+        plt.imshow(corr, aspect="auto")
+        plt.colorbar(label="Correlation")
+        plt.xlabel("Node index")
+        plt.ylabel("Node index")
+        plt.title(f"{property.capitalize()} residual correlation across EIM nodes")
+        plt.tight_layout()
+
+        if save_fig:
+            os.makedirs(fig_dir, exist_ok=True)
+            plt.savefig(os.path.join(fig_dir, f"{property}_residual_corr_heatmap.png"), dpi=200)
+
+        # plt.show()
+
+    def _plot_residual_qq_for_nodes(
+        self,
+        z_residuals,
+        node_indices,
+        property="amplitude",
+        save_fig=False,
+        fig_dir="flow_diagnostic_figures",
+    ):
+
+
+        n_show = len(node_indices)
+        fig, axes = plt.subplots(n_show, 1, figsize=(6, 5 * n_show), squeeze=False)
+
+        for ax, node_idx in zip(axes[:, 0], node_indices):
+            z = z_residuals[:, node_idx]
+            z = z[np.isfinite(z)]
+            z_sorted = np.sort(z)
+
+            n = len(z_sorted)
+            probs = (np.arange(1, n + 1) - 0.5) / n
+            gaussian_q = norm.ppf(probs)
+
+            zmin = min(gaussian_q.min(), z_sorted.min())
+            zmax = max(gaussian_q.max(), z_sorted.max())
+
+            ax.plot(gaussian_q, z_sorted, "o", markersize=4)
+            ax.plot([zmin, zmax], [zmin, zmax], "--", linewidth=2)
+            ax.set_xlabel("Gaussian quantiles")
+            ax.set_ylabel("Residual quantiles")
+            ax.set_title(f"{property.capitalize()} Q-Q plot at node {node_idx}")
+
+        plt.tight_layout()
+
+        if save_fig:
+            os.makedirs(fig_dir, exist_ok=True)
+            plt.savefig(
+                os.path.join(fig_dir, f"{property}_qq_worst_nodes.png"),
+                dpi=200,
+                bbox_inches="tight",
+            )
+
+        # plt.show()
+
+    def _plot_coverage_curve(
+        self,
+        z_residuals,
+        property="amplitude",
+        save_fig=False,
+        fig_dir="Images/flow_diagnostic_figures",
+    ):
+        thresholds = np.linspace(0.1, 3.0, 60)
+        empirical = [np.mean(np.abs(z_residuals) <= t) for t in thresholds]
+        ideal = [norm.cdf(t) - norm.cdf(-t) for t in thresholds]
+
+        plt.figure(figsize=(7, 5))
+        plt.plot(thresholds, empirical, linewidth=2, label="Empirical")
+        plt.plot(thresholds, ideal, "--", linewidth=2, label="Gaussian ideal")
+        plt.xlabel(r"Threshold $k$ in $|z| \leq k$")
+        plt.ylabel("Coverage probability")
+        plt.title(f"{property.capitalize()} coverage curve")
+        plt.legend()
+        plt.tight_layout()
+
+        if save_fig:
+            os.makedirs(fig_dir, exist_ok=True)
+            plt.savefig(os.path.join(fig_dir, f"{property}_coverage_curve.png"), dpi=200)
+
+        # plt.show()
+
+    def _plot_skew_kurtosis_scatter(
+        self,
+        z_residuals,
+        property="amplitude",
+        save_fig=False,
+        fig_dir="Images/flow_diagnostic_figures",
+    ):
+        skew_vals = skew(z_residuals, axis=0, bias=False, nan_policy="omit")
+        kurt_vals = kurtosis(z_residuals, axis=0, fisher=True, bias=False, nan_policy="omit")
+
+        plt.figure(figsize=(7, 5))
+        plt.plot(skew_vals, kurt_vals, "o")
+        plt.axvline(0.0, linestyle="--")
+        plt.axhline(0.0, linestyle="--")
+        plt.xlabel("Skewness")
+        plt.ylabel("Excess kurtosis")
+        plt.title(f"{property.capitalize()} node-by-node Gaussianity")
+        plt.tight_layout()
+
+        if save_fig:
+            os.makedirs(fig_dir, exist_ok=True)
+            plt.savefig(os.path.join(fig_dir, f"{property}_skew_kurtosis_scatter.png"), dpi=200)
+
+        # plt.show()
+
+    def _plot_residual_corr_heatmap(
+        self,
+        z_residuals,
+        property="amplitude",
+        save_fig=False,
+        fig_dir="Images/flow_diagnostic_figures",
+    ):
+        corr = np.corrcoef(z_residuals, rowvar=False)
+
+        plt.figure(figsize=(7, 6))
+        plt.imshow(corr, aspect="auto")
+        plt.colorbar(label="Correlation")
+        plt.xlabel("Node index")
+        plt.ylabel("Node index")
+        plt.title(f"{property.capitalize()} residual correlation across EIM nodes")
+        plt.tight_layout()
+
+        if save_fig:
+            os.makedirs(fig_dir, exist_ok=True)
+            plt.savefig(os.path.join(fig_dir, f"{property}_residual_corr_heatmap.png"), dpi=200)
+
+        # plt.show()
+
+    def _plot_true_vs_pred_for_nodes(
+        self,
+        Y_nodes,
+        pred_mean,
+        pred_std,
+        node_indices,
+        property="amplitude",
+        save_fig=False,
+        fig_dir="Images/flow_diagnostic_figures",
+    ):
+
+
+        n_show = len(node_indices)
+        fig, axes = plt.subplots(n_show, 1, figsize=(6, 5 * n_show), squeeze=False)
+
+        for ax, node_idx in zip(axes[:, 0], node_indices):
+            y_true = Y_nodes[:, node_idx]
+            y_pred = pred_mean[:, node_idx]
+            y_std = pred_std[:, node_idx]
+
+            ax.errorbar(
+                y_true,
+                y_pred,
+                yerr=2.0 * y_std,
+                fmt="o",
+                markersize=4,
+                alpha=0.7,
+                capsize=0,
+                label=r"Prediction with $2\sigma$",
+            )
+
+            lo = min(np.min(y_true), np.min(y_pred))
+            hi = max(np.max(y_true), np.max(y_pred))
+            ax.plot([lo, hi], [lo, hi], "--", linewidth=2, label="Ideal")
+
+            ax.set_xlabel("True node value")
+            ax.set_ylabel("Predicted node value")
+            ax.set_title(f"{property.capitalize()} true vs GP prediction at node {node_idx}")
+            ax.legend()
+
+        plt.tight_layout()
+
+        if save_fig:
+            os.makedirs(fig_dir, exist_ok=True)
+            plt.savefig(
+                os.path.join(fig_dir, f"{property}_true_vs_pred_worst_nodes.png"),
+                dpi=200,
+                bbox_inches="tight",
+            )
+
+    def _plot_worst_node_summary(
+        self,
+        node_indices,
+        diagnostics,
+        property="amplitude",
+        save_fig=False,
+        fig_dir="Images/flow_diagnostic_figures",
+    ):
+
+
+        skew_vals = diagnostics["skew"][node_indices]
+        kurt_vals = diagnostics["kurtosis"][node_indices]
+        rmse_vals = diagnostics["rmse"][node_indices]
+        pvals = diagnostics["pvals"][node_indices]
+
+        labels = [str(i) for i in node_indices]
+        x = np.arange(len(node_indices))
+        width = 0.2
+
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.bar(x - 1.5 * width, np.abs(skew_vals), width, label="|skew|")
+        ax.bar(x - 0.5 * width, np.abs(kurt_vals), width, label="|excess kurtosis|")
+        ax.bar(x + 0.5 * width, rmse_vals, width, label="RMSE")
+        ax.bar(x + 1.5 * width, -np.log10(np.clip(pvals, 1e-300, 1.0)), width, label="-log10(p)")
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels)
+        ax.set_xlabel("Worst node index")
+        ax.set_ylabel("Diagnostic value")
+        ax.set_title(f"{property.capitalize()} worst-node diagnostics")
+        ax.legend()
+        plt.tight_layout()
+
+        if save_fig:
+
+            skew_vals = diagnostics["skew"]
+            os.makedirs(fig_dir, exist_ok=True)
+            plt.savefig(
+                os.path.join(fig_dir, f"{property}_worst_node_summary.png"),
+                dpi=200,
+                bbox_inches="tight",
+            )
+
+    def _get_worst_node_indices(
+        self,
+        z_residuals,
+        pred_mean,
+        Y_nodes,
+        top_k=5,
+    ):
+        """
+        Rank nodes by how badly Gaussian/GP assumptions fail.
+
+        Score combines:
+        - absolute skewness
+        - absolute excess kurtosis
+        - normality failure strength
+        - RMSE
+
+        Returns
+        -------
+        worst_idx : ndarray
+            Indices of the worst nodes, worst first.
+        diagnostics : dict
+            Per-node diagnostic arrays.
+        """
+        from scipy.stats import skew, kurtosis, normaltest
+
+        z = np.asarray(z_residuals)
+        resid = Y_nodes - pred_mean
+
+        n_nodes = z.shape[1]
+
+        skew_vals = skew(z, axis=0, bias=False, nan_policy="omit")
+        kurt_vals = kurtosis(z, axis=0, fisher=True, bias=False, nan_policy="omit")
+
+        pvals = np.full(n_nodes, np.nan)
+        for j in range(n_nodes):
+            try:
+                _, pvals[j] = normaltest(z[:, j], nan_policy="omit")
+            except Exception:
+                pvals[j] = np.nan
+
+        rmse_vals = np.sqrt(np.mean(resid**2, axis=0))
+
+        # Turn p-values into a positive “failure” score
+        # smaller p => larger score
+        pscore = -np.log10(np.clip(pvals, 1e-300, 1.0))
+
+        # Normalize each component so one term does not dominate only by scale
+        def safe_norm(a):
+            a = np.asarray(a, dtype=float)
+            s = np.nanstd(a)
+            if not np.isfinite(s) or s == 0:
+                return np.zeros_like(a)
+            return (a - np.nanmean(a)) / s
+
+        score = (
+            safe_norm(np.abs(skew_vals))
+            + safe_norm(np.abs(kurt_vals))
+            + safe_norm(pscore)
+            + 0.5 * safe_norm(rmse_vals)
+        )
+
+        worst_idx = np.argsort(score)[::-1][:top_k]
+
+        diagnostics = {
+            "score": score,
+            "skew": skew_vals,
+            "kurtosis": kurt_vals,
+            "pvals": pvals,
+            "rmse": rmse_vals,
+        }
+
+        return worst_idx, diagnostics
+
+    def _plot_residuals_vs_eccentricity_for_nodes(
+        self,
+        X,
+        residuals,
+        node_indices,
+        property="amplitude",
+        standardized=False,
+        save_fig=False,
+        fig_dir="Images/flow_diagnostic_figures",
+    ):
+
+        x = X[:, 0]
+        order = np.argsort(x)
+        x_sorted = x[order]
+
+        n_show = len(node_indices)
+        fig, axes = plt.subplots(n_show, 1, figsize=(8, 3.8 * n_show), squeeze=False)
+
+        for ax, node_idx in zip(axes[:, 0], node_indices):
+            r = residuals[order, node_idx]
+
+            ax.plot(x_sorted, r, "o-", markersize=4, alpha=0.85)
+            ax.axhline(0.0, linestyle="--", linewidth=1.5)
+            ax.set_xlabel("Eccentricity")
+            if standardized:
+                ax.set_ylabel("Standardized residual")
+                ax.set_title(f"{property.capitalize()} standardized residual vs eccentricity (node {node_idx}, t={self.time[node_idx]:.2f}M)")
+            else:
+                ax.set_ylabel("Residual")
+                ax.set_title(f"{property.capitalize()} residual vs eccentricity (node {node_idx}, t={self.time[node_idx]:.2f}M)")
+
+        plt.tight_layout()
+
+        if save_fig:
+            os.makedirs(fig_dir, exist_ok=True)
+            name = f"{property}_{'z_' if standardized else ''}residuals_vs_ecc_worst_nodes.png"
+            plt.savefig(os.path.join(fig_dir, name), dpi=200, bbox_inches="tight")
+
+        # plt.show()
+
+    def _plot_difficulty_vs_eccentricity(
+        self,
+        X,
+        residuals,
+        z_residuals,
+        property="amplitude",
+        save_fig=False,
+        fig_dir="Images/flow_diagnostic_figures",
+    ):
+
+        x = X[:, 0]
+        order = np.argsort(x)
+        x_sorted = x[order]
+
+        resid_sorted = residuals[order]
+        z_sorted = z_residuals[order]
+
+        rms_resid = np.sqrt(np.mean(resid_sorted**2, axis=1))
+        max_abs_resid = np.max(np.abs(resid_sorted), axis=1)
+
+        rms_z = np.sqrt(np.mean(z_sorted**2, axis=1))
+        max_abs_z = np.max(np.abs(z_sorted), axis=1)
+
+        fig, axes = plt.subplots(2, 1, figsize=(8, 8), squeeze=False)
+
+        axes[0, 0].plot(x_sorted, rms_resid, "o-", markersize=4, label="RMS residual across nodes")
+        axes[0, 0].plot(x_sorted, max_abs_resid, "o-", markersize=4, label="Max |residual| across nodes")
+        axes[0, 0].set_xlabel("Eccentricity")
+        axes[0, 0].set_ylabel("Residual scale")
+        axes[0, 0].set_title(f"{property.capitalize()} difficulty vs eccentricity")
+        axes[0, 0].legend()
+
+        axes[1, 0].plot(x_sorted, rms_z, "o-", markersize=4, label="RMS standardized residual across nodes")
+        axes[1, 0].plot(x_sorted, max_abs_z, "o-", markersize=4, label="Max |standardized residual| across nodes")
+        axes[1, 0].axhline(1.0, linestyle="--", linewidth=1.5)
+        axes[1, 0].axhline(2.0, linestyle="--", linewidth=1.5)
+        axes[1, 0].set_xlabel("Eccentricity")
+        axes[1, 0].set_ylabel("Standardized residual scale")
+        axes[1, 0].set_title(f"{property.capitalize()} GP surprise vs eccentricity")
+        axes[1, 0].legend()
+
+        plt.tight_layout()
+
+        if save_fig:
+            os.makedirs(fig_dir, exist_ok=True)
+            plt.savefig(
+                os.path.join(fig_dir, f"{property}_difficulty_vs_eccentricity.png"),
+                dpi=200,
+                bbox_inches="tight",
+            )
+
+        # plt.show()
+
+    def _plot_residual_heatmap_vs_eccentricity(
+        self,
+        X,
+        residuals,
+        property="amplitude",
+        standardized=False,
+        save_fig=False,
+        fig_dir="Images/flow_diagnostic_figures",
+    ):
+
+        x = X[:, 0]
+        order = np.argsort(x)
+        x_sorted = x[order]
+        R = residuals[order].T  # shape (n_nodes, n_samples)
+
+        plt.figure(figsize=(10, 6))
+        extent = [x_sorted.min(), x_sorted.max(), 0, R.shape[0] - 1]
+        plt.imshow(R, aspect="auto", origin="lower", extent=extent)
+        plt.colorbar(label="Standardized residual" if standardized else "Residual")
+        plt.xlabel("Eccentricity")
+        plt.ylabel("Node index")
+        plt.title(
+            f"{property.capitalize()} {'standardized ' if standardized else ''}residual heatmap vs eccentricity"
+        )
+        plt.tight_layout()
+
+        if save_fig:
+            os.makedirs(fig_dir, exist_ok=True)
+            name = f"{property}_{'z_' if standardized else ''}residual_heatmap_vs_ecc.png"
+            plt.savefig(os.path.join(fig_dir, name), dpi=200, bbox_inches="tight")
+
+        # plt.show()
+
+    def _plot_gp_fits_with_hard_points(
+        self,
+        X,
+        Y_nodes,
+        pred_mean,
+        pred_std,
+        z_residuals,
+        node_indices,
+        property="amplitude",
+        n_hard_points=3,
+        save_fig=False,
+        fig_dir="Images/flow_diagnostic_figures",
+    ):
+
+        x = X[:, 0]
+        order = np.argsort(x)
+        x_sorted = x[order]
+
+        n_show = len(node_indices)
+        fig, axes = plt.subplots(n_show, 1, figsize=(8, 4 * n_show), squeeze=False)
+
+        for ax, node_idx in zip(axes[:, 0], node_indices):
+            y_true = Y_nodes[order, node_idx]
+            y_pred = pred_mean[order, node_idx]
+            y_std = pred_std[order, node_idx]
+            z = z_residuals[order, node_idx]
+
+            hard_local = np.argsort(np.abs(z))[-n_hard_points:]
+
+            ax.plot(x_sorted, y_true, "o", markersize=4, alpha=0.8, label="True")
+            ax.plot(x_sorted, y_pred, "-", linewidth=2, label="GP mean")
+            ax.fill_between(
+                x_sorted,
+                y_pred - 2.0 * y_std,
+                y_pred + 2.0 * y_std,
+                alpha=0.25,
+                label=r"GP $\pm 2\sigma$",
+            )
+
+            ax.plot(
+                x_sorted[hard_local],
+                y_true[hard_local],
+                "o",
+                markersize=8,
+                markerfacecolor="none",
+                markeredgewidth=2,
+                label=f"{n_hard_points} hardest points",
+            )
+
+            for idx in hard_local:
+                ax.annotate(f"e={x_sorted[idx]:.3f}", (x_sorted[idx], y_true[idx]), fontsize=8)
+
+            ax.set_xlabel("Eccentricity")
+            ax.set_ylabel(f"{property} value")
+            ax.set_title(f"{property.capitalize()} GP fit with hardest points (node {node_idx}, t={self.time[node_idx]:.2f}M)")
+            ax.legend()
+
+        plt.tight_layout()
+
+        if save_fig:
+            os.makedirs(fig_dir, exist_ok=True)
+            plt.savefig(
+                os.path.join(fig_dir, f"{property}_gp_fits_with_hard_points.png"),
+                dpi=200,
+                bbox_inches="tight",
+            )
+
+        # plt.show()
+
+    def _get_hardest_parameter_points(
+        self,
+        X,
+        residuals,
+        z_residuals,
+        top_k=10,
+    ):
+
+        rms_resid = np.sqrt(np.mean(residuals**2, axis=1))
+        max_abs_resid = np.max(np.abs(residuals), axis=1)
+
+        rms_z = np.sqrt(np.mean(z_residuals**2, axis=1))
+        max_abs_z = np.max(np.abs(z_residuals), axis=1)
+
+        score = rms_z + 0.5 * max_abs_z
+        hard_idx = np.argsort(score)[::-1][:top_k]
+
+        return {
+            "indices": hard_idx,
+            "eccentricities": X[hard_idx, 0],
+            "rms_residual": rms_resid[hard_idx],
+            "max_abs_residual": max_abs_resid[hard_idx],
+            "rms_z": rms_z[hard_idx],
+            "max_abs_z": max_abs_z[hard_idx],
+        }
+
 
 sampling_frequency = 2048 # or 4096
 duration = 4 # seconds
 time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
 print(f'time-array: [{round(SecondtoMass(time_array, 60)[0], 2)}, {round(SecondtoMass(time_array, 60)[-1], 2)}] seconds, with {len(time_array)} points')
-ecc_ref_parameterspace=np.linspace(0.001, 0.1, num=200)
+ecc_ref_parameterspace=np.linspace(0.0, 0.1, num=20)
 
 gt = Generate_TrainingSet(time_array=time_array, ecc_ref_parameterspace=ecc_ref_parameterspace, mean_ano_parameterspace=[0], N_basis_vecs_amp=20, N_basis_vecs_phase=20,
-                          minimum_spacing_greedy=0.003 )
-res_ds_phase = gt.generate_property_dataset(ecc_ref_parameterspace, 'phase', plot_residuals_time_evolv=True, plot_residuals_eccentric_evolv=True, show_legend=False)
-# res_ds_amp = gt.generate_property_dataset(ecc_ref_parameterspace, 'amplitude', plot_residuals_time_evolv=True, plot_residuals_eccentric_evolv=True, show_legend=False)
+                          truncate_at_ISCO=False, truncate_at_tmin=True)
+res_ds_phase = gt.generate_property_dataset(property='phase', plot_residuals_time_evolv=True, plot_residuals_eccentric_evolv=True, save_fig_eccentric_evolv=True, save_fig_time_evolve=True, show_legend=False)
+res_ds_amp = gt.generate_property_dataset(property='amplitude', plot_residuals_time_evolv=True, plot_residuals_eccentric_evolv=True, save_fig_eccentric_evolv=True, save_fig_time_evolve=True, show_legend=False)
+plt.show()
+
+
+# print(out_phase["result"].recommendation)
+# print(out_amp["result"].recommendation)
 
 # sampling_frequency = 2048 # or 4096
 # duration = 4 # seconds
@@ -2217,11 +3679,11 @@ res_ds_phase = gt.generate_property_dataset(ecc_ref_parameterspace, 'phase', plo
 # res_ds_amp = gt.generate_property_dataset(np.linspace(0, 0.3, num=40), 'amplitude', plot_residuals_time_evolv=True, save_fig_time_evolve=True, plot_residuals_eccentric_evolv=True, save_fig_eccentric_evolv=True)
 # # hp, hc = gt.simulate_inspiral(0.3, geometric_units=True)
 # # res_ds_amp = gt.calculate_residual(hp, hc, 0.3, 'amplitude', plot_residual=True, save_fig=True)
-rb = gt.get_greedy_parameters(U=res_ds_phase, property='phase', min_greedy_error=1e-10, N_greedy_vecs=50,plot_greedy_error=True, max_tree_depth=0, save_greedy_error_fig=True, plot_greedy_vectors=True, save_greedy_vecs_fig=True, normalize=False, plot_SVD_matrix=True, save_SVD_matrix_fig=True,show_legend=False)
-# gt.get_greedy_parameters(U=res_ds_amp, property='amplitude', min_greedy_error=1e-10, N_greedy_vecs=80, plot_greedy_error=True, tree_depth=3, save_greedy_error_fig=True, plot_greedy_vectors=True, save_greedy_vecs_fig=True, normalize=False, show_legend=False)
-gt.get_empirical_nodes(rb, 'phase', plot_interpolation_matrix=True, save_interpolation_matrix_fig=True, plot_proj_vs_eim_error=True, save_proj_vs_eim_error_fig=True)
+# rb_p = gt.get_greedy_parameters(U=res_ds_phase, property='phase', min_greedy_error=1e-10, N_greedy_vecs=50,plot_greedy_error=True, max_tree_depth=0, save_greedy_error_fig=True, plot_greedy_vectors=True, save_greedy_vecs_fig=True, normalize=False, plot_SVD_matrix=True, save_SVD_matrix_fig=True,show_legend=False)
+# rb_a = gt.get_greedy_parameters(U=res_ds_amp, property='amplitude', min_greedy_error=1e-10, N_greedy_vecs=80, plot_greedy_error=True, max_tree_depth=0, save_greedy_error_fig=True, plot_greedy_vectors=True, save_greedy_vecs_fig=True, normalize=False, plot_SVD_matrix=True, save_SVD_matrix_fig=True,show_legend=False)
 
-# gt.get_empirical_nodes(res_ds_amp, 'amplitude', plot_emp_nodes_at_ecc=0.1, save_fig=True)
+# gt.get_empirical_nodes(rb_p, 'phase', plot_interpolation_matrix=True, save_interpolation_matrix_fig=True, plot_proj_vs_eim_error=True, save_proj_vs_eim_error_fig=True)
+# gt.get_empirical_nodes(rb_a, 'amplitude', plot_interpolation_matrix=True, save_interpolation_matrix_fig=True, plot_proj_vs_eim_error=True, save_proj_vs_eim_error_fig=True)
 
 # hp, hc = gt.simulate_inspiral(0.0)
 
