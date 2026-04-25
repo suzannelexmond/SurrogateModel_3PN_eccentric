@@ -1,11 +1,13 @@
 
-import inspect
 import sys
 import numpy as np
 
 class Warnings:
     def __init__(self):
-        pass
+        self.ecc_warned = False
+        self.mass_ratio_warned = False
+        self.mean_anomaly_warned = False
+        self.chispin_warned = False
     
     def colored_text(self, text, color):
         """
@@ -38,35 +40,40 @@ class Warnings:
     def allowed_eccentricity_warning(self, ecc_ref):
         ecc = np.asarray(ecc_ref, dtype=float)
 
-        if np.any(ecc < 0):
-            print(self.colored_text(
-                "Eccentricity contains non-physical values (e < 0). "
-                "These will be removed from the dataset.", 'yellow'))
+        if not getattr(self, "ecc_warned", False):
+            if np.any(ecc < 0):
+                print(self.colored_text(
+                    "Eccentricity contains non-physical values (e < 0). "
+                    "These will be removed from the dataset.", 'yellow'))
 
-        if np.any(ecc == 0):
-            print(self.colored_text(
-                "Eccentricity contains circular case (e = 0). "
-                "This will be removed from the dataset to avoid numerical issues in residual calculations.", 'yellow'))
+            if np.any(ecc == 0):
+                print(self.colored_text(
+                    "Eccentricity contains circular case (e = 0). "
+                    "This will be removed from the dataset to avoid numerical issues in residual calculations.", 'yellow'))
 
         ecc = ecc[ecc > 0]
 
         if ecc.size == 0:
             raise ValueError("No valid eccentricity values remain after filtering.")
-
+        
+        self.ecc_warned = True
         return ecc
 
 
     def allowed_mass_ratio_warning(self, mass_ratio):
         q = np.asarray(mass_ratio, dtype=float)
 
-        if np.any(q <= 0):
+
+        if np.any(q <= 0) and not getattr(self, "mass_ratio_warned", False):
             raise ValueError("Mass ratio must be > 0.")
 
         if np.any(q < 1):
-            print(self.colored_text(
-                "Mass ratio q < 1 detected. Converting to q >= 1 using q -> 1/q.", 'yellow'))
             q = np.where(q < 1, 1/q, q)
+            if not getattr(self, "mass_ratio_warned", False):
+                print(self.colored_text(
+                    "Mass ratio q < 1 detected. Converting to q >= 1 using q -> 1/q.", 'yellow'))
 
+        self.mass_ratio_warned = True
         return q
 
 
@@ -75,9 +82,11 @@ class Warnings:
         wrapped = l % (2 * np.pi)
 
         if not np.allclose(l, wrapped):
-            print(self.colored_text(
-                "Mean anomaly values wrapped into range [0, 2π).", 'yellow'))
-
+            if not getattr(self, "mean_anomaly_warned", False):
+                print(self.colored_text(
+                    "Mean anomaly values wrapped into range [0, 2π).", 'yellow'))
+            
+        self.mean_anomaly_warned = True
         return wrapped
 
 
@@ -86,10 +95,12 @@ class Warnings:
         clipped = np.clip(chi, -1, 1)
 
         if not np.allclose(chi, clipped):
-            print(self.colored_text(
-                "Spin values should be in the range [-1, 1]. "
-                "Values outside this range were clipped.", 'yellow'))
-
+            if not getattr(self, "chispin_warned", False):
+                print(self.colored_text(
+                    "Spin values should be in the range [-1, 1]. "
+                    "Values outside this range were clipped.", 'yellow'))
+            
+        self.chispin_warned = True
         return clipped
     
 

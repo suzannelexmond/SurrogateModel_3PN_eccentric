@@ -316,6 +316,7 @@ class Simulate_Waveform(Warnings, Automated_Settings):
         # --------------------------- Update instance attributes --------------------------
         if update_results is True:
             self.time = time_array
+            print(10, len(self.time))
             self.hp_ecc, self.hc_ecc = hp, hc
         
         return hp, hc, time_array

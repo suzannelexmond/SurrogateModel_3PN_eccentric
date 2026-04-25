@@ -1,5 +1,7 @@
 from tracemalloc import start
 
+from matplotlib import gridspec
+
 from generate_greedy_training_set import *
 
 from sklearn.gaussian_process import GaussianProcessRegressor
@@ -18,84 +20,178 @@ warnings.simplefilter("ignore", ConvergenceWarning)
 
 f = currentframe()
 
+
 @dataclass
-class GPRFitParameters(TrainingSetParameters):
+class GPRFitResults(Warnings):
+    # Initialization parameters
+    property: str = "phase"
+
+    ecc_ref_space_input: Any = None
+    ecc_ref_space_output: Any = None
+
+    mean_ano_ref_space_input: Any = None
+    mean_ano_ref_space_output: Any = None
+
+    mass_ratio_space_input: Any = None
+    mass_ratio_space_output: Any = None
+
+    chi1_space_input: Any = None
+    chi1_space_output: Any = None
+
+    chi2_space_input: Any = None
+    chi2_space_output: Any = None
+
+    time: Any = None
+
+    N_basis_vecs: Optional[int] = None
+    min_greedy_error: Optional[float] = None
+
+    f_ref: float = None
+    f_lower: float = None
+    phiRef: float = 0.0
+    inclination: float = 0.0
+    truncate_at_ISCO: bool = True
+    truncate_at_tmin: bool = True
+    luminosity_distance: Optional[float] = None
+
+    # Results fields for loading after initialization
+    circ: Any = None
+    residuals: Any = None
+    basis_indices: Any = field(default_factory=list)
+    empirical_indices: Any = field(default_factory=list)
+    residual_basis: Any = None
+    training_set: Any = None
+
     best_lmls: Any = None
     best_guess_kernels: Any = None
     optimized_kernels: Any = None
     mean_predictions: Any = None
     confidence_95_preds: Any = None
 
-    def name_blocks(self):
-        # Add kernel information to the name blocks for file naming (specified in the TrainingSetParameters class)
-        blocks = super().name_blocks()
+    def __post_init__(self):
+        """Check if initial parameter spaces are valid and round them to 4 decimal places for consistency in filenames."""
+        for name in [
+            "ecc_ref_space_input",
+            "mean_ano_ref_space_input",
+            "mass_ratio_space_input",
+            "chi1_space_input",
+            "chi2_space_input",
+        ]:
+            value = getattr(self, name)
+            if value is not None:
+                setattr(self, name, np.round(np.asarray(value, dtype=float), 4))
+    
+    def update_results(self, **kwargs):
+        """Update the results fields of the GPRFitResults object with new values provided as keyword arguments. 
+        Only existing attributes will be updated; any keys that do not correspond to existing attributes will raise an error."""
+        for key, value in kwargs.items():
+            if not hasattr(self, key):
+                raise AttributeError(f"{type(self).__name__} has no attribute '{key}'")
+            setattr(self, key, value)
+            
+    @staticmethod
+    def _range_block(name, values):
+        """Create block of [min_max_N] for each parameter space. Only include properties that are not None."""
+        values = np.asarray(values, dtype=float)
+        return f"{name}=[{values.min():g}_{values.max():g}_N={len(values)}]"
 
+    @staticmethod
+    def _scalar_block(name, value):
+        """Formats a scalar property into a string block for filenames. If the value is None, it returns an empty string."""
+        return f"{name}={value:g}"
+
+    @staticmethod
+    def _kernel_to_string(kernel):
+        """Converts a kernel object to a string representation suitable for filenames by removing spaces and special characters."""
+        text = str(kernel)
+        text = text.replace(" ", "")
+        text = text.replace("\n", "")
+        text = text.replace("**", "^")
+        text = text.replace("*", "x")
+        text = text.replace("(", "")
+        text = text.replace(")", "")
+        return text
+
+    def name_blocks(self):
+        """Constructs a list of strings representing the properties of the GPRFitResults object for use in filenames."""
+        blocks = [
+            self.property,
+            self._range_block("e", self.ecc_ref_space_input),
+            self._range_block("l", self.mean_ano_ref_space_input),
+            self._range_block("q", self.mass_ratio_space_input),
+            self._range_block("x1", self.chi1_space_input),
+            self._range_block("x2", self.chi2_space_input),
+            self._scalar_block("fr", self.f_ref),
+            self._scalar_block("fl", self.f_lower),
+        ]
+
+        if self.phiRef != 0:
+            blocks.append(self._scalar_block("phi", self.phiRef))
+        if self.inclination != 0:
+            blocks.append(self._scalar_block("incl", self.inclination))
+        if self.N_basis_vecs is not None:
+            blocks.append(f"Nb={self.N_basis_vecs}")
+        if self.min_greedy_error is not None:
+            blocks.append(f"gerr={self.min_greedy_error}")
+        if not self.truncate_at_ISCO:
+            blocks.append("noISCO")
+        if not self.truncate_at_tmin:
+            blocks.append("notmin")
+        if self.luminosity_distance is not None:
+            blocks.append("SI")
         if self.optimized_kernels is not None:
             blocks.append(f"kernel={self._kernel_to_string(self.optimized_kernels)}")
 
         return blocks
 
-    @staticmethod
-    def _kernel_to_string(kernel):
-        text = str(kernel)
-        text = text.replace(" ", "")
-        text = text.replace("\n", "")
-        text = text.replace("*", "x")
-        text = text.replace("**", "^")
-        text = text.replace("(", "")
-        text = text.replace(")", "")
-        return text
-
-    def save(self, prefix="GPRfits", directory=None):
+    def filename(self, prefix="GPRFitResults", ext="pkl", directory=None):
+        """Constructs a filename based on the properties of the GPRFitResults object."""
+        name = f"{prefix}_{'_'.join(self.name_blocks())}.{ext}"
+        if directory is not None:
+            return f"{directory.rstrip('/')}/{name}"
+        return name
+    
+    def figname(self, prefix="fig", ext="png", directory=None):
+        # Ensure the directory exists, creating it if necessary and save
         if directory is not None:
             os.makedirs(directory, exist_ok=True)
 
-        filepath = self.filename(prefix=prefix, ext="npz", directory=directory)
+        figname = self.filename(prefix=prefix, ext=ext, directory=directory)
 
-        if not os.path.isfile(filepath):
-            np.savez(
-                filepath,
-                mean_predictions=self.mean_predictions,
-                lml_fits=self.best_lmls,
-                best_guess_kernels=np.array(self.best_guess_kernels, dtype=object),
-                optimized_kernels=np.array(self.optimized_kernels, dtype=object),
-                time_array=self.t,
-                training_set=self.training_set,
+        # Figure saving confirmation
+        print(self.colored_text(f"Figure is saved in {figname}", 'blue'))
 
-                empirical_indices=self.empirical_indices,
-                basis_indices=self.basis_indices,
-                residual_basis=self.residual_basis,
-                confidence_95_preds=self.confidence_95_preds,
-            )
+        return figname
 
-        print(f'GPRFitParameters {property} save succeeded: {time.time() - start:.4f}s')
+    def save(self, prefix="GPRFitResults", directory="Straindata/GPRFitResults"):
+        """Saves the GPRFitResults object to a file."""
+        if directory is not None:
+            os.makedirs(directory, exist_ok=True)
+
+        filepath = self.filename(prefix=prefix, ext="pkl", directory=directory)
+
+        with open(filepath, "wb") as f:
+            pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+        # Figure saving confirmation
+        print(self.colored_text(f'GPRFitResults saved to {filepath}', 'blue'))
 
         return filepath
 
-    @classmethod
-    def load(cls, filepath, **kwargs):
-        data = np.load(filepath, allow_pickle=True)
-        
-        # Create the object using the loaded data and any additional kwargs
-        obj = cls(
-            mean_predictions=data["mean_predictions"],
-            best_lmls=data["lml_fits"],
-            best_guess_kernels=data["best_guess_kernels"],
-            optimized_kernels=data["optimized_kernels"].item(),
-            time_array=data["time_array"],
-            training_set=data["training_set"],
-            empirical_indices=data["empirical_indices"],
-            basis_indices=data["basis_indices"],
-            residual_basis=data["residual_basis"],
-            confidence_95_preds=data["confidence_95_preds"],
-            **kwargs,
-        )
+    def load(self, prefix="GPRFitResults", directory="Straindata/GPRFitResults"):
+        """Loads the saved GPRFitResults object from a file."""
 
-        data.close()
+        filepath = self.filename(prefix=prefix, ext="pkl", directory=directory)
+        with open(filepath, 'rb') as f:
+            loaded_obj = pickle.load(f)
 
-        print(f'GPRFitParameters {property} load succeeded: {time.time() - start:.4f}s')
-        return obj
-    
+        if not isinstance(loaded_obj, GPRFitResults):
+            raise ValueError(f"Loaded object is not of type GPRFitResults. Got {type(loaded_obj)} instead.")
+
+        # Figure loading confirmation
+        print(self.colored_text(f"GPRFitResults object loaded from {filepath}", 'blue'))
+
+        return loaded_obj
 
 
 class Generate_Offline_Surrogate(Generate_TrainingSet):
@@ -129,20 +225,20 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
 
         # Input refers to the dataset used to pick the training set, output refers to the parameterspace of the computed surrogate
         self.ecc_ref_parameterspace_range = ecc_ref_range
-        self.ecc_ref_space_input = np.linspace(*ecc_ref_range, amount_input_wfs).round(4)
-        self.ecc_ref_space_output = np.linspace(*ecc_ref_range, amount_output_wfs).round(4)
+        self.ecc_ref_space_input = self.allowed_eccentricity_warning(np.linspace(*ecc_ref_range, amount_input_wfs).round(4))
+        self.ecc_ref_space_output = self.allowed_eccentricity_warning(np.linspace(*ecc_ref_range, amount_output_wfs).round(4))
 
-        self.mean_ano_ref_space_input = np.linspace(*mean_ano_ref_range, amount_input_wfs).round(4)
-        self.mean_ano_ref_space_output = np.linspace(*mean_ano_ref_range, amount_output_wfs).round(4)
+        self.mean_ano_ref_space_input = self.allowed_mean_anomaly_warning(np.linspace(*mean_ano_ref_range, amount_input_wfs).round(4))
+        self.mean_ano_ref_space_output = self.allowed_mean_anomaly_warning(np.linspace(*mean_ano_ref_range, amount_output_wfs).round(4))
 
-        self.mass_ratio_space_input = np.linspace(*mass_ratio_range, amount_input_wfs).round(4)
-        self.mass_ratio_space_output = np.linspace(*mass_ratio_range, amount_output_wfs).round(4)
+        self.mass_ratio_space_input = self.allowed_mass_ratio_warning(np.linspace(*mass_ratio_range, amount_input_wfs).round(4))
+        self.mass_ratio_space_output = self.allowed_mass_ratio_warning(np.linspace(*mass_ratio_range, amount_output_wfs).round(4))
 
-        self.chi1_space_input = np.linspace(*chi1_range, amount_input_wfs).round(4)
-        self.chi1_space_output = np.linspace(*chi1_range, amount_output_wfs).round(4)
+        self.chi1_space_input = self.allowed_chispin_warning(np.linspace(*chi1_range, amount_input_wfs).round(4))
+        self.chi1_space_output = self.allowed_chispin_warning(np.linspace(*chi1_range, amount_output_wfs).round(4))
 
-        self.chi2_space_input = np.linspace(*chi2_range, amount_input_wfs).round(4)
-        self.chi2_space_output = np.linspace(*chi2_range, amount_output_wfs).round(4)
+        self.chi2_space_input = self.allowed_chispin_warning(np.linspace(*chi2_range, amount_input_wfs).round(4))
+        self.chi2_space_output = self.allowed_chispin_warning(np.linspace(*chi2_range, amount_output_wfs).round(4))
 
         self.amount_input_wfs = amount_input_wfs
         self.amount_output_wfs = amount_output_wfs
@@ -177,6 +273,52 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                  inclination=inclination, 
                  truncate_at_ISCO=truncate_at_ISCO, 
                  truncate_at_tmin=truncate_at_tmin)
+        
+    def result_kwargs_gpr(self, property):
+        """Collect all parameters needed for saving results.
+        Stores both input and output parameter spaces.
+        Only property-dependent fields are switched."""
+        
+        if property == "phase":
+            N_basis_vecs = self.N_basis_vecs_phase
+            min_greedy_error = self.min_greedy_error_phase
+        elif property == "amplitude":
+            N_basis_vecs = self.N_basis_vecs_amp
+            min_greedy_error = self.min_greedy_error_amp
+        else:
+            raise ValueError("property must be 'phase' or 'amplitude'")
+
+        return dict(
+            # property-specific
+            property=property,
+            N_basis_vecs=N_basis_vecs,
+            min_greedy_error=min_greedy_error,
+
+            # parameter spaces (store BOTH input and output)
+            ecc_ref_space_input=getattr(self, "ecc_ref_space_input", None),
+            ecc_ref_space_output=getattr(self, "ecc_ref_space_output", None),
+
+            mean_ano_ref_space_input=getattr(self, "mean_ano_ref_space_input", None),
+            mean_ano_ref_space_output=getattr(self, "mean_ano_ref_space_output", None),
+
+            mass_ratio_space_input=getattr(self, "mass_ratio_space_input", None),
+            mass_ratio_space_output=getattr(self, "mass_ratio_space_output", None),
+
+            chi1_space_input=getattr(self, "chi1_space_input", None),
+            chi1_space_output=getattr(self, "chi1_space_output", None),
+
+            chi2_space_input=getattr(self, "chi2_space_input", None),
+            chi2_space_output=getattr(self, "chi2_space_output", None),
+
+            # waveform / global settings
+            time=self.time,
+            f_ref=self.f_ref,
+            f_lower=self.f_lower,
+            phiRef=self.phiRef,
+            inclination=self.inclination,
+            truncate_at_ISCO=self.truncate_at_ISCO,
+            truncate_at_tmin=self.truncate_at_tmin,
+        )
 
     def _diagnose_gpr_issues(self, gaussian_process, X_train_scaled, y_train_scaled):
             issues = []
@@ -209,12 +351,10 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             return issues
     
 
-    def _gaussian_process_regression_test(self, time_node, property, optimized_kernel=None, plot_kernels=False, save_fig_kernels=False):
+    def _gaussian_process_regression_test(self, time_node, train_obj:TrainingSetResults, optimized_kernel=None, plot_kernels=False, save_fig_kernels=False):
         """
         fit_to_params: choose 'greedy' for fitting to greedy paramaters, or choors 'GPR_opt' for fitting to GPR optimized chosen parameters
         """
-
-        train_obj = self._get_training_obj(property)
 
         # Extract X and training data
         X = self.ecc_ref_space_output[:, np.newaxis]
@@ -246,6 +386,10 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         ls_multipliers = [0.3, 1.0, 3.0, 10.0] # length scale multipliers
         ls_upper_bounds = [0.5, 1.0, 2.0, 5.0] # length scale upper bounds
         smoothness_params = [1.0, 1.5, 2.0, 2.5]  # Matern nu values
+
+        ls_multipliers = [1.0]
+        ls_upper_bounds = [1.0]
+        smoothness_params = [1.0]
 
         # Different kernel configurations
         kernels = []
@@ -329,8 +473,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                 y_predict_std_kernels.append(y_predict_std)
 
                 self._diagnose_gpr_issues(gaussian_process, X_train_scaled, y_train_scaled)
-                # if issues:
-                    # print(self.colored_text("GPR ISSUES FOUND:", 'red'), issues)
+
 
                 if lml > best_lml:
                     best_lml = lml
@@ -346,11 +489,6 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         print(self.colored_text(f"Best guess kernel = {best_guess_kernel}; Optimized kernel: {best_optimized_kernel} | time = {end - start:.2f}s | LML = {best_lml:.4f} | X_train_scaled = {X_train_scaled[:10]} | Y_train_scaled = {y_train_scaled[:10]}", 'green'))
         lml_kernels.append(best_lml)
 
-        # gpr_obj.best_guess_kernel = best_guess_kernel
-        # gpr_obj.optimized_kernel = best_optimized_kernel
-        # gpr_obj.best_y_predict = best_y_predict
-        # gpr_obj.best_y_predict_std = best_y_predict_std
-        # gpr_obj.best_lml = best_lml
 
         if plot_kernels is True:
             GPR_fit = plt.figure()
@@ -474,102 +612,65 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         return mean_prediction, [(mean_prediction - 1.96 * std_prediction), (mean_prediction + 1.96 * std_prediction)], optimized_kernel, lml_per_kernel
 
     def _get_gpr_obj(self, property):
+        """Helper method to get or create the GPRFitResults object for the specified property."""
         if property == "amplitude":
+            if self.gpr_amp is None:
+                self.gpr_amp = GPRFitResults(**self.result_kwargs_gpr(property="amplitude"))
             return self.gpr_amp
+        
         elif property == "phase":
+            if self.gpr_phase is None:
+                self.gpr_phase = GPRFitResults(**self.result_kwargs_gpr(property="phase"))
             return self.gpr_phase
+        
         else:
             raise ValueError(f"Unknown property: {property}")
         
         
 
-    def fit_to_training_set(self, property, min_greedy_error=None, N_basis_vecs=None, training_set=None, X_train=None, save_fits_to_file=True, plot_kernels=False, 
-                            plot_GPR_fits=False, save_fig_GPR_fits=False, save_fig_kernels=False, plot_residuals_ecc_evolve=False, save_fig_ecc_evolve=False, plot_residuals_time_evolve=False, save_fig_time_evolve=False, no_file_load=False):
-
-        # Create training set objects 
-        common_params = dict(
-            time_array=self.time,
-            e=self.ecc_ref_space_input,
-            q=self.mass_ratio_space_input,
-            chi1=self.chi1_space_input,
-            chi2=self.chi2_space_input,
-            fref=self.f_ref,
-            flow=self.f_lower,
-            phi=self.phiRef,
-            inc=self.inclination,
-            isco=self.truncate_at_ISCO,
-            tmin=self.truncate_at_tmin,
-        )
-
-        self.gpr_amp = GPRFitParameters(**common_params, property="amplitude", Nb=self.N_basis_vecs_amp, gerr=self.min_greedy_error_amp)
-        self.gpr_phase = GPRFitParameters(**common_params, property="phase", Nb=self.N_basis_vecs_phase, gerr=self.min_greedy_error_phase)
+    def fit_to_training_set(self, 
+                            property, 
+                            min_greedy_error=None, N_basis_vecs=None, 
+                            training_set=None, 
+                            X_train=None, 
+                            save_fits_to_file=True, 
+                            plot_kernels=False, save_fig_kernels=False,
+                            plot_GPR_fits=False, save_fig_GPR_fits=False, 
+                            plot_residuals_ecc_evolve=False, save_fig_ecc_evolve=False, 
+                            plot_residuals_time_evolve=False, save_fig_time_evolve=False, 
+                            no_file_load=False
+                            ):
 
         # training object for the chosen property (phase or amplitude)
         gpr_obj = self._get_gpr_obj(property)
-
+        train_obj = self._get_training_obj(property)
 
         # Resolve the number of basis vectors and minimum greedy error based on the training set object if not provided as arguments
         if N_basis_vecs is None and min_greedy_error is None:
-            N_basis_vecs = self.resolve_property(N_basis_vecs, gpr_obj.Nb)
-            min_greedy_error = self.resolve_property(min_greedy_error, gpr_obj.gerr)
+            N_basis_vecs = self.resolve_property(N_basis_vecs, gpr_obj.N_basis_vecs)
+            min_greedy_error = self.resolve_property(min_greedy_error, gpr_obj.min_greedy_error)
 
             if N_basis_vecs is None or min_greedy_error is None:
                 print('Choose either settings for the amount of basis_vecs OR the minimum greedy error.')
                 sys.exit(1)
 
-
-
         try:
-            start = time.time()
             if no_file_load is True:
                 raise FileNotFoundError
-            
-            filename = gpr_obj.filename(prefix="GPRfits", ext="npz", directory="Straindata_/GPRfits")
-            gpr_obj = gpr_obj.load(filepath=filename)
-
-            # filename = f'Straindata_/GPRfits/GPRfits_{self.training_set_selection}_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}_N={self.amount_input_wfs}]_No={self.amount_output_wfs}_g_err={min_greedy_error}_Ng_vecs={N_basis_vecs}_min_s={self.minimum_spacing_greedy}.npz'
-            # load_GPRfits = np.load(filename, allow_pickle=True)
-            # data = np.load(filename, allow_pickle=True)
-
-            # data = dict(np.load(filename, allow_pickle=True))
-
-            # # things that should become attributes
-            # self_keys = [
-            #     'empirical_nodes',
-            #     'residual_reduced_basis',
-            #     'time',
-            #     'amp_circ',
-            #     'phase_circ',
-            #     'best_rep_parameters_idx',
-            #     'best_rep_parameters'
-            # ]
-
-            # # rename keys if needed
-            # rename = {
-            #     'empirical_nodes': 'empirical_nodes_idx',
-            #     'GPR_fit': 'gaussian_fit'
-            # }
-
-            # # assign to self
-            # for key in self_keys:
-            #     attr = rename.get(key, key)
-            #     setattr(self, attr, data[key])
-
-            # # local variables (not self)
-            # gaussian_fit = data['GPR_fit']
-            # lml_fits = data['lml_fits']
-            # training_set = data['training_set']
-            # uncertainty_region = data['uncertainty_region'].tolist()
-            
-            # print(f'GPRfit {property} load succeeded: {time.time() - start:.4f}s, emp_nodes={gpr_obj.empirical_indices}, best_rep_params={gpr_obj.basis_indices}')
-            # data.close()
+          
+            gpr_obj = gpr_obj.load()
+            train_obj = train_obj.load()
 
         except Exception as e:
             print(f'line {getframeinfo(f).lineno}: {e}')
 
             if training_set is None:
-                # Generate the training set of greedy parameters at empirical nodes
-                train_obj = self.get_training_set_greedy(property=property, min_greedy_error=min_greedy_error, N_greedy_vecs=N_basis_vecs)
+                try:
+                    train_obj = train_obj.load()
+                except Exception as e:
+                    print(f'line {getframeinfo(f).lineno}: {e}')
+                    # Generate the training set of greedy parameters at empirical nodes
+                    train_obj = self.get_training_set_greedy(property=property, min_greedy_error=min_greedy_error, N_greedy_vecs=N_basis_vecs)
 
             # Create empty arrays to save fitvalues
             gpr_obj.mean_predictions = np.zeros((train_obj.training_set.shape[1], len(self.ecc_ref_space_output)))
@@ -580,9 +681,10 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
 
             start2 = time.time()
             optimized_kernel = None
+
             for node_i in range(len(train_obj.empirical_indices)):
                 
-                best_y_predict, confidence_95, optimized_kernel, best_lml = self._gaussian_process_regression_test(node_i, property, optimized_kernel, X_train, plot_kernels)
+                best_y_predict, confidence_95, optimized_kernel, best_lml = self._gaussian_process_regression_test(node_i, train_obj, optimized_kernel, X_train, plot_kernels)
 
                 gpr_obj.mean_predictions[node_i] = best_y_predict # Best prediction 
                 gpr_obj.confidence_95_preds[node_i] = confidence_95 # 95% confidence level
@@ -591,46 +693,50 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             end2 = time.time()
             print(f'time full GPR = {end2 - start2}')
 
+
         # If plot_fits is True, plot the GPR fits
-        if plot_GPR_fits is True:
-            self._plot_GPR_fits(property, gpr_obj.mean_predictions, training_set, gpr_obj.best_lmls, save_fig_fits=save_fig_GPR_fits)
+        if plot_GPR_fits:
+            self._plot_GPR_fits(train_obj=train_obj, gpr_obj=gpr_obj, gaussian_fit=None, training_set=None, lml_fits=None, save_fig_fits=save_fig_GPR_fits)
 
         # If save_fits_to_file is True, save the GPR fits to a file
-        if save_fits_to_file is True:
+        if save_fits_to_file:
             # Save the GPR fits to a file
-            self._save_GPR_fits_to_file(property, gpr_obj.mean_predictions, training_set, gpr_obj.best_lmls, gpr_obj.confidence_95_preds)
+            gpr_obj.save()
         
         # If plot_residuals_ecc_evolve or plot_residuals_time_evolve is True, plot the residuals
         if (plot_residuals_ecc_evolve is True) or (plot_residuals_time_evolve is True):
-            # Load residual input data
-            # load_parameterspace_input = train_obj.filename(prefix='residuals', directory='Straindata/Residuals')
-            load_parameterspace_input = np.load(f'Straindata/Residuals/residuals_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}_N={len(self.ecc_ref_space)}].npz')
-            residual_parameterspace_input = load_parameterspace_input['residual']
-            
-            # Close file
-            load_parameterspace_input.close()
             # Plot residuals
             self._plot_residuals(train_obj=train_obj, plot_eccentric_evolv=plot_residuals_ecc_evolve, save_fig_eccentric_evolve=save_fig_ecc_evolve, plot_time_evolve=plot_residuals_time_evolve, save_fig_time_evolve=save_fig_time_evolve)
 
         return gpr_obj
     
 
-    def fit_to_training_set_GPR_opt(self, property, N_basis_vecs=None, save_fits_to_file=True, plot_kernels=False, 
-                            plot_GPR_fits=False, save_fig_GPR_fits=False, save_fig_kernels=False, plot_residuals_ecc_evolve=False, save_fig_ecc_evolve=False, plot_residuals_time_evolve=False, save_fig_time_evolve=False,
-                            plot_greedy_vecs=False, save_fig_greedy_vecs=False, plot_greedy_error=False, save_fig_greedy_error=False, plot_emp_nodes_at_ecc=False, save_fig_emp_nodes=False, plot_training_set=False, save_fig_training_set=False):
-        save_fits_to_file_iter = False
+    def fit_to_training_set_GPR_opt(self, 
+                                    property, 
+                                    N_basis_vecs=None, 
+                                    save_fits_to_file=True, 
+                                    plot_kernels=False, save_fig_kernels=False,
+                                    plot_GPR_fits=False, save_fig_GPR_fits=False, 
+                                    plot_residuals_ecc_evolve=False, save_fig_ecc_evolve=False, 
+                                    plot_residuals_time_evolve=False, save_fig_time_evolve=False,
+                                    plot_greedy_vecs=False, save_fig_greedy_vecs=False, 
+                                    plot_greedy_error=False, save_fig_greedy_error=False, 
+                                    plot_emp_nodes_at_ecc=False, save_fig_emp_nodes=False, 
+                                    plot_training_set=False, save_fig_training_set=False,
+                                    save_fits_to_file_iter = False
+                                    ):
+        
 
         # Get first 3 points to produce a start for GPR
-        residual_training_set = self.get_training_set_greedy(property, N_greedy_vecs=3, emp_nodes_of_full_dataset=True, plot_greedy_error=plot_greedy_error, save_fig_greedy_error=save_fig_greedy_error, plot_emp_nodes_at_ecc=plot_emp_nodes_at_ecc, save_fig_emp_nodes=save_fig_emp_nodes, plot_training_set=plot_training_set, save_fig_training_set=save_fig_training_set, 
+        train_obj = self.get_training_set_greedy(property, N_greedy_vecs=3, emp_nodes_of_full_dataset=True, plot_greedy_error=plot_greedy_error, save_fig_greedy_error=save_fig_greedy_error, plot_emp_nodes_at_ecc=plot_emp_nodes_at_ecc, save_fig_emp_nodes=save_fig_emp_nodes, plot_training_set=plot_training_set, save_fig_training_set=save_fig_training_set, 
                         save_dataset_to_file=True, plot_greedy_vecs=plot_greedy_vecs, save_fig_greedy_vecs=save_fig_greedy_vecs)
 
-        train_obj = self._get_training_obj(property)
 
         while len(train_obj.basis_indices) <= N_basis_vecs:
 
             # Update the length of the basis for every iteration
 
-            train_obj.Nb = len(residual_training_set)
+            train_obj.Nb = len(train_obj.residual_basis)
 
 
             # Save fits only for last iteration 
@@ -638,7 +744,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                 save_fits_to_file_iter = save_fits_to_file
 
             # Fit the basis vecs with GPR and save fits file at last iteration
-            gaussian_fit, uncertainty_region = self.fit_to_training_set(property, N_basis_vecs=len(train_obj.basis_indices), training_set=residual_training_set, no_file_load=True, save_fits_to_file=save_fits_to_file_iter, plot_kernels=plot_kernels, plot_GPR_fits=plot_GPR_fits, save_fig_kernels=save_fig_kernels, save_fig_GPR_fits=save_fig_GPR_fits, plot_residuals_ecc_evolve=plot_residuals_ecc_evolve, save_fig_ecc_evolve=save_fig_ecc_evolve, plot_residuals_time_evolve=plot_residuals_time_evolve, save_fig_time_evolve=save_fig_time_evolve)
+            gpr_obj = self.fit_to_training_set(property, N_basis_vecs=len(train_obj.basis_indices), training_set=train_obj.residual_basis, no_file_load=True, save_fits_to_file=save_fits_to_file_iter, plot_kernels=plot_kernels, plot_GPR_fits=plot_GPR_fits, save_fig_kernels=save_fig_kernels, save_fig_GPR_fits=save_fig_GPR_fits, plot_residuals_ecc_evolve=plot_residuals_ecc_evolve, save_fig_ecc_evolve=save_fig_ecc_evolve, plot_residuals_time_evolve=plot_residuals_time_evolve, save_fig_time_evolve=save_fig_time_evolve)
 
             # Load in property residuals of full parameter space dataset
             try:
@@ -649,13 +755,14 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
 
             except Exception as e:
                 print(f'line {getframeinfo(f).lineno}: {e}')
-                residual_parameterspace_output = self.generate_property_dataset(ecc_list=self.ecc_ref_space_output, property=property, save_dataset_to_file=True)
+                train_obj_output = TrainingSetResults(**self.result_kwargs_training(property=property, ecc_ref_space=self.ecc_ref_space_output))
+                residual_parameterspace_output = self.generate_property_dataset(train_obj_output, save_dataset_to_file=True)
 
             # Calculate the relative errors of GPR fits vs property dataset
             combined_gaussian_error = np.zeros(len(self.ecc_ref_space_output))
-            for i in range(len(gaussian_fit)):
-                combined_gaussian_error += abs(residual_parameterspace_output[:, self.empirical_nodes_idx[i]] - gaussian_fit.T[:, i])
-            
+            for i in range(len(gpr_obj.mean_predictions)):
+                combined_gaussian_error += abs(residual_parameterspace_output[:, self.empirical_nodes_idx[i]] - gpr_obj.mean_predictions.T[:, i])
+
             # Add new training set point at the place of worst fit error
             worst_relative_GPR_error_idx = np.argmax(combined_gaussian_error)
 
@@ -670,84 +777,54 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             #Generate the training set at empirical nodes for next GPR iteration
             residual_training_set = self.residual_reduced_basis[:, self.empirical_nodes_idx]
 
-        print(f'Final GPR optimized parameters {property}, N_basis_vecs={N_basis_vecs}, emp_nodes={len(self.empirical_nodes_idx)}')
-        return gaussian_fit, uncertainty_region
+        return gpr_obj
 
-    def _save_GPR_fits_to_file(self, property, gaussian_fit, training_set, lml_fits, uncertainty_region):
-            gpr_obj = self._get_gpr_obj(property)
 
-            filename = gpr_obj.filename(prefix="GPRfits", ext="npz", directory="Straindata/GPRfits")
-            # filename = f'Straindata/GPRfits/GPRfits_{self.training_set_selection}_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}_N={self.amount_input_wfs}]_No={self.amount_output_wfs}_g_err={train_obj.gerr}_Ng_vecs={train_obj.Nb}_min_s={self.minimum_spacing_greedy}.npz'
-            gpr_obj.save(filepath=filename)
-
-            # if not os.path.isfile(filename):
-            #     # Ensure the directory exists, creating it if necessary and save
-            #     os.makedirs('Straindata/GPRfits', exist_ok=True)
-
-            if self.phase_circ is None or self.amp_circ is None:
-                self.circulair_wf()
-            # np.savez(filename, GPR_fit=gaussian_fit, empirical_nodes=self.empirical_nodes_idx, residual_reduced_basis=self.residual_reduced_basis, time=self.time, lml_fits=lml_fits, training_set=training_set, best_rep_parameters_idx=self.indices_basis, best_rep_parameters=self.best_rep_parameters, uncertainty_region=np.array(uncertainty_region, dtype=object), phase_circ=self.phase_circ, amp_circ=self.amp_circ)
-            # print('GPR fits saved in ', filename)
-        
-
-    def _plot_GPR_fits(self, property, gaussian_fit=None, training_set=None, lml_fits=None, save_fig_fits=False):
-        
-        gpr_obj = self._get_gpr_obj(property)
-        train_obj = self._get_training_obj(property)
+    def _plot_GPR_fits(self, train_obj:TrainingSetResults, gpr_obj:GPRFitResults, gaussian_fit=None, training_set=None, lml_fits=None, save_fig_fits=False):
 
         if gpr_obj.mean_predictions is None:
-            # Load the GPR fits from file if not provided
-            
-            
-            # if property == 'phase':
-            #     filename = f'Straindata/GPRfits/GPRfits_{self.training_set_selection}_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}_N={self.amount_input_wfs}]_No={self.amount_output_wfs}_g_err={self.min_greedy_error_phase}_Ng_vecs={train_obj.Nb}_min_s={self.minimum_spacing_greedy}.npz'
-            # else:
-            #     filename = f'Straindata/GPRfits/GPRfits_{self.training_set_selection}_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}_N={self.amount_input_wfs}]_No={self.amount_output_wfs}_g_err={self.min_greedy_error_amp}_Ng_vecs={train_obj.Nb}_min_s={self.minimum_spacing_greedy}.npz'
-            
-            filename = gpr_obj.filename(prefix="GPRfits", ext="npz", directory="Straindata/GPRfits")
-
             try:
-                # load_GPR_fits = np.load(filename)
-                gpr_obj = gpr_obj.load(cls=type(gpr_obj), filepath=filename)
-                # gpr_obj.mean_predictions = load_GPR_fits['GPR_fit']
-                # training_set = load_GPR_fits['training_set']
-                # lml_fits = load_GPR_fits['lml_fits']
-                # self.empirical_nodes_idx = load_GPR_fits['empirical_nodes']
-                # self.indices_basis = load_GPR_fits['best_rep_parameters_idx']
-                # self.best_rep_parameters = load_GPR_fits['best_rep_parameters']
+                gpr_obj = gpr_obj.load()
+            except Exception as e:
+                print(f'line {getframeinfo(f).lineno}: {e}. \n Make sure to run fit_to_training_set() before plotting')
 
-                # gpr_obj.load(filepath=filename)
-                # load_GPR_fits.close()
+        if train_obj.training_set is None:
+            try:
+                train_obj = train_obj.load()
             except Exception as e:
                 print(f'line {getframeinfo(f).lineno}: {e}. \n Make sure to run fit_to_training_set before plotting')
 
-        try:
-            # filename = gpr_obj.filename(prefix="residuals", directory="Straindata/Residuals")
-            # train_obj = gpr_obj.load(cls=type(train_obj), filepath=filename)
-            filename = train_obj.filename(prefix="residuals", directory="Straindata/Residuals")
-            train_obj = train_obj.load(cls=type(train_obj), filepath=filename)
-            # filename = f'Straindata/Residuals/residuals_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_space_output)}_{max(self.ecc_ref_space_output)}_N={len(self.ecc_ref_space_output)}].npz'
-            # load_residual_output = np.load(filename)
-            residual_parameterspace_output = train_obj.residuals
-            # self.time = load_residual_output['time']
+        train_output_param_space = TrainingSetResults(**self.result_kwargs_training(property=train_obj.property, ecc_ref_space=self.ecc_ref_space_output))
+        train_output_param_space = self.generate_property_dataset(train_obj=train_output_param_space, save_residuals=True, save_polarizations=True)
 
-        except Exception as e:
-            print(f'line {getframeinfo(f).lineno}: {e}. \n Make sure to run fit_to_training_set before plotting')
-            residual_parameterspace_output = self.generate_property_dataset(ecc_ref_list=self.ecc_ref_space_output, property=property, save_dataset_to_file=True)
+        best_rep_parameters = train_obj.ecc_ref_space[train_obj.basis_indices]
 
+        fig_residual_training_fit, axs = plt.subplots(
+            3, 1,
+            figsize=(11, 6),
+            gridspec_kw={"height_ratios": [3, 1, 1], "hspace": 0.2}
+        )
 
-        fig_residual_training_fit, axs = plt.subplots(3, 1, figsize=(11,6), gridspec_kw={'height_ratios': [3, 1, 1], 'hspace': 0.1}, sharex=True)
+        axs[1].sharex(axs[0])
 
-        # Create a colormap from Viridis
-        color_palette = sns.color_palette("tab10", as_cmap=True)
-        # Number of distinct colors needed
-        num_colors = len(gpr_obj.mean_predictions)  # Replace with the actual number of datasets (e.g., len(gaussian_fit))
-        # Evenly sample the colormap
-        colors = [color_palette(i / (num_colors - 1)) for i in range(num_colors)]
+        # Increase only the gap between axs[1] and axs[2]
+        pos = axs[2].get_position()
+        axs[2].set_position([
+            pos.x0,
+            pos.y0 - 0.04,   # move down; tune this
+            pos.width,
+            pos.height
+        ])
+        # # Create a colormap from Viridis
+        # color_palette = sns.color_palette("tab10", as_cmap=True)
+        # # Number of distinct colors needed
+        # num_colors = len(gpr_obj.mean_predictions)  # Replace with the actual number of datasets (e.g., len(gaussian_fit))
+        # # Evenly sample the colormap
+        # colors = [color_palette(i / (num_colors - 1)) for i in range(num_colors)]
 
-        # Define custom legend elements
+        # Define custom legend elements for training points and true phase/amplitude
         custom_legend_elements = [
-            Line2D([0], [0], linestyle='dashed', color='black', linewidth=1, label=f'true {property}'),
+            Line2D([0], [0], linestyle='dashed', color='black', linewidth=1, label=f'true {train_obj.property}'),
             Line2D([0], [0], marker='o', linestyle='None', color='black', label='training Points')
         ]
 
@@ -756,89 +833,83 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         dynamic_labels = []
 
         # Sort gaussian fits by worst likelihood 
-        lml_array = np.array(lml_fits).flatten()
+        lml_array = np.array(gpr_obj.best_lmls).flatten()
         sorted_lml_fits = np.argsort(lml_array)[::-1] # Highest to lowest
 
         # Plotting data
         combined_rel_error = np.zeros(len(self.ecc_ref_space_output))
-
         # Plot 10 worst fits based on highest log-marginal likelihood
-
-        for i in sorted_lml_fits[:5]:
-            # Plot Gaussian fit
-            # line_fit, = axs[0].plot(self.ecc_ref_space_output, gaussian_fit.T[:, i], linewidth=0.6, 
-            #                         label=f't={int(self.time[self.empirical_nodes_idx[i]])}')
+        for i in sorted_lml_fits[:10]:
+            ##################################################
+            # GPR Fit
+            ##################################################
+            # Plot mean predictions of GPR fit at empirical nodes
             line_fit, = axs[0].plot(self.ecc_ref_space_output, gpr_obj.mean_predictions.T[:, i], linewidth=0.6)
-            # Scatter plot for training points
-            axs[0].scatter(self.best_rep_parameters, training_set[:, i], s=6)
             
-            # Plot residuals (true property)
-            # axs[0].plot(self.ecc_ref_space_output, residual_parameterspace_output[:, self.empirical_nodes_idx[i]], 
-            #             linestyle='dashed', linewidth=0.6, label=f'{i}, {self.empirical_nodes_idx[i]}')
-            axs[0].plot(self.ecc_ref_space_output, residual_parameterspace_output[:, self.empirical_nodes_idx[i]], 
+            # Scatter plot for training points
+            axs[0].scatter(best_rep_parameters, train_obj.training_set[:, i], s=6)
+
+            # Plot residuals (true phase/amplitude at empirical nodes)
+            axs[0].plot(self.ecc_ref_space_output, train_output_param_space.residuals[:, train_obj.empirical_indices[i]], 
                         linestyle='dashed', linewidth=0.6)
             
+
             # Collect handles and labels for the dynamic fits
             dynamic_handles.append(line_fit)
-            dynamic_labels.append(f't={int(self.time[self.empirical_nodes_idx[i]])} [M]')
-            
-            # Relative error plot
-            # axs[1].plot(self.ecc_ref_space_output, 
-            #             abs(residual_parameterspace_output[:, self.empirical_nodes_idx[i]] - gaussian_fit.T[:, i]), 
-            #             linewidth=0.6, 
-            #             label=f'Error {i+1} (t={int(self.time[self.empirical_nodes_idx[i]])})')
-            relative_error = abs(residual_parameterspace_output[:, self.empirical_nodes_idx[i]] - gpr_obj.mean_predictions.T[:, i])
+            dynamic_labels.append(f't={int(self.time[train_obj.empirical_indices[i]])} [M]')
+
+            ###################################################
+            # Relative error
+            ###################################################
+            # Plot relative error of GPR fit vs true property at empirical nodes
+            relative_error = abs(train_output_param_space.residuals[:, train_obj.empirical_indices[i]] - gpr_obj.mean_predictions.T[:, i])
             combined_rel_error += relative_error
+
             axs[1].plot(self.ecc_ref_space_output, 
                         relative_error, 
                         linewidth=0.6)
             
-            axs[2].scatter(self.best_rep_parameters, np.zeros(len(self.best_rep_parameters)), s=3)
+            ################################################
+            # Empirical nodes
+            ################################################
+            axs[2].scatter(self.time[train_obj.empirical_indices], np.zeros(len(train_obj.empirical_indices)), s=3, label='Empirical nodes')
 
         # Combine custom and dynamic legend elements
         combined_handles = custom_legend_elements + dynamic_handles
         combined_labels = [handle.get_label() for handle in custom_legend_elements] + dynamic_labels
 
         # Add the combined legend to the top-left subplot
-        # axs[0].legend(combined_handles, combined_labels, ncol=2)
-        print('combined relative error = ', np.sum(combined_rel_error))
+        axs[0].legend(combined_handles, combined_labels, ncol=2)
+
         # Set labels and titles
-        if property == 'phase':
+        if train_obj.property == 'phase':
             axs[0].set_ylabel('$\Delta \phi$')
             # axs[0].set_title(f'GPRfit $\phi$; greedy error = {min_greedy_error},N={len(self.indices_basis)}')
-        elif property == 'amplitude':
+        else:
             axs[0].set_ylabel('$\Delta$ A')
             # axs[0].set_title(f'GPRfit A; greedy error = {min_greedy_error}, N={len(self.indices_basis)}')
         axs[0].grid()
 
         axs[1].set_xlabel('eccentricity')
-        if property == 'phase':
+        if train_obj.property == 'phase':
             axs[1].set_ylabel('|$\Delta \phi_{S} - \Delta \phi|$')
         else:
             axs[1].set_ylabel('|$\Delta A_{S} - \Delta A|$')
         axs[1].grid()
 
+        axs[2].set_xlabel('time [M]')
+
+        plt.setp(axs[0].get_xticklabels(), visible=False)
         plt.tight_layout()
 
+        # Save the figure if requested
         if save_fig_fits is True:
-            if property == 'phase':
-                # figname = gpr_obj.figname(prefix="GPR_fits", ext="png", directory="Images/Gaussian_fits")
-                figname = f'Images/Gaussian_fits/GPR_fits_new_{self.training_set_selection}_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}_Ni={len(self.ecc_ref_space)}]_No={len(self.ecc_ref_space_output)}_g_err={self.min_greedy_error_phase}_Ng_vecs={self.N_basis_vecs_phase}_min_s={self.minimum_spacing_greedy}.png'
-            else:
-                figname = f'Images/Gaussian_fits/GPR_fits_new_{self.training_set_selection}_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}_Ni={len(self.ecc_ref_space)}]_No={len(self.ecc_ref_space_output)}_g_err={self.min_greedy_error_amp}_Ng_vecs={self.N_basis_vecs_amp}_min_s={self.minimum_spacing_greedy}.png'
-
-            # Ensure the directory exists, creating it if necessary and save
-            os.makedirs('Images/Gaussian_fits', exist_ok=True)
+            figname = gpr_obj.figname(prefix="GPR_fits", ext="png", directory="Images/Gaussian_fits")
             fig_residual_training_fit.savefig(figname)
-
-            print(self.colored_text(f'Figure is saved in {figname}', 'blue'))
-
-        plt.close(fig_residual_training_fit)
 
     
 
-    def compute_B_matrix(self, property, save_matrix_to_file=True):
-
+    def compute_B_matrix(self, train_obj:TrainingSetResults, save_matrix_to_file=True):
         """
         Computes the B matrix for all empirical nodes and basis functions.
         
@@ -848,22 +919,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         Returns:
         B_matrix: Array of shape (m, time_samples) where each row represents B_j(t) for j=1,2,...,m
         """
-        if property == 'phase':
-            min_greedy_error = self.min_greedy_error_phase
-            N_basis_vecs=self.N_basis_vecs_phase
-        elif property == 'amplitude':
-            min_greedy_error = self.min_greedy_error_amp
-            N_basis_vecs=self.N_basis_vecs_amp
-
-        filename = (
-            f'Straindata/B_matrix/B_matrix_{self.training_set_selection}_{property}_'
-            f'f_lower={self.f_lower}_f_ref={self.f_ref}_'
-            f'e=[{self.ecc_ref_parameterspace_range[0]}_{self.ecc_ref_parameterspace_range[1]}_N={self.amount_input_wfs}]_'
-            f'No={self.amount_output_wfs}_'
-            f'g_err={min_greedy_error}_'
-            f'Ng_vecs={N_basis_vecs}_'
-            f'min_s={self.minimum_spacing_greedy}.npz'
-        )
+        filename = train_obj.filename(prefix='B_matrix', directory='Straindata/B_matrix')
 
         try:
             load_B_matrix = np.load(filename)
@@ -874,16 +930,15 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
 
         except Exception as e:
             print(f'line {getframeinfo(f).lineno}: {e}')
-            print(self.residual_reduced_basis.shape, len(self.empirical_nodes_idx))
-
-            m, time_samples = self.residual_reduced_basis.shape
-            B_matrix = np.zeros((m, time_samples))
+            
+            m, time_length = train_obj.residual_basis.shape
+            B_matrix = np.zeros((m, time_length))
 
             V = np.zeros((m, m))
             for j in range(m):
                 for i in range(m):
                     # print(i, j)
-                    V[j][i] = self.residual_reduced_basis[i][self.empirical_nodes_idx[j]]
+                    V[j][i] = train_obj.residual_basis[i][train_obj.empirical_indices[j]]
 
             V_inv = np.linalg.pinv(V)
 
@@ -892,15 +947,15 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             for j in range(m):
                 # Compute B_j(t) as a linear combination of all e_i(t) with weights from V_inv[:, j]
                 for i in range(m):
-                    B_matrix[j] += self.residual_reduced_basis[i] * V_inv[i, j]
+                    B_matrix[j] += train_obj.residual_basis[i] * V_inv[i, j]
             
         
-            if save_matrix_to_file is True and not os.path.isfile(filename):
+            if save_matrix_to_file:
 
                 # Ensure the directory exists, creating it if necessary and save
-                os.makedirs('Straindata/B_matrix', exist_ok=True)
+                # os.makedirs('Straindata/B_matrix', exist_ok=True)
                 np.savez(filename, B_matrix=B_matrix)
-                print('B_matrix fits saved in Straindata/B_matrix/' + filename)
+                # print('B_matrix fits saved in Straindata/B_matrix/' + filename)
 
         return B_matrix
     
@@ -911,17 +966,35 @@ time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # ti
 
 gt = Generate_Offline_Surrogate(time_array=time_array, 
                                 ecc_ref_range=[0.0, 0.1], 
+                                mean_ano_ref_range=[0, 0],
+                                mass_ratio_range=[1, 1],
+                                chi1_range=[0, 0],
+                                chi2_range=[0, 0],
                                 amount_input_wfs=100, 
                                 amount_output_wfs=500, 
                                 min_greedy_error_amp=1e-8,
                                 min_greedy_error_phase=1e-6,
                                 minimum_spacing_greedy=0.003, 
                                 training_set_selection='greedy')
+train_obj_p = gt._get_training_obj('phase')
+# gt.generate_property_dataset(train_obj=train_obj_p, 
+#                              plot_residuals_eccentric_evolv=True,
+#                              plot_residuals_time_evolv=True
+#                              )
+# gt.get_training_set_greedy(property='phase', 
+#                            min_greedy_error=1e-8, 
+#                            plot_greedy_error=True,
+#                            plot_emp_nodes_at_ecc=True, 
+#                            plot_training_set=True,
+#                            plot_greedy_vecs=True,
+#                            plot_emp_nodes_on_basis=True)
 
-for vecs in [20]:
-    # gt.generate_property_dataset(np.linspace(0.0, 0.3, 500).round(4), property='phase', plot_residuals_eccentric_evolv=True, save_fig_time_evolve=True, plot_residuals_time_evolv=True, save_fig_eccentric_evolv=True)
-    gt.fit_to_training_set('phase', min_greedy_error=1e-8, save_fits_to_file=True, plot_GPR_fits=True, save_fig_GPR_fits=True, plot_residuals_ecc_evolve=True, save_fig_ecc_evolve=True, plot_residuals_time_evolve=True, save_fig_time_evolve=True)
+gt.fit_to_training_set('amplitude', min_greedy_error=1e-8, save_fits_to_file=True, 
+                           plot_GPR_fits=True, save_fig_GPR_fits=True, 
+                        #    plot_residuals_ecc_evolve=True, save_fig_ecc_evolve=True, 
+                        #    plot_residuals_time_evolve=True, save_fig_time_evolve=True,
+                           )
     # gt.fit_to_training_set('amplitude', min_greedy_error=1e-6, save_fits_to_file=True, plot_GPR_fits=True, save_fig_GPR_fits=True, plot_residuals_ecc_evolve=True, save_fig_ecc_evolve=True, plot_residuals_time_evolve=True, save_fig_time_evolve=True)
 
-# plt.show()
+plt.show()
 # gt.fit_to_training_set('amplitude', N_basis_vecs=21, save_fits_to_file=True)
