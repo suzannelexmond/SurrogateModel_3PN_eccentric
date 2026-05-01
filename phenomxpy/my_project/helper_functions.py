@@ -1,6 +1,8 @@
 
 import sys
+import time
 import numpy as np
+import matplotlib.pyplot as plt
 
 class Warnings:
     def __init__(self):
@@ -103,6 +105,64 @@ class Warnings:
         self.chispin_warned = True
         return clipped
     
+    def _greedy_parameters_warning(self, dataset, parameter_grid, time_array):
+        """Helper function to check for numerical issues in the greedy algorithm."""
+        # Check for numerical issues before running the greedy algorithm
+        residuals_flat = dataset.reshape(-1, len(time_array))
+        
+        U = residuals_flat
+        params = parameter_grid
+
+        finite_rows = np.all(np.isfinite(U), axis=1)
+        norms = np.linalg.norm(U, axis=1)
+        near_zero_rows = norms < 1e-14
+
+        bad_mask = (~finite_rows) | near_zero_rows
+        bad_indices = np.where(bad_mask)[0]
+
+        
+
+        if bad_indices.size > 0:
+            fig_bad_indices = plt.figure(figsize=(10, 6))
+            
+            for idx in bad_indices:
+                plt.plot(time_array, dataset[idx], label=f"Bad idx {idx}")
+
+            plt.xlabel("Time")
+            plt.ylabel("Residual")
+            plt.title("Problematic Rows Detected")
+            plt.legend()
+            plt.show()
+
+        if len(bad_indices) > 0:
+            print(f"Warning: {len(bad_indices)} problematic rows detected before greedy.")
+            print(f"U shape: {U.shape}")
+            print(f"parameter_grid shape: {params.shape}")
+            print(f"finite rows: {finite_rows.sum()} / {len(finite_rows)}")
+            print(f"non-finite rows: {np.sum(~finite_rows)}")
+            print(f"near-zero rows: {np.sum(near_zero_rows)}")
+            print(f"norm min/max: {np.nanmin(norms)} / {np.nanmax(norms)}")
+
+            print("bad indices:", bad_indices[:20])
+            print("bad params:")
+            print(params[bad_indices[:20]])
+
+            non_finite_indices = np.where(~finite_rows)[0]
+
+            for idx in non_finite_indices[:20]:
+                row = U[idx]
+                bad_time_indices = np.where(~np.isfinite(row))[0]
+
+                print(f"\nbad idx: {idx}")
+                print(f"params: {params[idx]}")
+                print(f"nan count: {np.isnan(row).sum()}")
+                print(f"inf count: {np.isinf(row).sum()}")
+
+                if len(bad_time_indices) > 0:
+                    first_bad_time_idx = bad_time_indices[0]
+                    print(f"first bad time index: {first_bad_time_idx}")
+                    print(f"bad time: {time_array[first_bad_time_idx]}")
+
 
     
     
