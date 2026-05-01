@@ -23,6 +23,8 @@ from scipy.stats import skew, kurtosis, normaltest, norm
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from mpl_toolkits.mplot3d import Axes3D
+
 
 @dataclass
 class TrainingSetResults(Warnings):
@@ -58,6 +60,7 @@ class TrainingSetResults(Warnings):
     mass_ratio_space: Any = None
     chi1_space: Any = None
     chi2_space: Any = None
+    parameter_grid: Any = None
     time: Any = None
 
     N_basis_vecs: Optional[int] = None
@@ -86,6 +89,7 @@ class TrainingSetResults(Warnings):
         self.mass_ratio_space = np.round(np.asarray(self.mass_ratio_space, dtype=float), 4)
         self.chi1_space = np.round(np.asarray(self.chi1_space, dtype=float), 4)
         self.chi2_space = np.round(np.asarray(self.chi2_space, dtype=float), 4)
+        self.parameter_grid = np.round(self.parameter_grid, 4)
 
     def update_results(self, **kwargs):
         for key, value in kwargs.items():
@@ -102,7 +106,7 @@ class TrainingSetResults(Warnings):
     def _scalar_block(name, value):
         return f"{name}={value:g}"
 
-    def name_blocks(self):
+    def name_blocks(self, include_greedy=True):
         blocks = [
             self.property,
             self._range_block("e", self.ecc_ref_space),
@@ -119,10 +123,11 @@ class TrainingSetResults(Warnings):
         if self.inclination != 0:
             blocks.append(self._scalar_block("incl", self.inclination))
 
-        if self.N_basis_vecs is not None:
-            blocks.append(f"Nb={self.N_basis_vecs}")
-        if self.min_greedy_error is not None:
-            blocks.append(f"gerr={self.min_greedy_error}")
+        if include_greedy:
+            if self.N_basis_vecs is not None:
+                blocks.append(f"Nb={self.N_basis_vecs}")
+            if self.min_greedy_error is not None:
+                blocks.append(f"gerr={self.min_greedy_error}")
 
 
         if not self.truncate_at_ISCO:
@@ -136,8 +141,8 @@ class TrainingSetResults(Warnings):
         return blocks
     
 
-    def filename(self, prefix="data", ext="npz", directory=None):
-        name = f"{prefix}_{'_'.join(self.name_blocks())}.{ext}"
+    def filename(self, prefix="data", ext="npz", directory=None, include_greedy=True):
+        name = f"{prefix}_{'_'.join(self.name_blocks(include_greedy=include_greedy))}.{ext}"
         if directory is not None:
             return f"{directory.rstrip('/')}/{name}"
         return name
@@ -156,9 +161,8 @@ class TrainingSetResults(Warnings):
         """Function to save the residual dataset to npz file."""
         
         os.makedirs(directory, exist_ok=True)
+        filepath = self.filename(prefix=prefix, ext="npz", directory=directory, include_greedy=False)
 
-        filepath = self.filename(prefix=prefix, ext="npz", directory=directory)
-        print("inside residuals:", self.residuals)
         if self.residuals is None:
             raise ValueError("Residuals are not calculated yet. Run generate_property_dataset() first.")
         else:
@@ -181,7 +185,7 @@ class TrainingSetResults(Warnings):
     def load_residuals(self, prefix="residuals", directory="Straindata/Residuals"):
         """Function to load the residual dataset from npz file."""
         
-        filepath = self.filename(prefix=prefix, ext="npz", directory=directory)
+        filepath = self.filename(prefix=prefix, ext="npz", directory=directory, include_greedy=False)
         data = np.load(filepath, allow_pickle=True)
 
         self.residuals = data['residuals']
@@ -198,7 +202,7 @@ class TrainingSetResults(Warnings):
         """Function to save the polarisation datasets to npz files."""
 
         os.makedirs(directory, exist_ok=True)
-        filepath = self.filename(prefix=prefix, ext="npz", directory=directory)
+        filepath = self.filename(prefix=prefix, ext="npz", directory=directory, include_greedy=False)
 
         if self.hp_dataset is None or self.hc_dataset is None:
             raise ValueError("Polarisation datasets are not provided. First run _generate_polarisation_data() to generate and save the polarisation datasets.")
@@ -223,7 +227,7 @@ class TrainingSetResults(Warnings):
     
     def load_polarizations(self, prefix="polarisation", directory="Straindata/Polarisations"):
         """Function to load the polarisation datasets from npz files."""
-        filepath = self.filename(prefix=prefix, ext="npz", directory=directory)
+        filepath = self.filename(prefix=prefix, ext="npz", directory=directory, include_greedy=False)
         data = np.load(filepath, allow_pickle=True)
 
         self.hp_dataset = data['hp']
@@ -356,6 +360,24 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         self.chi1_space = self.allowed_chispin_warning(chi1_parameterspace)
         self.chi2_space = self.allowed_chispin_warning(chi2_parameterspace)
 
+        # Build full parameter grid
+        E, L, Q, C1, C2 = np.meshgrid(
+            self.ecc_ref_space,
+            self.mean_ano_ref_space,
+            self.mass_ratio_space,
+            self.chi1_space,
+            self.chi2_space,
+            indexing="ij"
+        )
+
+        self.parameter_grid = np.column_stack([
+            E.ravel(),
+            L.ravel(),
+            Q.ravel(),
+            C1.ravel(),
+            C2.ravel()
+        ])
+
         self.minimum_spacing_greedy = minimum_spacing_greedy
 
         self.min_greedy_error_amp = min_greedy_error_amp
@@ -411,26 +433,50 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                                truncate_at_ISCO=None,
                                truncate_at_tmin=None):
         """Helper function to resolve the parameters for the TrainingSetResults object based on the provided arguments or default class attributes."""
-
         # Resolve the parameter spaces and other parameters, using the provided arguments or default class attributes
+
+        # Time domain for the waveforms
+        time = self.resolve_property(prop=time, default=self.time)
+
+        # Initial parameters of the binary BBH system
         ecc_ref_space = self.resolve_property(prop=ecc_ref_space, default=self.ecc_ref_space)
         mean_ano_ref_space = self.resolve_property(prop=mean_ano_ref_space, default=self.mean_ano_ref_space)
         mass_ratio_space = self.resolve_property(prop=mass_ratio_space, default=self.mass_ratio_space)
         chi1_space = self.resolve_property(prop=chi1_space, default=self.chi1_space)
-        chi2_space = self.resolve_property(prop=chi2_space, default=self.chi2_space)    
-        time = self.resolve_property(prop=time, default=self.time)
+        chi2_space = self.resolve_property(prop=chi2_space, default=self.chi2_space)
+
+        # Build full parameter grid
+        E, L, Q, C1, C2 = np.meshgrid(
+            ecc_ref_space,
+            self.mean_ano_ref_space,
+            mass_ratio_space,
+            chi1_space,
+            chi2_space,
+            indexing="ij"
+        )
+
+        parameter_grid = np.column_stack([
+            E.ravel(),
+            L.ravel(),
+            Q.ravel(),
+            C1.ravel(),
+            C2.ravel()
+        ])
+ 
         f_ref = self.resolve_property(prop=f_ref, default=self.f_ref)
         f_lower = self.resolve_property(prop=f_lower, default=self.f_lower)
         phiRef = self.resolve_property(prop=phiRef, default=self.phiRef)
         inclination = self.resolve_property(prop=inclination, default=self.inclination)
+
+        # Waveform truncation settings
         truncate_at_ISCO = self.resolve_property(prop=truncate_at_ISCO, default=self.truncate_at_ISCO)
         truncate_at_tmin = self.resolve_property(prop=truncate_at_tmin, default=self.truncate_at_tmin)
 
+        # Greedy algorithm stopping criteria
         N_basis_vecs_phase = self.resolve_property(prop=N_basis_vecs_phase, default=self.N_basis_vecs_phase)
         N_basis_vecs_amp = self.resolve_property(prop=N_basis_vecs_amp, default=self.N_basis_vecs_amp)
         min_greedy_error_phase = self.resolve_property(prop=min_greedy_error_phase, default=self.min_greedy_error_phase)
         min_greedy_error_amp = self.resolve_property(prop=min_greedy_error_amp, default=self.min_greedy_error_amp)
-
 
         if property == "phase":
             N_basis_vecs = N_basis_vecs_phase
@@ -448,6 +494,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
             mass_ratio_space=mass_ratio_space,
             chi1_space=chi1_space,
             chi2_space=chi2_space,
+            parameter_grid=parameter_grid,
             time=time,
             N_basis_vecs=N_basis_vecs,
             min_greedy_error=min_greedy_error,
@@ -467,6 +514,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                                   chi2_list=None, 
                                   save_residuals=True, 
                                   save_polarizations=True,
+                                  plot_polarizations=False, save_fig_polarizations=False,
                                   plot_residuals_time_evolv=False, save_fig_time_evolve=False,
                                   plot_residuals_eccentric_evolv=False, save_fig_eccentric_evolv=False,  
                                   show_legend=False
@@ -514,82 +562,243 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         except Exception as e:
             print(e)
 
-            # If attempt to load residuals failed, generate polarisations and calculate residuals
-            hp_dataset, hc_dataset = self._generate_polarisation_data(train_obj=train_obj, save_polarizations=save_polarizations)
+            # # If attempt to load residuals failed, generate polarisations and calculate residuals
+            # hp_dataset, hc_dataset = self._generate_polarisation_data(train_obj=train_obj, save_polarizations=save_polarizations)
 
             self._calculate_residuals(train_obj=train_obj, 
                                       save_residuals=save_residuals, 
+                                      save_polarizations=save_polarizations,
+                                      plot_polarizations=plot_polarizations, save_fig_polarizations=save_fig_polarizations,
                                       plot_residuals_eccentric_evolv=plot_residuals_eccentric_evolv, 
                                       plot_residuals_time_evolv=plot_residuals_time_evolv, 
                                       save_fig_eccentric_evolv=save_fig_eccentric_evolv, 
                                       save_fig_time_evolve=save_fig_time_evolve, 
                                       show_legend=show_legend)
             
-            del hp_dataset, hc_dataset  # Free memory
+            # del hp_dataset, hc_dataset  # Free memory
 
         return train_obj
-    
-    def _generate_polarisation_data(self, 
-                                    train_obj:TrainingSetResults, 
-                                    truncate_at_ISCO=None, 
-                                    truncate_at_tmin=None,
-                                    save_polarizations=True
-                                    ):
-        """
-        Helper function to generate polarisation data for a list of eccentricities.
 
-        Parameters:
-        ----------
-        ecc_list : list of floats
-            List of minimum eccentricities.
+    # def _generate_polarisation_data(self,
+    #                                 train_obj: TrainingSetResults,
+    #                                 truncate_at_ISCO=None,
+    #                                 truncate_at_tmin=None,
+    #                                 plot_polarisations=False,
+    #                                 save_polarizations=True
+    #                                 ):
+    #     """Helper function to generate polarisation data for a list of parameters: eccentricities, mass ratios and spins. 
+    #     The generated waveforms are truncated to the shortest waveform in the dataset, which is determined by the highest eccentricity and mass ratio and lowest spins. 
+    #     This ensures that all waveforms have the same length and can be used for the greedy algorithm and empirical interpolation. 
+    #     If the polarisation datasets already exist, they are loaded from file instead of being generated again."""
+        
+    #     truncate_at_ISCO = self.resolve_property(prop=truncate_at_ISCO, default=self.truncate_at_ISCO)
+    #     truncate_at_tmin = self.resolve_property(prop=truncate_at_tmin, default=self.truncate_at_tmin)
 
-        Returns:
-        -------
-        hp_dataset : ndarray
-            Plus polarisation data.
-        hc_dataset : ndarray
-            Cross polarisation data.
+    #     try:
+    #         train_obj = train_obj.load_polarizations()
+    #         self.time = train_obj.time
 
-        """
+    #     except Exception as e:
+    #         print(e)
 
-        truncate_at_ISCO = self.resolve_property(prop=truncate_at_ISCO, default=self.truncate_at_ISCO)
-        truncate_at_tmin = self.resolve_property(prop=truncate_at_tmin, default=self.truncate_at_tmin)
-    
-        try:
-            train_obj = train_obj.load_polarizations()
-            self.time = train_obj.time
+    #         # Choose shortest expected waveform corner
+    #         ecc_short = np.max(train_obj.ecc_ref_space)
+    #         l_short = np.min(train_obj.mean_ano_ref_space)
+    #         q_short = np.max(train_obj.mass_ratio_space)
+    #         chi1_short = np.min(train_obj.chi1_space)
+    #         chi2_short = np.min(train_obj.chi2_space)
 
-        except:
-            # Get waveform size for truncated ISCO waveform of smallest waveform
-            sorted_ecc_list = np.sort(train_obj.ecc_ref_space)
+    #         # Generate shortest waveform first.
+    #         # update_results=True updates self.time.
+    #         hp_short, hc_short, time_short = self.simulate_waveform(
+    #             ecc_ref=ecc_short,
+    #             mean_ano_ref=l_short,
+    #             mass_ratio=q_short,
+    #             chi1=chi1_short,
+    #             chi2=chi2_short,
+    #             truncate_at_ISCO=truncate_at_ISCO,
+    #             truncate_at_tmin=truncate_at_tmin,
+    #             update_results=True,
+    #         )
 
-            ISCO_ecc = sorted_ecc_list[-1] # Highest eccentricity in the list --> earliest ISCO cut-off
-            # update_results=True will update the instance time domain array which is afterwards used on all later generated waveforms.
-            hp_ISCO, hc_ISCO, _ = self.simulate_waveform(ecc_ref=ISCO_ecc, mass_ratio=1, chi1=0, chi2=0, truncate_at_ISCO=truncate_at_ISCO, truncate_at_tmin=truncate_at_tmin, update_results=True)
+    #         print(f"Shortest waveform generated for parameters: ecc={ecc_short}, q={q_short}, chi1={chi1_short}, chi2={chi2_short}. Waveform length: {len(train_obj.time), train_obj.time[0]} samples.")
+    #         n_e = len(train_obj.ecc_ref_space)
+    #         n_l = len(train_obj.mean_ano_ref_space)
+    #         n_q = len(train_obj.mass_ratio_space)
+    #         n_c1 = len(train_obj.chi1_space)
+    #         n_c2 = len(train_obj.chi2_space)
+    #         n_t = len(self.time) # Use updated time array from the shortest waveform
 
-            train_obj.hp_dataset = np.zeros((len(train_obj.ecc_ref_space), len(self.time))) 
-            train_obj.hc_dataset = np.zeros((len(train_obj.ecc_ref_space), len(self.time)))
+    #         hp_flat = np.zeros((len(train_obj.parameter_grid), n_t))
+    #         hc_flat = np.zeros((len(train_obj.parameter_grid), n_t))
 
-            for i, ecc in enumerate(train_obj.ecc_ref_space):
-                if ecc == ISCO_ecc:
-                    # Store first waveform in dataset
-                    train_obj.hp_dataset[i] = hp_ISCO
-                    train_obj.hc_dataset[i] = hc_ISCO
-                else:
-                    # No need to truncate again, since the time array is already truncated to the earliest ISCO cut-off
-                    train_obj.hp_dataset[i], train_obj.hc_dataset[i], train_obj.time = self.simulate_waveform(ecc_ref=ecc, truncate_at_ISCO=False, truncate_at_tmin=False, update_results=False) 
+    #         # Find the flat index of the shortest waveform point
+    #         short_mask = (
+    #             (train_obj.parameter_grid[:, 0] == ecc_short) &
+    #             (train_obj.parameter_grid[:, 1] == l_short) &
+    #             (train_obj.parameter_grid[:, 2] == q_short) &
+    #             (train_obj.parameter_grid[:, 3] == chi1_short) &
+    #             (train_obj.parameter_grid[:, 4] == chi2_short)
+    #         )
 
-            if save_polarizations:
-                train_obj.save_polarizations(free_memory=False)
+    #         short_idx = np.where(short_mask)[0][0]
 
-        return train_obj.hp_dataset, train_obj.hc_dataset
+    #         hp_flat[short_idx] = hp_short
+    #         hc_flat[short_idx] = hc_short
+
+    #         # Generate remaining waveforms on the fixed shortened time array
+    #         for idx, (ecc, l, q, chi1, chi2) in enumerate(train_obj.parameter_grid):
+    #             if idx == short_idx:
+    #                 continue
+
+    #             hp, hc, _ = self.simulate_waveform(
+    #                 ecc_ref=ecc,
+    #                 mean_ano_ref=l,
+    #                 mass_ratio=q,
+    #                 chi1=chi1,
+    #                 chi2=chi2,
+    #                 truncate_at_ISCO=False,
+    #                 truncate_at_tmin=False,
+    #                 update_results=False,
+    #             )
+
+    #             hp_flat[idx] = hp
+    #             hc_flat[idx] = hc
+
+    #         train_obj.hp_dataset = hp_flat.reshape(n_e, n_l, n_q, n_c1, n_c2, n_t)
+    #         train_obj.hc_dataset = hc_flat.reshape(n_e, n_l, n_q, n_c1, n_c2, n_t)
+    #         train_obj.time = self.time
+
+    #         print(f"All waveforms generated and reshaped to parameter grid. Dataset shape: {train_obj.hp_dataset.shape}")
+            
+    #         if save_polarizations:
+    #             train_obj.save_polarizations(free_memory=False)
+
+    #     if plot_polarisations:
+    #         self._plot_polarizations_dataset(train_obj, self.parameter_grid)
+
+    #     return train_obj.hp_dataset, train_obj.hc_dataset
+
+#############################################################################
+    # def _plot_polarizations_dataset(self, train_obj: TrainingSetResults, parameter_grid):
+    #     if train_obj.hp_dataset is None:
+    #         train_obj = train_obj.load_polarizations()
+
+    #     hp_flat = train_obj.hp_dataset.reshape(len(parameter_grid), len(train_obj.time))
+
+    #     plt.figure(figsize=(10, 6))
+
+    #     for idx, (ecc, l, q, chi1, chi2) in enumerate(parameter_grid):
+    #         label = f"e={ecc:.3f}, l={l:.3f}, q={q:.2f}, chi1={chi1:.2f}, chi2={chi2:.2f}"
+    #         plt.plot(train_obj.time, hp_flat[idx], linewidth=0.7, label=label)
+
+    #     plt.title("Plus Polarisation Dataset")
+    #     plt.xlabel("Time [M]")
+    #     plt.ylabel(r"$h_+$")
+    #     plt.grid(True)
+
+    #     if len(parameter_grid) <= 15:
+    #         plt.legend(fontsize="small")
+
+    #     plt.tight_layout()
+###############################################################################3
+
+    # def _calculate_residuals(self, 
+    #                         train_obj: TrainingSetResults, 
+    #                         save_residuals=True, 
+    #                         plot_residuals_eccentric_evolv=False, 
+    #                         save_fig_time_evolve=False,
+    #                         plot_residuals_time_evolv=False, 
+    #                         save_fig_eccentric_evolv=False,  
+    #                         show_legend=False
+    #                         ):
+    #     """
+    #     Helper function to calculate residuals for a property given polarisation data.
+    #     """
+
+    #     if train_obj.hp_dataset is None or train_obj.hc_dataset is None:
+    #         raise ValueError(
+    #             "Polarisation datasets are not available. "
+    #             "First run _generate_polarisation_data() to generate the polarisation datasets."
+    #         )
+
+    #     # Dataset dimensions
+    #     n_e = len(train_obj.ecc_ref_space)
+    #     n_l = len(train_obj.mean_ano_ref_space)
+    #     n_q = len(train_obj.mass_ratio_space)
+    #     n_c1 = len(train_obj.chi1_space)
+    #     n_c2 = len(train_obj.chi2_space)
+    #     n_t = len(train_obj.time)
+
+    #     expected_shape = (n_e, n_l, n_q, n_c1, n_c2, n_t)
+
+    #     if train_obj.hp_dataset.shape != expected_shape:
+    #         raise ValueError(
+    #             f"hp_dataset has shape {train_obj.hp_dataset.shape}, "
+    #             f"but expected {expected_shape}."
+    #         )
+
+    #     if train_obj.hc_dataset.shape != expected_shape:
+    #         raise ValueError(
+    #             f"hc_dataset has shape {train_obj.hc_dataset.shape}, "
+    #             f"but expected {expected_shape}."
+    #         )
+
+    #     # Flatten waveform datasets so idx matches train_obj.parameter_grid
+    #     hp_flat = train_obj.hp_dataset.reshape(len(train_obj.parameter_grid), n_t)
+    #     hc_flat = train_obj.hc_dataset.reshape(len(train_obj.parameter_grid), n_t)
+
+    #     residuals_flat = np.zeros((len(train_obj.parameter_grid), n_t))
+
+    #     for idx, (ecc, l, q, chi1, chi2) in enumerate(train_obj.parameter_grid):
+
+    #         residual = self.calculate_residual(
+    #             hp_flat[idx],
+    #             hc_flat[idx],
+    #             mean_ano_ref=l,
+    #             ecc_ref=ecc,
+    #             mass_ratio=q,
+    #             chi1=chi1,
+    #             chi2=chi2,
+    #             property=train_obj.property
+    #         )
+
+    #         residuals_flat[idx] = residual
+
+    #         del residual
+
+    #     train_obj.residuals = residuals_flat.reshape(n_e, n_l, n_q, n_c1, n_c2, n_t)
+    #     train_obj.time = self.time
+
+    #     print(
+    #         f"Generated residual parameter-space dataset for {train_obj.property}: "
+    #         f"{len(train_obj.parameter_grid)} waveforms"
+    #     )
+
+    #     if plot_residuals_eccentric_evolv or plot_residuals_time_evolv:
+    #         self._plot_residuals(
+    #             train_obj,
+    #             plot_residuals_eccentric_evolv,
+    #             plot_residuals_time_evolv,
+    #             save_fig_eccentric_evolv,
+    #             save_fig_time_evolve,
+    #             show_legend=show_legend
+    #         )
+
+    #     if save_residuals:
+    #         train_obj.save_residuals(free_memory=False)
+
+    #     return train_obj.residuals
 
     def _calculate_residuals(self, 
                              train_obj:TrainingSetResults, 
+                             truncate_at_ISCO=None,
+                             truncate_at_tmin=None,
                              save_residuals=True, 
-                             plot_residuals_eccentric_evolv=False, save_fig_time_evolve=False,
-                             plot_residuals_time_evolv=False, save_fig_eccentric_evolv=False,  
-                             show_legend=False
+                             save_polarizations=True,
+                             plot_polarizations=False, save_fig_polarizations=False,
+                             plot_residuals_eccentric_evolve=False, save_fig_time_evolve=False,
+                             plot_residuals_time_evolve=False, save_fig_eccentric_evolve=False,  
                              ):
         """
         Helper function to calculate residuals for a property given polarisation data.
@@ -611,102 +820,727 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
             Array of residuals for each eccentricity.
             
         """
+        # Start timer to track how long the residual calculation takes
+        start = time.time()
 
-        self.circulair_wf()
+        truncate_at_ISCO = self.resolve_property(prop=truncate_at_ISCO, default=self.truncate_at_ISCO)
+        truncate_at_tmin = self.resolve_property(prop=truncate_at_tmin, default=self.truncate_at_tmin)
+        
+        def calculate_residual_wrapper(hp, hc, ecc, l, q, chi1, chi2):
+            # Calculate circular waveform for the same parameters, but with ecc=0, to use as reference for the residual calculation
+            self.circulair_wf(mass_ratio=q,
+                            mean_ano_ref=l,
+                            chi1=chi1,
+                            chi2=chi2)
+            
+            residual = self.calculate_residual(
+                                            hp, 
+                                            hc, 
+                                            mean_ano_ref=l,
+                                            ecc_ref=ecc, 
+                                            mass_ratio=q, 
+                                            chi1=chi1, 
+                                            chi2=chi2, 
+                                            property=train_obj.property)
+            
+            return residual
 
-        # Create empty residual dataset
-        residual_dataset = np.zeros((len(train_obj.ecc_ref_space), len(self.time)))
 
-        # Fill residual dataset with residuals of chosen property for given eccentric parameter space
-        for i, ecc in enumerate(train_obj.ecc_ref_space):
-            residual = self.calculate_residual(train_obj.hp_dataset[i], train_obj.hc_dataset[i], ecc, train_obj.property)
-            residual_dataset[i] = residual
+        try:
+            train_obj = train_obj.load_residuals()
+            self.time = train_obj.time
 
-            del residual
+        except Exception as e:
+            print(e)
 
-        # Assign the calculated residual dataset to the corresponding training object
-        train_obj.residuals = residual_dataset
-        train_obj.time = self.time
+            # Start with longest time_array. Will be shortened iteratively to the shortest time_array.
+            current_time = self.time.copy()
 
-        print(f'Generated residual parameterspace dataset for {train_obj.property} ', len(train_obj.ecc_ref_space), ' waveforms')
+            n_e = len(train_obj.ecc_ref_space)
+            n_l = len(train_obj.mean_ano_ref_space)
+            n_q = len(train_obj.mass_ratio_space)
+            n_c1 = len(train_obj.chi1_space)
+            n_c2 = len(train_obj.chi2_space)
+            n_params = len(train_obj.parameter_grid)
+
+            # Polarisation datasets
+            hp_flat = np.empty((n_params, len(current_time)))
+            hc_flat = np.empty((n_params, len(current_time)))
+            # Residuals dataset
+            residuals_flat = np.empty((n_params, len(current_time)))
+
+            # Simulate all polarizations and calculate residuals for every parameter combination in the parameter grid.
+            for idx, (ecc, l, q, chi1, chi2) in enumerate(train_obj.parameter_grid):
+                hp, hc, time_array = self.simulate_waveform(
+                    time_array=current_time,
+                    ecc_ref=ecc,
+                    mean_ano_ref=l,
+                    mass_ratio=q,
+                    chi1=chi1,
+                    chi2=chi2,
+                    truncate_at_ISCO=truncate_at_ISCO,
+                    truncate_at_tmin=truncate_at_tmin,
+                    update_results=True,
+                    show_truncation_warnings=False
+                )
+
+                # Update mask: keep only the part of base_time covered by this waveform
+                current_mask = (current_time >= time_array[0]) & (current_time <= time_array[-1])
+                current_time = time_array
+
+                # idxs of the current time array in the previous time array
+                start_idx = np.where(current_mask)[0][0]
+                end_idx = np.where(current_mask)[0][-1] + 1  # +
+                active_n_t = len(current_time)
+
+                # Calculate circular waveform for the same parameters, but with ecc=0, to use as reference for the residual calculation
+                residual = calculate_residual_wrapper(hp, hc, ecc, l, q, chi1, chi2)
+
+                # Adjust lengths of the datasets
+                if active_n_t != hp_flat.shape[1]:
+                    hp_flat = hp_flat[:, start_idx:end_idx]
+                    hc_flat = hc_flat[:, start_idx:end_idx]
+                    residuals_flat = residuals_flat[:, start_idx:end_idx]
+                
+                # Load the simulations into the flattened datasets 
+                hp_flat[idx] = hp
+                hc_flat[idx] = hc
+                residuals_flat[idx] = residual
+
+            train_obj.hp_dataset = hp_flat.reshape(n_e, n_l, n_q, n_c1, n_c2, active_n_t)
+            train_obj.hc_dataset = hc_flat.reshape(n_e, n_l, n_q, n_c1, n_c2, active_n_t)
+            train_obj.residuals = residuals_flat.reshape(n_e, n_l, n_q, n_c1, n_c2, active_n_t)
+
+            # Update time arrays
+            train_obj.time = current_time
+            self.time = current_time
+
+            print(self.colored_text(f"All waveforms generated in {(time.time() - start)/60:.2f} minutes.", 'green'))
+
+            # Save polarisation and residual datasets to file
+            if save_polarizations:
+                train_obj.save_polarizations(free_memory=False)
+            
+            if save_residuals:
+                train_obj.save_residuals(free_memory=False)
+        
+        # Plotting functions
+        if plot_polarizations:
+            self._plot_polarizations_dataset(train_obj, self.parameter_grid)
 
         # If plot_residuals is True, plot whole residual dataset
-        if (plot_residuals_eccentric_evolv is True) or (plot_residuals_time_evolv is True):
-            self._plot_residuals(train_obj, plot_residuals_eccentric_evolv, plot_residuals_time_evolv, save_fig_eccentric_evolv, save_fig_time_evolve, show_legend=show_legend)
+        if (plot_residuals_eccentric_evolve is True) or (plot_residuals_time_evolve is True):
+            self._plot_residuals(train_obj=train_obj, 
+                                 plot_eccentric_evolve=plot_residuals_eccentric_evolve, save_fig_eccentric_evolve=save_fig_eccentric_evolve, 
+                                 plot_time_evolve=plot_residuals_time_evolve, save_fig_time_evolve=save_fig_time_evolve
+                                 )
+
+        print(self.colored_text(f"Dataset shape: {train_obj.residuals.shape}, N={train_obj.parameter_grid.size} | time_array: [{int(train_obj.time[0])}, {int(train_obj.time[-1])}]", 'green'))
         
-        if save_residuals:
-            train_obj.save_residuals(free_memory=False)
+        return train_obj.residuals
 
-        return residual_dataset
+
+    # def _generate_polarisation_data(self, 
+    #                                 train_obj:TrainingSetResults, 
+    #                                 truncate_at_ISCO=None, 
+    #                                 truncate_at_tmin=None,
+    #                                 save_polarizations=True
+    #                                 ):
+    #     """
+    #     Helper function to generate polarisation data for a list of eccentricities.
+
+    #     Parameters:
+    #     ----------
+    #     ecc_list : list of floats
+    #         List of minimum eccentricities.
+
+    #     Returns:
+    #     -------
+    #     hp_dataset : ndarray
+    #         Plus polarisation data.
+    #     hc_dataset : ndarray
+    #         Cross polarisation data.
+
+    #     """
+
+    #     truncate_at_ISCO = self.resolve_property(prop=truncate_at_ISCO, default=self.truncate_at_ISCO)
+    #     truncate_at_tmin = self.resolve_property(prop=truncate_at_tmin, default=self.truncate_at_tmin)
     
+    #     try:
+    #         train_obj = train_obj.load_polarizations()
+    #         self.time = train_obj.time
 
-    def _plot_residuals(self, train_obj:TrainingSetResults, plot_eccentric_evolv=False, plot_time_evolve=False, save_fig_eccentric_evolve=False, save_fig_time_evolve=False, show_legend=False):
-        """Function to plot residuals dataset including save figure option."""
-        ecc_list = train_obj.ecc_ref_space
-        residual_dataset = train_obj.residuals
+    #     except:
+    #         # Get waveform size for truncated ISCO waveform of smallest waveform
+    #         sorted_ecc_list = np.sort(train_obj.ecc_ref_space)
 
-        if plot_eccentric_evolv is True:
-            fig_residuals_ecc = plt.figure()
-            for i in range(0, len(self.time), 100):
-                plt.plot(ecc_list, residual_dataset.T[i], label='t/M = ' + f'{round(self.time[i], 1)}', linewidth=0.6)
-                
-            plt.xlabel('eccentricity')
-            if train_obj.property == 'phase':
-                plt.ylabel(' $\Delta \phi_{22}$ [radians]')
-            elif train_obj.property == 'amplitude':
-                plt.ylabel('$\Delta A_{22}$')
-            else:
-                print('Choose property = "phase", "amplitude"', train_obj.property)
-                sys.exit(1)
+    #         ISCO_ecc = sorted_ecc_list[-1] # Highest eccentricity in the list --> earliest ISCO cut-off
+    #         # update_results=True will update the instance time domain array which is afterwards used on all later generated waveforms.
+    #         hp_ISCO, hc_ISCO, _ = self.simulate_waveform(ecc_ref=ISCO_ecc, mass_ratio=1, chi1=0, chi2=0, truncate_at_ISCO=truncate_at_ISCO, truncate_at_tmin=truncate_at_tmin, update_results=True)
 
-            plt.title(f'Residuals {train_obj.property}')
-            plt.grid(True)
+    #         train_obj.hp_dataset = np.zeros((len(train_obj.ecc_ref_space), len(train_obj.mass_ratio_space), len(train_obj.chi1_space), len(train_obj.chi2_space), len(self.time))) 
+    #         train_obj.hc_dataset = np.zeros((len(train_obj.ecc_ref_space), len(train_obj.mass_ratio_space), len(train_obj.chi1_space), len(train_obj.chi2_space), len(self.time)))
 
-            if show_legend:
-                plt.legend(loc='upper right', fontsize='small', ncol=2)
+    #         for i, ecc in enumerate(train_obj.ecc_ref_space):
+    #             if ecc == ISCO_ecc:
+    #                 # Store first waveform in dataset
+    #                 train_obj.hp_dataset[i] = hp_ISCO
+    #                 train_obj.hc_dataset[i] = hc_ISCO
+    #             else:
+    #                 # No need to truncate again, since the time array is already truncated to the earliest ISCO cut-off
+    #                 train_obj.hp_dataset[i], train_obj.hc_dataset[i], train_obj.time = self.simulate_waveform(ecc_ref=ecc, truncate_at_ISCO=False, truncate_at_tmin=False, update_results=False) 
+
+    #         if save_polarizations:
+    #             train_obj.save_polarizations(free_memory=False)
+
+    #     return train_obj.hp_dataset, train_obj.hc_dataset
+
+    # def _calculate_residuals(self, 
+    #                          train_obj:TrainingSetResults, 
+    #                          save_residuals=True, 
+    #                          plot_residuals_eccentric_evolv=False, save_fig_time_evolve=False,
+    #                          plot_residuals_time_evolv=False, save_fig_eccentric_evolv=False,  
+    #                          show_legend=False
+    #                          ):
+    #     """
+    #     Helper function to calculate residuals for a property given polarisation data.
+
+    #     Parameters:
+    #     ----------
+    #     ecc_list : list of floats
+    #         List of minimum eccentricities.
+    #     hp_dataset : ndarray
+    #         Plus polarisation data.
+    #     hc_dataset : ndarray
+    #         Cross polarisation data.
+    #     property : str
+    #         Specifies which property to calculate ('phase' or 'amplitude').
+
+    #     Returns:
+    #     -------
+    #     residual_dataset : ndarray
+    #         Array of residuals for each eccentricity.
+            
+    #     """
+
+    #     self.circulair_wf()
+
+    #     # Create empty residual dataset
+    #     residual_dataset = np.zeros((len(train_obj.ecc_ref_space), len(self.time)))
+
+    #     # Fill residual dataset with residuals of chosen property for given eccentric parameter space
+    #     for i, ecc in enumerate(train_obj.ecc_ref_space):
+    #         residual = self.calculate_residual(train_obj.hp_dataset[i], train_obj.hc_dataset[i], ecc, train_obj.property)
+    #         residual_dataset[i] = residual
+
+    #         del residual
+
+    #     # Assign the calculated residual dataset to the corresponding training object
+    #     train_obj.residuals = residual_dataset
+    #     train_obj.time = self.time
+
+    #     print(f'Generated residual parameterspace dataset for {train_obj.property} ', len(train_obj.ecc_ref_space), ' waveforms')
+
+    #     # If plot_residuals is True, plot whole residual dataset
+    #     if (plot_residuals_eccentric_evolv is True) or (plot_residuals_time_evolv is True):
+    #         self._plot_residuals(train_obj, plot_residuals_eccentric_evolv, plot_residuals_time_evolv, save_fig_eccentric_evolv, save_fig_time_evolve, show_legend=show_legend)
+        
+    #     if save_residuals:
+    #         train_obj.save_residuals(free_memory=False)
+
+    #     return residual_dataset
+
+    def _plot_polarizations_dataset(self,
+                                    train_obj: TrainingSetResults,
+                                    save_fig_polarizations=False):
+        """
+        Plot plus and cross polarizations from multidimensional datasets.
+
+        Expected shapes:
+            hp_dataset[ecc, mean_ano, q, chi1, chi2, time]
+            hc_dataset[ecc, mean_ano, q, chi1, chi2, time]
+
+        Makes one figure for hp and one figure for hc.
+        Each figure has 5 subplots showing the effect of:
+            ecc, mean_ano, q, chi1, chi2
+        """
+        if train_obj.hp_dataset is None or train_obj.hc_dataset is None:
+            train_obj = train_obj.load_polarizations()
+
+        hp = train_obj.hp_dataset
+        hc = train_obj.hc_dataset
+        time = train_obj.time
+
+        ecc_space = train_obj.ecc_ref_space
+        l_space = train_obj.mean_ano_ref_space
+        q_space = train_obj.mass_ratio_space
+        chi1_space = train_obj.chi1_space
+        chi2_space = train_obj.chi2_space
+
+        n_e = len(ecc_space)
+        n_l = len(l_space)
+        n_q = len(q_space)
+        n_c1 = len(chi1_space)
+        n_c2 = len(chi2_space)
+        n_t = len(time)
+
+
+        # Fixed middle-index baseline for non-varied parameters
+        e0 = n_e // 2
+        l0 = n_l // 2
+        q0 = n_q // 2
+        c10 = n_c1 // 2
+        c20 = n_c2 // 2
+
+        def low_and_high_indices(n):
+            if n <= 2:
+                return np.arange(n, dtype=int)
+            
+            # pick one low and one high index (avoid exact edges if possible)
+            low = int(0.2 * (n - 1))
+            high = int(0.8 * (n - 1))
+
+            return np.array([low, high], dtype=int)
+        
+        def fixed_text(vary_key):
+            parts = []
+
+            if vary_key != "ecc":
+                parts.append(f"e={float(ecc_space[e0]):.4g}")
+            if vary_key != "mean_ano":
+                parts.append(f"l={float(l_space[l0]):.4g}")
+            if vary_key != "q":
+                parts.append(f"q={float(q_space[q0]):.4g}")
+            if vary_key != "chi1":
+                parts.append(rf"$\chi_1$={float(chi1_space[c10]):.4g}")
+            if vary_key != "chi2":
+                parts.append(rf"$\chi_2$={float(chi2_space[c20]):.4g}")
+
+            return "Fixed: " + ", ".join(parts)
+
+        def make_parameter_effects(dataset):
+            return [
+                {
+                    "key": "ecc",
+                    "name": "eccentricity",
+                    "symbol": "e",
+                    "values": ecc_space,
+                    "data": dataset[:, l0, q0, c10, c20, :],
+                },
+                {
+                    "key": "mean_ano",
+                    "name": "mean anomaly",
+                    "symbol": "l",
+                    "values": l_space,
+                    "data": dataset[e0, :, q0, c10, c20, :],
+                },
+                {
+                    "key": "q",
+                    "name": "mass ratio",
+                    "symbol": "q",
+                    "values": q_space,
+                    "data": dataset[e0, l0, :, c10, c20, :],
+                },
+                {
+                    "key": "chi1",
+                    "name": r"$\chi_1$",
+                    "symbol": r"$\chi_1$",
+                    "values": chi1_space,
+                    "data": dataset[e0, l0, q0, :, c20, :],
+                },
+                {
+                    "key": "chi2",
+                    "name": r"$\chi_2$",
+                    "symbol": r"$\chi_2$",
+                    "values": chi2_space,
+                    "data": dataset[e0, l0, q0, c10, :, :],
+                },
+            ]
+
+        def plot_single_polarization(dataset, pol_name, ylabel, filename_prefix):
+            parameter_effects = make_parameter_effects(dataset)
+
+            fig, axes = plt.subplots(
+                len(parameter_effects),
+                1,
+                figsize=(20, 3.5 * len(parameter_effects)),
+                sharex=True
+            )
+
+            if len(parameter_effects) == 1:
+                axes = [axes]
+
+            for ax, effect in zip(axes, parameter_effects):
+                values = effect["values"]
+                data = effect["data"]
+                selected_indices = low_and_high_indices(len(values))
+
+                for i in selected_indices:
+                    value = values[i]
+
+                    ax.plot(
+                        time,
+                        data[i],
+                        linewidth=0.9,
+                        linestyle="-",
+                        label=f"{effect['symbol']} = {float(value):.4g}"
+                    )
+
+                ax.set_ylabel(ylabel)
+                ax.set_title(
+                    f"{pol_name}: varying {effect['name']}\n"
+                    f"{fixed_text(effect['key'])}",
+                    fontsize=10
+                )
+                ax.grid(True)
+
+                ax.legend(
+                    title=f"Varying {effect['symbol']}",
+                    fontsize="small",
+                    title_fontsize="small",
+                    loc="best",
+                    ncol=1
+                )
+
+            axes[-1].set_xlabel("t [M]")
+
+            fig.suptitle(
+                f"{pol_name} polarization: effect of each parameter",
+                y=1.005
+            )
 
             plt.tight_layout()
 
-            if save_fig_eccentric_evolve is True:
-                ISCO = '' if self.truncate_at_ISCO else 'NO_ISCO_'
-                tmin = '' if self.truncate_at_tmin else 'NO_tmin_'
+            if save_fig_polarizations is True:
+                figname = train_obj.figname(
+                    prefix=filename_prefix,
+                    directory="Images/Polarisations"
+                )
+                fig.savefig(figname)
 
-                figname = train_obj.figname(prefix=f'Residuals_eccentric_evolv', directory='Images/Residuals') # Use the filename method of the training object to generate a consistent filename
-                fig_residuals_ecc.savefig(figname)
+        plot_single_polarization(
+            hp,
+            pol_name=r"$h_+$",
+            ylabel=r"$h_+$",
+            filename_prefix="Polarizations_hp"
+        )
 
-                # plt.close('all') # Clean up plot
+        plot_single_polarization(
+            hc,
+            pol_name=r"$h_\times$",
+            ylabel=r"$h_\times$",
+            filename_prefix="Polarizations_hc"
+        )
 
+
+    def _plot_residuals(self, 
+                        train_obj: TrainingSetResults, 
+                        plot_eccentric_evolve=False, save_fig_eccentric_evolve=False,
+                        plot_time_evolve=False, save_fig_time_evolve=False
+                        ):
+        """
+        Plot residuals from multidimensional residual dataset.
+
+        Expected shape:
+            residuals[ecc, mean_ano, q, chi1, chi2, time]
+        """
+
+        residuals = train_obj.residuals
+        time = train_obj.time
+
+        ecc_space = train_obj.ecc_ref_space
+        l_space = train_obj.mean_ano_ref_space
+        q_space = train_obj.mass_ratio_space
+        chi1_space = train_obj.chi1_space
+        chi2_space = train_obj.chi2_space
+
+        n_e = len(ecc_space)
+        n_l = len(l_space)
+        n_q = len(q_space)
+        n_c1 = len(chi1_space)
+        n_c2 = len(chi2_space)
+        n_t = len(time)
+
+        # Set units for plot labels
+        if train_obj.property == "phase":
+            ylabel = r"$\Delta \phi_{22}$ [radians]"
+        elif train_obj.property == "amplitude":
+            ylabel = r"$\Delta A_{22}$"
+        else:
+            raise ValueError(
+                f'Choose property = "phase" or "amplitude", got {train_obj.property}'
+            )
+
+        # Create fixed middle-index baseline for each parameter to visualize the effect of varying one parameter at a time while keeping others fixed.
+        # Plot residuals for every varied parameter in subplot.
+
+        # Fixed middle-index baseline for non-varied parameters
+        e0 = n_e // 2
+        l0 = n_l // 2
+        q0 = n_q // 2
+        c10 = n_c1 // 2
+        c20 = n_c2 // 2
+
+        # For every parameter, select 5 values across the parameter space to vary the effect.
+        def five_indices(n):
+            if n <= 5:
+                return np.arange(n, dtype=int)
+            return np.linspace(0, n - 1, 5, dtype=int)
+
+        # Helper function to generate text for fixed parameters in plot titles
+        def fixed_text(vary_key):
+            parts = []
+
+            if vary_key != "ecc":
+                parts.append(f"e={float(ecc_space[e0]):.4g}")
+            if vary_key != "mean_ano":
+                parts.append(f"l={float(l_space[l0]):.4g}")
+            if vary_key != "q":
+                parts.append(f"q={float(q_space[q0]):.4g}")
+            if vary_key != "chi1":
+                parts.append(rf"$\chi_1$={float(chi1_space[c10]):.4g}")
+            if vary_key != "chi2":
+                parts.append(rf"$\chi_2$={float(chi2_space[c20]):.4g}")
+
+            return "Fixed: " + ", ".join(parts)
+
+        parameter_effects = [
+            {
+                "key": "ecc",
+                "name": "eccentricity",
+                "symbol": "e",
+                "values": ecc_space,
+                "data": residuals[:, l0, q0, c10, c20, :],
+            },
+            {
+                "key": "mean_ano",
+                "name": "mean anomaly",
+                "symbol": "l",
+                "values": l_space,
+                "data": residuals[e0, :, q0, c10, c20, :],
+            },
+            {
+                "key": "q",
+                "name": "mass ratio",
+                "symbol": "q",
+                "values": q_space,
+                "data": residuals[e0, l0, :, c10, c20, :],
+            },
+            {
+                "key": "chi1",
+                "name": r"$\chi_1$",
+                "symbol": r"$\chi_1$",
+                "values": chi1_space,
+                "data": residuals[e0, l0, q0, :, c20, :],
+            },
+            {
+                "key": "chi2",
+                "name": r"$\chi_2$",
+                "symbol": r"$\chi_2$",
+                "values": chi2_space,
+                "data": residuals[e0, l0, q0, c10, :, :],
+            },
+        ]
+
+        # ------------------------------------------------------------
+        # Residual vs time, one subplot per varied parameter
+        # 5 waveforms per parameter
+        # ------------------------------------------------------------
         if plot_time_evolve is True:
-            fig_residuals_t = plt.figure()
+            fig, axes = plt.subplots(
+                len(parameter_effects),
+                1,
+                figsize=(11, 3.5 * len(parameter_effects)),
+                sharex=True
+            )
 
-            for i in range(len(residual_dataset)):
-                plt.plot(self.time, residual_dataset[i], label='e$_{ref}$' + f' = {round(ecc_list[i], 3)}', linewidth=0.6)
-               
-            plt.xlabel('t [M]')
-            if train_obj.property == 'phase':
-                plt.ylabel(' $\Delta \phi_{22}$ [radians]')
-            elif train_obj.property == 'amplitude':
-                plt.ylabel('$\Delta A_{22}$')
-            else:
-                print('Choose property = "phase", "amplitude"', train_obj.property)
-                sys.exit(1)
+            if len(parameter_effects) == 1:
+                axes = [axes]
 
-            plt.title(f'Residuals {train_obj.property}')
-            plt.grid(True)
+            for ax, effect in zip(axes, parameter_effects):
+                values = effect["values"]
+                data = effect["data"]
 
-            if show_legend:
-                plt.legend(loc='upper right', fontsize='small', ncol=2)
+                selected_indices = five_indices(len(values))
+
+                for i in selected_indices:
+                    value = values[i]
+
+                    ax.plot(
+                        time,
+                        data[i],
+                        linewidth=0.9,
+                        linestyle="-",
+                        label=f"{effect['symbol']} = {float(value):.4g}"
+                    )
+
+                ax.set_ylabel(ylabel)
+                ax.set_title(
+                    f"Varying {effect['name']} over time\n"
+                    f"{fixed_text(effect['key'])}",
+                    fontsize=10
+                )
+                ax.grid(True)
+
+                ax.legend(
+                    title=f"Varying {effect['symbol']}",
+                    fontsize="small",
+                    title_fontsize="small",
+                    loc="best",
+                    ncol=1
+                )
+
+            axes[-1].set_xlabel("t [M]")
+
+            fig.suptitle(
+                f"Residual {train_obj.property}: effect of each parameter",
+                y=1.005
+            )
 
             plt.tight_layout()
 
             if save_fig_time_evolve is True:
-                ISCO = '' if self.truncate_at_ISCO else 'NO_ISCO'
-                tmin = '' if self.truncate_at_tmin else 'NO_tmin'
+                figname = train_obj.figname(
+                    prefix="Residuals_time_evolve",
+                    directory="Images/Residuals"
+                )
+                fig.savefig(figname)
 
-                figname = train_obj.figname(prefix=f'Residuals_time_evolv', directory='Images/Residuals') # Use the filename method of the training object to generate a consistent filename
-                fig_residuals_t.savefig(figname)
+        # ------------------------------------------------------------
+        # Residual vs parameter value, one subplot per varied parameter
+        # 5 selected times
+        # ------------------------------------------------------------
+        if plot_eccentric_evolve is True:
+            fig, axes = plt.subplots(
+                len(parameter_effects),
+                1,
+                figsize=(11, 3.5 * len(parameter_effects)),
+                sharex=False
+            )
 
-                # plt.close('all')
+            if len(parameter_effects) == 1:
+                axes = [axes]
+
+            time_indices = five_indices(n_t)
+
+            for ax, effect in zip(axes, parameter_effects):
+                values = effect["values"]
+                data = effect["data"]
+
+                for tidx in time_indices:
+                    ax.plot(
+                        values,
+                        data[:, tidx],
+                        linewidth=0.9,
+                        linestyle="-",
+                        label=f"t/M = {float(time[tidx]):.4g}"
+                    )
+
+                ax.set_xlabel(effect["symbol"])
+                ax.set_ylabel(ylabel)
+                ax.set_title(
+                    f"Residual change while varying {effect['name']}\n"
+                    f"{fixed_text(effect['key'])}",
+                    fontsize=10
+                )
+                ax.grid(True)
+
+                ax.legend(
+                    title="Selected times",
+                    fontsize="small",
+                    title_fontsize="small",
+                    loc="best",
+                    ncol=1
+                )
+
+            fig.suptitle(
+                f"Residual {train_obj.property}: parameter dependence at selected times",
+                y=1.005
+            )
+
+            plt.tight_layout()
+
+            if save_fig_eccentric_evolve is True:
+                figname = train_obj.figname(
+                    prefix="Residuals_eccentric_evolve",
+                    directory="Images/Residuals"
+                )
+                fig.savefig(figname)
+
+    # def _plot_residuals(self, 
+    #                     train_obj:TrainingSetResults, 
+    #                     plot_eccentric_evolv=False, 
+    #                     plot_time_evolve=False, 
+    #                     save_fig_eccentric_evolve=False, 
+    #                     save_fig_time_evolve=False, 
+    #                     show_legend=False):
+    #     """Function to plot residuals dataset including save figure option."""
+    #     ecc_list = train_obj.ecc_ref_space
+    #     residual_dataset = train_obj.hp_dataset.reshape(len(train_obj.parameter_grid), len(train_obj.time))
+
+    #     print(1, ecc_list, residual_dataset)
+    #     if plot_eccentric_evolve is True:
+    #         fig_residuals_ecc = plt.figure()
+    #         for i in range(0, len(self.time), 100):
+    #             plt.plot(ecc_list, residual_dataset.T[i], label='t/M = ' + f'{round(self.time[i], 1)}', linewidth=0.6)
+                
+    #         plt.xlabel('eccentricity')
+    #         if train_obj.property == 'phase':
+    #             plt.ylabel(' $\Delta \phi_{22}$ [radians]')
+    #         elif train_obj.property == 'amplitude':
+    #             plt.ylabel('$\Delta A_{22}$')
+    #         else:
+    #             print('Choose property = "phase", "amplitude"', train_obj.property)
+    #             sys.exit(1)
+
+    #         plt.title(f'Residuals {train_obj.property}')
+    #         plt.grid(True)
+
+    #         if show_legend:
+    #             plt.legend(loc='upper right', fontsize='small', ncol=2)
+
+    #         plt.tight_layout()
+
+    #         if save_fig_eccentric_evolve is True:
+    #             ISCO = '' if self.truncate_at_ISCO else 'NO_ISCO_'
+    #             tmin = '' if self.truncate_at_tmin else 'NO_tmin_'
+
+    #             figname = train_obj.figname(prefix=f'Residuals_eccentric_evolv', directory='Images/Residuals') # Use the filename method of the training object to generate a consistent filename
+    #             fig_residuals_ecc.savefig(figname)
+
+    #             # plt.close('all') # Clean up plot
+
+    #     if plot_time_evolve is True:
+    #         fig_residuals_t = plt.figure()
+
+    #         for i in range(len(residual_dataset)):
+    #             plt.plot(self.time, residual_dataset[i], label='e$_{ref}$' + f' = {round(ecc_list[i], 3)}', linewidth=0.6)
+               
+    #         plt.xlabel('t [M]')
+    #         if train_obj.property == 'phase':
+    #             plt.ylabel(' $\Delta \phi_{22}$ [radians]')
+    #         elif train_obj.property == 'amplitude':
+    #             plt.ylabel('$\Delta A_{22}$')
+    #         else:
+    #             print('Choose property = "phase", "amplitude"', train_obj.property)
+    #             sys.exit(1)
+
+    #         plt.title(f'Residuals {train_obj.property}')
+    #         plt.grid(True)
+
+    #         if show_legend:
+    #             plt.legend(loc='upper right', fontsize='small', ncol=2)
+
+    #         plt.tight_layout()
+
+    #         if save_fig_time_evolve is True:
+    #             ISCO = '' if self.truncate_at_ISCO else 'NO_ISCO'
+    #             tmin = '' if self.truncate_at_tmin else 'NO_tmin'
+
+    #             figname = train_obj.figname(prefix=f'Residuals_time_evolv', directory='Images/Residuals') # Use the filename method of the training object to generate a consistent filename
+    #             fig_residuals_t.savefig(figname)
+
+    #             # plt.close('all')
     
 
     def _save_residual_dataset(self, train_obj:TrainingSetResults):
@@ -739,7 +1573,16 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
             raise ValueError(f"Unknown property: {property}")
         
 
-    def get_greedy_parameters(self, train_obj:TrainingSetResults, min_greedy_error=None, N_greedy_vecs=None, normalize=True, max_tree_depth=0, plot_greedy_error=False, save_greedy_error_fig=False, plot_greedy_vectors=False, save_greedy_vecs_fig=False, plot_SVD_matrix=False, save_SVD_matrix_fig=False, show_legend=False):
+    def get_greedy_parameters(self, 
+                              train_obj:TrainingSetResults, 
+                              min_greedy_error=None, N_greedy_vecs=None, 
+                              normalize=True, 
+                              max_tree_depth=0, 
+                              plot_greedy_error=False, save_greedy_error_fig=False, 
+                              plot_greedy_vectors=False, save_greedy_vecs_fig=False, 
+                              plot_SVD_matrix=False, save_SVD_matrix_fig=False, 
+                              plot_basis_indices=False, save_basis_indices_fig=False,
+                              show_legend=False):
             """
             Greedy algorithm to select representative vectors from U using an orthonormal basis.
 
@@ -763,17 +1606,39 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
             residuals : list
                 Maximum residual norm at each iteration.
             """
-            greedy_tol = self.resolve_property(prop=min_greedy_error, default=-np.inf) 
-            nmax = self.resolve_property(prop=N_greedy_vecs, default=train_obj.residuals.shape[0])
             
-            parameters = self.ecc_ref_space[self.ecc_ref_space != 0]
-            reduced_basis_object = ReducedBasis(greedy_tol=greedy_tol, normalize=normalize, nmax=nmax, lmax=max_tree_depth)
+            residuals_flat = train_obj.residuals.reshape(-1, len(train_obj.time))
 
-            reduced_basis_object.fit(training_set = train_obj.residuals,
-                parameters = parameters,
+            nan_mask = np.isnan(residuals_flat)
+
+            if np.any(nan_mask):
+                bad_rows = np.where(np.any(nan_mask, axis=1))[0]
+
+                print(self.colored_text(
+                    f"Warning: NaN values found in residuals dataset.\n"
+                    f"Bad row indices: {bad_rows}\n"
+                    f"These will be ignored in the greedy algorithm, but may affect the results.",
+                    'yellow'
+                ))
+
+            # Resolve properties with defaults
+            greedy_tol = self.resolve_property(prop=min_greedy_error, default=-np.inf) 
+            nmax = self.resolve_property(prop=N_greedy_vecs, default=residuals_flat.shape[0])
+
+            # Print warnings for dataset issues that could affect the greedy algorithm performance
+            self._greedy_parameters_warning(dataset=residuals_flat, 
+                                            parameter_grid=self.parameter_grid,
+                                            time_array=train_obj.time)
+            
+            # Get reduced basis object
+            reduced_basis_object = ReducedBasis(greedy_tol=greedy_tol, normalize=normalize, nmax=nmax, lmax=max_tree_depth)
+            # Calculate the greedy indices
+            reduced_basis_object.fit(training_set = residuals_flat,
+                parameters = self.parameter_grid,
                 physical_points = self.time
                 )
-            
+
+            # Combine the basis indices from all leaves of the tree into a single list of indices
             train_obj.basis_indices = []
 
             for leaf in reduced_basis_object.tree.leaves:
@@ -784,6 +1649,9 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
             if plot_greedy_error:
                 self._plot_greedy_errors(reduced_basis_object=reduced_basis_object, train_obj=train_obj, save_greedy_fig=save_greedy_error_fig)
             
+            if plot_basis_indices:
+                self.plot_basis_indices(train_obj=train_obj, save_basis_indices_fig=save_basis_indices_fig)
+
             if plot_greedy_vectors:
                 self._plot_greedy_vectors(reduced_basis_object=reduced_basis_object, train_obj=train_obj, save_greedy_vecs_fig=save_greedy_vecs_fig, U=None, show_legend=show_legend)
             
@@ -791,6 +1659,101 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                 self._plot_SVD_matrix(train_obj=train_obj, save_SVD_matrix_fig=save_SVD_matrix_fig)
             
             return reduced_basis_object
+    
+   
+
+    def plot_basis_indices(self, train_obj:TrainingSetResults, save_basis_indices_fig=False):
+        def compute_chi_eff(params):
+            q = params[:, 2]
+            chi1 = params[:, 3]
+            chi2 = params[:, 4]
+            return (q * chi1 + chi2) / (1 + q)
+
+        params = train_obj.parameter_grid
+        basis_indices = train_obj.basis_indices
+        greedy = params[basis_indices]
+
+        # Extract parameters
+        e_all, _, q_all, chi1_all, chi2_all = params.T
+        e_g, _, q_g, chi1_g, chi2_g = greedy.T
+
+        chi_eff_all = compute_chi_eff(params)
+        chi_eff_g = compute_chi_eff(greedy)
+
+        fig = plt.figure(figsize=(14, 6))
+
+        # --- 3D plot: e vs q vs chi_eff ---
+        ax = fig.add_subplot(1, 2, 1, projection='3d')
+
+        sc = ax.scatter(
+            e_all,
+            q_all,
+            chi_eff_all,
+            color='gray',
+            alpha=0.3,
+            s=20,
+            label="grid"
+        )
+
+        ax.scatter(
+            e_g,
+            q_g,
+            chi_eff_g,
+            color='blue',
+            marker="x",
+            s=60,
+            label="selected"
+        )
+
+        ax.set_xlabel("eccentricity")
+        ax.set_ylabel("mass ratio q")
+        ax.set_zlabel(r"$\chi_{\mathrm{eff}}$")
+        ax.set_title(f"3D parameter space {train_obj.property} (e, q, chi_eff)")
+        ax.legend()
+
+
+        # --- 2D spin plot ---
+        ax2 = fig.add_subplot(1, 2, 2)
+
+        sc2 = ax2.scatter(
+            chi1_all,
+            chi2_all,
+            c=chi_eff_all,
+            cmap="viridis",
+            alpha=0.4,
+            s=20,
+            label="grid"
+        )
+
+        ax2.scatter(
+            chi1_g,
+            chi2_g,
+            c=chi_eff_g,
+            cmap="viridis",
+            marker="x",
+            s=60,
+            label="selected"
+        )
+
+        ax2.set_xlabel(r"$\chi_1$")
+        ax2.set_ylabel(r"$\chi_2$")
+        ax2.set_title(
+            rf"$\chi_1$ vs $\chi_2$ (color = $\chi_{{\mathrm{{eff}}}}$), {train_obj.property}"
+        )        
+        ax2.legend()
+
+        cbar2 = fig.colorbar(sc2, ax=ax2)
+        cbar2.set_label(r"$\chi_{\mathrm{eff}}$")
+
+        plt.tight_layout()
+
+        if save_basis_indices_fig:
+            figname = train_obj.figname(
+                prefix="basis_indices",
+                directory="Images/Basis_indices"
+            )
+            fig.savefig(figname, dpi=200, bbox_inches="tight")
+
 
     def _plot_greedy_errors(self, reduced_basis_object: ReducedBasis, train_obj: TrainingSetResults, save_greedy_fig=False):
         """Function to plot greedy errors of the reduced basis. Option to save figure in Images/Greedy_errors.
@@ -845,8 +1808,8 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         fig_greedy_errors = plt.figure()
         plt.semilogy(np.arange(len(stacked_proj_errors)), stacked_proj_errors, label='greedy error', lw=1.8, color='blue')
         plt.yscale('log')
-        plt.ylabel('Greedy error')
-        plt.title(f'Greedy error per section for max_tree_depth = {reduced_basis_object.lmax}, tree_leaves = {len(reduced_basis_object.tree.leaves)}')
+        plt.ylabel(f'Greedy error {train_obj.property}')
+        plt.title(f'Greedy error {train_obj.property} per section for max_tree_depth = {reduced_basis_object.lmax}, tree_leaves = {len(reduced_basis_object.tree.leaves)}')
         plt.legend()
 
         # ax[1].semilogy(np.arange(len(proj_errors)), proj_errors, label='greedy error', lw=1.8, color='blue')
@@ -3529,18 +4492,46 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         }
 
 # Sampling parameters
-# sampling_frequency = 2048 # or 4096
-# duration = 4 # seconds
-# time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
+sampling_frequency = 2048 # or 4096
+duration = 4 # seconds
+time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
 
+
+gt = Generate_TrainingSet(time_array=time_array,
+                          ecc_ref_parameterspace=np.linspace(0.001, 0.3, num=20),
+                          mean_ano_parameterspace=[0],
+                          mass_ratio_parameterspace=np.linspace(1, 20, num=20),
+                          chi1_parameterspace=[0],
+                          chi2_parameterspace=[0],
+                          min_greedy_error_amp=1e-8,
+                          min_greedy_error_phase=1e-8,
+                          truncate_at_tmin=True,
+                          truncate_at_ISCO=True,
+                          f_lower=10)
 
 # gt = Generate_TrainingSet(time_array=time_array,
-#                           mean_ano_parameterspace=[0], 
-#                           mass_ratio_parameterspace=[1], 
-#                           chi1_parameterspace=[0], 
+#                           ecc_ref_parameterspace=np.linspace(0.001, 0.3, num=2),
+#                           mean_ano_parameterspace=[0],
+#                           mass_ratio_parameterspace=[1, 2],
+#                           chi1_parameterspace=np.linspace(-0.9, 0.9, num=20)[[8, 10, 1]],
 #                           chi2_parameterspace=[0],
-#                           min_greedy_error_amp=1e-6,
-#                           min_greedy_error_phase=1e-6,)
+#                           min_greedy_error_amp=1e-8,
+#                           min_greedy_error_phase=1e-8,
+#                           f_lower=10)
+
+
+train_obj_p = gt._get_training_obj('phase')
+gt._calculate_residuals(train_obj_p)
+
+gt.get_greedy_parameters(train_obj_p, N_greedy_vecs=200, plot_greedy_error=True, plot_basis_indices=True)
+
+
+# train_obj_a = gt._get_training_obj('amplitude')
+# gt._calculate_residuals(train_obj_a)
+# # gt.get_greedy_parameters(train_obj, N_greedy_vecs=50, plot_greedy_error=True)
+# gt.get_greedy_parameters(train_obj_a, min_greedy_error=1e-6, plot_greedy_error=True, plot_basis_indices=True)
+# gt._generate_polarisation_data(train_obj)
+
 
 # gt.get_training_set_greedy(property="amplitude", 
 #                            plot_emp_nodes_on_basis=True,
@@ -3561,5 +4552,5 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
 #                            plot_interpolation_matrix=True,
 #                            plot_proj_vs_eim_error=True,
 #                            plot_residuals_time=True)
-# # plt.show()
+plt.show()
 # plt.close("all")

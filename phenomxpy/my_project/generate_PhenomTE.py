@@ -1,3 +1,5 @@
+import time
+
 from helper_functions import *
 
 import sys
@@ -109,7 +111,7 @@ class Simulate_Waveform(Warnings, Automated_Settings):
         self.truncate_at_ISCO = truncate_at_ISCO # If the waveform should be truncated at the ISCO frequency, set to True.
         self.truncate_at_tmin = truncate_at_tmin # If the waveform should be truncated at the physical start of the time-domain (tmin), set to True.
 
-        self.geomtric_units = geometric_units   # Waveform in geometric units for True and SI units for False
+        self.geometric_units = geometric_units   # Waveform in geometric units for True and SI units for False
 
         self.hp_ecc = None # TimeSeries object of plus polarisation
         self.hc_ecc = None # TimeSeries object of cross polarisation
@@ -146,7 +148,9 @@ class Simulate_Waveform(Warnings, Automated_Settings):
                           save_fig_polarisations=False, 
                           plot_ISCO_cut_off=False, 
                           save_fig_ISCO_cut_off=False, 
-                          update_results=False):
+                          update_results=False,
+                          show_truncation_warnings=True,
+                          ):
         """
         Simulate plus and cross polarisations of the eccentric IMRPhenomTE waveform (2,2) mode for a user-defined time array (waveform peak at t=0).
         
@@ -212,6 +216,8 @@ class Simulate_Waveform(Warnings, Automated_Settings):
         eta = self._eta_from_mass_ratio(q=mass_ratio)
 
         # --------------------------- Generate waveform with PhenomTE --------------------------
+        # start timer for waveform generation
+        start = time.time()
 
         phen = phenomt.PhenomTE(
             mode=[2, 2],
@@ -257,11 +263,12 @@ class Simulate_Waveform(Warnings, Automated_Settings):
                 # Set to False for everything before tmin, effectively truncating the waveform to the physical start of the time-domain.
                 valid_mask &= (time_array >= phen.pWF.tmin)
 
-            print(self.colored_text(
-                f'NEW TIME-DOMAIN after truncate at tmin (in geometric units): '
-                f'[{int(time_array[valid_mask][0])}, {int(time_array[valid_mask][-1])}] M',
-                'green'
-            ))
+            if show_truncation_warnings:
+                print(self.colored_text(
+                    f'NEW TIME-DOMAIN after truncate at tmin (in geometric units): '
+                    f'[{int(time_array[valid_mask][0])}, {int(time_array[valid_mask][-1])}] M',
+                    'green'
+                ))
 
         # True because it's smallest truncated waveform AND true because the surrogate is called with the ISCO cut-off.
         if truncate_at_ISCO:
@@ -274,11 +281,12 @@ class Simulate_Waveform(Warnings, Automated_Settings):
             # Turn off everything from idx_cut onward in the currently valid region
             valid_mask[masked_indices[idx_cut:]] = False
 
-            print(self.colored_text(
-                f'NEW TIME-DOMAIN after truncate at ISCO (in geometric units): '
-                f'[{int(time_array[valid_mask][0])}, {int(time_array[valid_mask][-1])}] M', 
-                'green'
-            ))
+            if show_truncation_warnings:
+                print(self.colored_text(
+                    f'NEW TIME-DOMAIN after truncate at ISCO (in geometric units): '
+                    f'[{int(time_array[valid_mask][0])}, {int(time_array[valid_mask][-1])}] M', 
+                    'green'
+                ))
         
             
         # Update the waveform and time array to only include the valid (physical) parts of the waveform. This is done after both truncation steps, so the final waveform is truncated to the shortest physical waveform.
@@ -290,7 +298,7 @@ class Simulate_Waveform(Warnings, Automated_Settings):
         if geometric_units is False:
             time_array = MasstoSecond(time_array, total_mass)
 
-        # print(f'time : SimInspiral_M_independent ecc = {round(ecc_ref, 3)}, len = {len(phen.hp)}, M = {self.total_mass}, lum_dist={self.luminosity_distance}, t=[{int(time_array[0])}, {int(time_array[-1])}, num={len(time_array)}], f_lower={self.f_lower}, f_ref={self.f_ref} | computation time = {(timer()-start)} seconds')
+        print(f'time : SimInspiral_M_independent ecc = {round(ecc_ref, 3)}, q={mass_ratio}, chi1={chi1}, chi2={chi2}, len = {len(phen.hp)}, M = {self.total_mass}, lum_dist={self.luminosity_distance}, t=[{int(time_array[0])}, {int(time_array[-1])}, num={len(time_array)}], f_lower={self.f_lower}, f_ref={self.f_ref} | computation time = {(time.time()-start)} seconds')
         
         self.last_result = WaveformResult(
             hp=hp,
@@ -316,10 +324,10 @@ class Simulate_Waveform(Warnings, Automated_Settings):
         # --------------------------- Update instance attributes --------------------------
         if update_results is True:
             self.time = time_array
-            print(10, len(self.time))
             self.hp_ecc, self.hc_ecc = hp, hc
         
         return hp, hc, time_array
+    
         
 
     def _resolve_mass_distance(self, total_mass, luminosity_distance, geometric_units):
@@ -703,10 +711,44 @@ class Waveform_Properties(Simulate_Waveform):
         return gwecc_object
     
 
-    def circulair_wf(self, time_array=None):
+    # def circulair_wf(self, time_array=None):
+    #     """
+    #     Simulate plus and cross polarisations of NON-ECCENTRIC waveform Inspiral for t in units [M]. 
+    #     Also saves the phase and amplitude accordingly.
+       
+    #     Returns:
+    #     ----------------
+    #     hp_circ [dimensionless], np.array: Time-domain plus polarisation of NON-ECCENTRIC waveform
+    #     hc_circ [dimensionless], np.array: Time-domain cross polarisation of NON-ECCENTRIC waveform
+
+    #     """
+    #     time_array = self.resolve_property(time_array, self.time)
+
+    #     if (self.phase_circ is None) or (self.amp_circ is None):
+    #         self.hp_circ, self.hc_circ, _ = self.simulate_waveform(ecc_ref=0, time_array=time_array)
+            
+    #         self.phase_circ = self.phase(self.hp_circ, self.hc_circ)
+    #         self.amp_circ = self.amplitude(self.hp_circ, self.hc_circ)
+
+    #     elif self.amp_circ is not None and len(self.amp_circ) != len(time_array):
+    #         # Truncate to match
+    #         self.phase_circ = self.phase_circ[:len(time_array)]
+    #         self.amp_circ = self.amp_circ[:len(time_array)]
+    #     else:
+    #         pass # self.hp_circ and self.hc_circ are already set, no need to recompute
+
+    def circulair_wf(self, mass_ratio, mean_ano_ref, chi1, chi2, time_array=None):
         """
         Simulate plus and cross polarisations of NON-ECCENTRIC waveform Inspiral for t in units [M]. 
         Also saves the phase and amplitude accordingly.
+
+        Parameters:
+        ----------------
+        mass_ratio [dimensionless], float [1, inf] : Mass ratio of the binary, q >= 1
+        mean_ano_ref [rad], float : Mean anomaly at reference frequency f_ref
+        chi1 [dimensionless], float, ndarray : Spin of primary. If float, interpreted as z component
+        chi2 [dimensionless], float, ndarray : Spin of secondary. If float, interpreted as z component
+        time_array [dimensionless], np.array : Time array in geometric units. If None, uses the instance time array.
        
         Returns:
         ----------------
@@ -714,23 +756,62 @@ class Waveform_Properties(Simulate_Waveform):
         hc_circ [dimensionless], np.array: Time-domain cross polarisation of NON-ECCENTRIC waveform
 
         """
+        # Resolve parameters (if not specified, use instance objects or default values)
         time_array = self.resolve_property(time_array, self.time)
+        mass_ratio = self.resolve_property(mass_ratio, self.mass_ratio)
+        mean_ano_ref = self.resolve_property(mean_ano_ref, self.mean_ano_ref)
+        chi1 = self.resolve_property(chi1, self.chi1)
+        chi2 = self.resolve_property(chi2, self.chi2)
 
-        if (self.phase_circ is None) or (self.amp_circ is None):
-            self.hp_circ, self.hc_circ, _ = self.simulate_waveform(ecc_ref=0, time_array=time_array)
-            
+        circ_params = (mass_ratio, mean_ano_ref, chi1, chi2)
+
+        # If circular waveform does not yet exist, or parameters changed, or requested time_array is longer → recompute
+        if (
+            (self.phase_circ is None) or (self.amp_circ is None)
+            or (not hasattr(self, "_circ_params")) or (self._circ_params != circ_params)
+            or (len(time_array) > len(self.amp_circ))
+        ):
+            self.hp_circ, self.hc_circ, _ = self.simulate_waveform(
+                ecc_ref=0,
+                time_array=time_array,
+                mass_ratio=mass_ratio,
+                mean_ano_ref=mean_ano_ref,
+                chi1=chi1,
+                chi2=chi2
+            )
+
+            # Calculate phase and amplitude of the circular waveform
             self.phase_circ = self.phase(self.hp_circ, self.hc_circ)
             self.amp_circ = self.amplitude(self.hp_circ, self.hc_circ)
 
-        elif self.amp_circ is not None and len(self.amp_circ) != len(time_array):
+            # Store parameters used for this circular waveform
+            self._circ_params = circ_params
+
+
+        # If circular waveform already exists but is longer than requested time_array, truncate to match the new time_array length. 
+        elif self.amp_circ is not None and len(self.amp_circ) > len(time_array):
             # Truncate to match
-            self.phase_circ = self.phase_circ[:len(time_array)]
-            self.amp_circ = self.amp_circ[:len(time_array)]
+            n_t = len(time_array)
+
+            self.hp_circ = self.hp_circ[-n_t:]
+            self.hc_circ = self.hc_circ[-n_t:]
+            self.phase_circ = self.phase_circ[-n_t:]
+            self.amp_circ = self.amp_circ[-n_t:]
+
         else:
-            pass # self.hp_circ and self.hc_circ are already set, no need to recompute
-
-
-    def calculate_residual(self, hp, hc, ecc_ref=None, property=None, plot_residual=False, save_fig=False):
+            pass  # self.hp_circ and self.hc_circ are already set, no need to recompute
+    
+    
+    def calculate_residual(self, 
+                           hp, 
+                           hc, 
+                           ecc_ref=None, 
+                           mass_ratio=None, 
+                           mean_ano_ref=None,
+                           chi1=None,
+                           chi2=None, 
+                           property=None, 
+                           plot_residual=False, save_fig=False):
         """
         Calculate residual (= eccentric - non-eccentric) of Waveform Inspiral property.
         Possible properties: phase, amplitude or frequency
@@ -751,30 +832,51 @@ class Waveform_Properties(Simulate_Waveform):
             ecc_ref = self.ecc_ref
 
         # Calculate plus and cross polarizations of circular (non-eccentric) waveform
-        self.circulair_wf()
+        self.circulair_wf(mass_ratio=mass_ratio, 
+                          mean_ano_ref=mean_ano_ref, 
+                          chi1=chi1, 
+                          chi2=chi2)
+
         # Calculate phase from plus and cross polarizations
         if property == 'phase':
             circ = self.phase_circ # non-eccentric case
             eccentric = self.phase(hp, hc) # eccentric case
             units = '[radians]'
+            
             # Residual = circular - eccentric to prevent negative residual values
             residual = circ - eccentric # to prevent negative values
+            
             # Warning for negative residual values
-
             if eccentric[1] < 0: # 
-                warnings.warn(self.colored_text("Eccentric phase has negative starting values. This may not be expected for physical waveforms. This usually happens when the eccentric waveformlength is shorter than the chosen time array. Consider decreasing the time array length or decreasing the eccentricity.", 'red'))
+                warnings.warn(self.colored_text("Eccentric phase has negative starting values. " \
+                "This may not be expected for physical waveforms. This usually happens when the eccentric waveformlength is shorter than the chosen time array. " \
+                "Consider decreasing the time array length or decreasing the eccentricity.", 'red'))
             
         # Calculate amplitude from plus and cross polarisations
         elif property == 'amplitude':
             circ = self.amp_circ # non-eccentric case
             eccentric = self.amplitude(hp, hc) # eccentric case
             units = '' # for plotting 
- 
+            # Residual = eccentric - circular to prevent negative residual values
             residual = eccentric - circ
 
         else:
             print('Choose property = "phase", "amplitude", "frequency"', property, 2)
             sys.exit(1)
+        
+        if np.any(np.isnan(residual)) or np.any(np.isinf(residual)):
+            print(self.colored_text(f"Warning: Residual contains NaN or Inf values for parameters ecc={ecc_ref}, l={mean_ano_ref}, q={mass_ratio}, chi1={chi1}, chi2={chi2}. Setting residual to zero. \
+                    \n hp, hc: {hp, hc}", 'red'))
+                
+            plot_residual = True
+
+            fig_polarizations = plt.figure(figsize=(12,5))
+            plt.plot(self.time, hp, label='hp', linewidth=0.6)
+            plt.plot(self.time, hc, label='hc', linewidth=0.6)
+            plt.legend()
+            plt.title(f'Polarizations for parameters ecc={ecc_ref}, l={mean_ano_ref}, q={mass_ratio}, chi1={chi1}, chi2={chi2}')
+            plt.grid(True)
+            plt.tight_layout()
 
         if plot_residual is True:
             fig_residual = plt.figure()
@@ -785,7 +887,7 @@ class Waveform_Properties(Simulate_Waveform):
             
             plt.xlabel('t [M]')
             plt.ylabel(property + ' ' + units)
-            plt.title('Residual')
+            plt.title(f'Residual {property}, ecc={round(ecc_ref, 3)}, q={mass_ratio}, chi1={chi1}, chi2={chi2}, mean_ano_ref={round(mean_ano_ref, 2)}')
             plt.grid(True)
             plt.legend()
 
