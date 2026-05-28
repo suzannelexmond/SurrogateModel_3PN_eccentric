@@ -1,6 +1,8 @@
-import pickle
-
 from generate_PhenomTE import *
+
+import itertools
+import pickle
+import h5py
 
 from sklearn.preprocessing import normalize
 
@@ -24,6 +26,8 @@ from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from mpl_toolkits.mplot3d import Axes3D
+import traceback
+
 
 
 @dataclass
@@ -73,14 +77,20 @@ class TrainingSetResults(Warnings):
     truncate_at_ISCO: bool = True
     truncate_at_tmin: bool = True
     luminosity_distance: Optional[float] = None
-
+    
+    # results parameters
     hp_dataset: Any = None
     hc_dataset: Any = None
-    circ: Any = None
     residuals: Any = None
+
     basis_indices: Any = field(default_factory=list)
     empirical_indices: Any = field(default_factory=list)
-    residual_basis: Any = None
+    leaf_basis_indices: Any = field(default_factory=list)
+    leaf_nodes_indices: Any = field(default_factory=list)
+    orthonormal_basis: Any = field(default_factory=list)
+    greedy_errors: Any = field(default_factory=list)
+
+
     training_set: Any = None
 
     def __post_init__(self):
@@ -106,9 +116,14 @@ class TrainingSetResults(Warnings):
     def _scalar_block(name, value):
         return f"{name}={value:g}"
 
-    def name_blocks(self, include_greedy=True):
-        blocks = [
-            self.property,
+    def name_blocks(self, include_greedy=True, exclude_property=False):
+        if exclude_property is False:
+            blocks = [self.property]
+        else:
+            blocks = []
+
+        blocks.extend(
+            [
             self._range_block("e", self.ecc_ref_space),
             self._range_block("l", self.mean_ano_ref_space),
             self._range_block("q", self.mass_ratio_space),
@@ -116,7 +131,9 @@ class TrainingSetResults(Warnings):
             self._range_block("x2", self.chi2_space),
             self._scalar_block("fr", self.f_ref),
             self._scalar_block("fl", self.f_lower),
-        ]
+            ]
+        )
+            
 
         if self.phiRef != 0:
             blocks.append(self._scalar_block("phi", self.phiRef))
@@ -129,7 +146,6 @@ class TrainingSetResults(Warnings):
             if self.min_greedy_error is not None:
                 blocks.append(f"gerr={self.min_greedy_error}")
 
-
         if not self.truncate_at_ISCO:
             blocks.append("noISCO")
         if not self.truncate_at_tmin:
@@ -141,154 +157,340 @@ class TrainingSetResults(Warnings):
         return blocks
     
 
-    def filename(self, prefix="data", ext="npz", directory=None, include_greedy=True):
-        name = f"{prefix}_{'_'.join(self.name_blocks(include_greedy=include_greedy))}.{ext}"
+    def filename(self, 
+                 prefix="data", 
+                 ext="npz", 
+                 directory=None, 
+                 include_greedy=True, 
+                 exclude_property=False
+                 ):
+        name = f"{prefix}_{'_'.join(self.name_blocks(include_greedy=include_greedy, exclude_property=exclude_property))}.{ext}"
         if directory is not None:
             return f"{directory.rstrip('/')}/{name}"
         return name
 
-    def figname(self, prefix="fig", ext="png", directory=None):
+    def figname(self, 
+                prefix="fig", 
+                ext="png", 
+                directory=None,
+                include_greedy=True,
+                exclude_property=True
+                ):
         # Ensure the directory exists, creating it if necessary and save
         if directory is not None:
             os.makedirs(directory, exist_ok=True)
 
-        figname = self.filename(prefix=prefix, ext=ext, directory=directory)
+        figname = self.filename(prefix=prefix, 
+                                ext=ext, 
+                                directory=directory,
+                                include_greedy=include_greedy,
+                                exclude_property=exclude_property
+                                )
         print(self.colored_text(f"Figure is saved in {figname}", 'blue'))
 
         return figname
     
-    def save_residuals(self, prefix="residuals", directory="Straindata/Residuals", free_memory=True):
-        """Function to save the residual dataset to npz file."""
+    def save(self,
+         prefix="training_set",
+         directory="Straindata/TrainingSetResults",
+         save_polarizations=False,
+         save_residuals=False,
+         free_memory=True):
+
+        os.makedirs(directory, exist_ok=True)
+        filepath = self.filename(prefix=prefix, ext="h5", directory=directory)
+
+        if os.path.exists(filepath):
+            print(self.colored_text(f"File already exists: {filepath}", "yellow"))
+            return filepath
+
+        with h5py.File(filepath, "w") as f:
+
+            meta = f.create_group("meta")
+            meta.attrs["property"] = self.property
+            meta.attrs["f_ref"] = self.f_ref
+            meta.attrs["f_lower"] = self.f_lower
+            meta.attrs["phiRef"] = self.phiRef
+            meta.attrs["inclination"] = self.inclination
+
+            # small arrays
+            f.create_dataset("ecc_ref_space", data=self.ecc_ref_space)
+            f.create_dataset("mean_ano_ref_space", data=self.mean_ano_ref_space)
+            f.create_dataset("mass_ratio_space", data=self.mass_ratio_space)
+            f.create_dataset("chi1_space", data=self.chi1_space)
+            f.create_dataset("chi2_space", data=self.chi2_space)
+
+            f.create_dataset("parameter_grid", data=self.parameter_grid)
+            f.create_dataset("time", data=self.time)
+
+            f.create_dataset("basis_indices", data=np.array(self.basis_indices))
+            f.create_dataset("empirical_indices", data=np.array(self.empirical_indices))
+            f.create_dataset("leaf_basis_indices", data=np.array(self.leaf_basis_indices))
+            f.create_dataset("leaf_nodes_indices", data=np.array(self.leaf_nodes_indices))
+            f.create_dataset("training_set", data=self.training_set)
+
+            # file pointers (IMPORTANT)
+            meta.attrs["residuals_file"] = getattr(self, "residuals_file", "")
+            meta.attrs["polarisation_file"] = getattr(self, "polarisation_file", "")
+            meta.attrs["orthonormal_basis_file"] = getattr(self, "orthonormal_basis_file", "")
+            meta.attrs["greedy_errors_file"] = getattr(self, "greedy_errors_file", "")
+
+        # optionally clear RAM
+        if free_memory:
+            if save_residuals:
+                self.residuals = None
+            if save_polarizations:
+                self.hp_dataset = None
+                self.hc_dataset = None
+
+        return filepath
+        
+    def load(self,
+            prefix="training_set",
+            directory="Straindata/TrainingSetResults",
+            load_residuals=False,
+            load_polarisations=False,
+            load_greedy_errors=False,
+            load_orthonormal_basis=False
+            ):
+
+        filepath = self.filename(prefix=prefix, ext="h5", directory=directory)
+
+        with h5py.File(filepath, "r") as f:
+
+            # ---- load metadata ----
+            self.property = f["meta"].attrs["property"]
+            self.f_ref = f["meta"].attrs["f_ref"]
+            self.f_lower = f["meta"].attrs["f_lower"]
+            self.phiRef = f["meta"].attrs["phiRef"]
+            self.inclination = f["meta"].attrs["inclination"]
+            # [:] load as numpy array
+            self.ecc_ref_space = f["ecc_ref_space"][:]
+            self.mean_ano_ref_space = f["mean_ano_ref_space"][:]
+            self.mass_ratio_space = f["mass_ratio_space"][:]
+            self.chi1_space = f["chi1_space"][:]
+            self.chi2_space = f["chi2_space"][:]
+
+            self.parameter_grid = f["parameter_grid"][:]
+            self.time = f["time"][:]
+            self.basis_indices = f["basis_indices"][:]
+            self.empirical_indices = f["empirical_indices"][:]
+            self.leaf_basis_indices = f["leaf_basis_indices"][:]
+            self.leaf_nodes_indices = f["leaf_nodes_indices"][:]
+            self.training_set = f["training_set"][:]
+
+            # file references
+            self.residuals_file = f["meta"].attrs.get("residuals_file", "")
+            self.polarisation_file = f["meta"].attrs.get("polarisation_file", "")
+
+        print(self.colored_text(f"Loaded training set: {filepath}", "blue"))
+
+        # ---- optional loading ----
+        if load_residuals:
+            self.load_residuals()
+
+        if load_polarisations:
+            self.load_polarizations()
+
+        if load_greedy_errors:
+            self.load_greedy_errors()
+        
+        if load_orthonormal_basis:
+            self.load_orthonormal_basis()
+
+        return self
+    
+    def save_residuals(self,
+                   prefix="residuals",
+                   directory="Straindata/Residuals",
+                   free_memory=True
+                   ):
+        if self.residuals is None:
+            raise ValueError("Residuals not computed.")
         
         os.makedirs(directory, exist_ok=True)
-        filepath = self.filename(prefix=prefix, ext="npz", directory=directory, include_greedy=False)
-
-        if self.residuals is None:
-            raise ValueError("Residuals are not calculated yet. Run generate_property_dataset() first.")
-        else:
-            # If file already exists, do not overwrite
-            if not os.path.isfile(filepath):
-                np.savez(
-                    filepath,
-                    residuals = self.residuals,
-                    time = self.time,
-                    circ = self.circ,
-                )
-
-            print(self.colored_text(f"Residual dataset saved in {filepath}", 'blue'))
+        filepath = self.filename(prefix=prefix, ext="h5", directory=directory)
         
+        if not os.path.exists(filepath):
+            with h5py.File(filepath, "w") as f:
+                f.create_dataset("residuals",
+                                data=self.residuals,
+                                compression="gzip",
+                                chunks=True)
+
+                f.create_dataset("time", data=self.time)
+
+        print(self.colored_text(f"Residuals saved: {filepath}", "blue"))
+
         if free_memory:
             self.residuals = None
 
         return filepath
 
-    def load_residuals(self, prefix="residuals", directory="Straindata/Residuals"):
-        """Function to load the residual dataset from npz file."""
-        
-        filepath = self.filename(prefix=prefix, ext="npz", directory=directory, include_greedy=False)
-        data = np.load(filepath, allow_pickle=True)
+    def load_residuals(self,
+                    prefix="residuals",
+                    directory="Straindata/Residuals"):
+        if self.residuals is None:
+            filepath = self.filename(prefix=prefix, ext="h5", directory=directory)
 
-        self.residuals = data['residuals']
-        self.time = data['time']
-        self.circ = data['circ']
+            with h5py.File(filepath, "r") as f:
+                # [:] load as numpy array
+                self.residuals = f["residuals"][:]  
+                self.time = f["time"][:]
 
-        data.close()
-
-        print(self.colored_text(f"Residual dataset found and loaded: {filepath}", 'blue'))
-
+            print(self.colored_text(
+                f"Residual dataset loaded: {filepath}", 'blue'
+            ))
+            
         return self
     
-    def save_polarizations(self, prefix="polarisation", directory="Straindata/Polarisations", free_memory=True):
-        """Function to save the polarisation datasets to npz files."""
+    def save_polarizations(self,
+                       prefix="polarisation",
+                       directory="Straindata/Polarisations",
+                       free_memory=True):
 
         os.makedirs(directory, exist_ok=True)
-        filepath = self.filename(prefix=prefix, ext="npz", directory=directory, include_greedy=False)
+        filepath = self.filename(prefix=prefix, 
+                                 ext="h5", 
+                                 directory=directory, 
+                                 include_greedy=False,
+                                 exclude_property=True)
 
         if self.hp_dataset is None or self.hc_dataset is None:
-            raise ValueError("Polarisation datasets are not provided. First run _generate_polarisation_data() to generate and save the polarisation datasets.")
-        else:
-            # If file already exists, do not overwrite
-            if not os.path.isfile(filepath):
-                np.savez(
-                    filepath,
-                    hp = self.hp_dataset,
-                    hc = self.hc_dataset,
-                    time = self.time,
-                    allow_pickle=True
-                )
+            raise ValueError("Polarizations not available.")
 
-            print(self.colored_text(f"Polarisation dataset saved in {filepath}", 'blue'))
-        
+        if not os.path.exists(filepath):
+            with h5py.File(filepath, "w") as f:
+                f.create_dataset("hp", data=self.hp_dataset,
+                                compression="gzip", chunks=True)
+                f.create_dataset("hc", data=self.hc_dataset,
+                                compression="gzip", chunks=True)
+                f.create_dataset("time", data=self.time)
+
+        self.polarisation_file = filepath
+
+        print(self.colored_text(f"Polarizations saved: {filepath}", "blue"))
+
         if free_memory:
             self.hp_dataset = None
             self.hc_dataset = None
 
         return filepath
     
-    def load_polarizations(self, prefix="polarisation", directory="Straindata/Polarisations"):
-        """Function to load the polarisation datasets from npz files."""
-        filepath = self.filename(prefix=prefix, ext="npz", directory=directory, include_greedy=False)
-        data = np.load(filepath, allow_pickle=True)
+    def load_polarizations(self,
+                            prefix="polarisation",
+                            directory="Straindata/Polarisations"
+                            ):
+        if self.hp_dataset is None or self.hc_dataset is None:
+            filepath = self.filename(prefix=prefix, 
+                                    ext="h5", 
+                                    directory=directory, 
+                                    include_greedy=False,
+                                    exclude_property=True)
 
-        self.hp_dataset = data['hp']
-        self.hc_dataset = data['hc']
-        self.time = data['time']
+            with h5py.File(filepath, "r") as f:
+                self.hp_dataset = f["hp"][:]   # lazy
+                self.hc_dataset = f["hc"][:]   # lazy
+                self.time = f["time"][:]    # safe small array
 
-        data.close()
+            self._pol_handle = f
 
-        print(self.colored_text(f"Polarisation dataset found and loaded: {filepath}", 'blue'))
+            print(self.colored_text(f"Polarization dataset found and loaded: {filepath}", 'blue'))
+
         return self
     
-    def save(self, prefix="training_set", directory="Straindata/TrainingSetResults", save_polarizations=False, save_residuals=False, free_memory=True):
-        """Saves the TrainingSetResults object to a pkl file using pickle. Optionally saves polarisation datasets and residuals as well, and frees memory after saving if desired."""
-        
-        # Ensure the directory exists, creating it if necessary and save
+    def save_orthonormal_basis(self,
+                           prefix="orthonormal_basis",
+                           directory="Straindata/Basis",
+                           free_memory=True):
+
+        if self.orthonormal_basis is None:
+            raise ValueError("Orthonormal basis not available.")
+
         os.makedirs(directory, exist_ok=True)
-        filepath = self.filename(prefix=prefix, ext="pkl", directory=directory)
+        filepath = self.filename(prefix=prefix, ext="h5", directory=directory)
 
-        # Save object in pkl format
-        if not os.path.isfile(filepath):
-            with open(filepath, 'wb') as f:
-                pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
+        if not os.path.exists(filepath):
+            with h5py.File(filepath, "w") as f:
 
-            print(self.colored_text(f"Training set object saved in {filepath}", 'blue'))
-        else:
-            print(self.colored_text(f"File {filepath} already exists. Training set object not saved to avoid overwriting.", 'yellow'))
+                f.create_dataset(
+                    "orthonormal_basis",
+                    data=np.asarray(self.orthonormal_basis),
+                    compression="gzip",
+                    chunks=True
+                )
+
+        self.orthonormal_basis_file = filepath
+
+        print(self.colored_text(f"Orthonormal basis saved: {filepath}", "blue"))
 
         if free_memory:
-            if save_polarizations:
-                self.hp_dataset = None
-                self.hc_dataset = None
-            if save_residuals:
-                self.residuals = None
+            self.orthonormal_basis = None
 
         return filepath
     
-    def load(self, 
-             prefix="training_set", 
-             directory="Straindata/TrainingSetResults",
-             load_polarisations=False, 
-             load_residuals=False
-            ):
-        """Loads the saved TrainingSetResults object from a file."""
+    def load_orthonormal_basis(self,
+                           prefix="orthonormal_basis",
+                           directory="Straindata/Basis"):
+        
+        if self.orthonormal_basis is None:
+            try:
+                filepath = self.filename(prefix=prefix, ext="h5", directory=directory)
+                f = h5py.File(filepath, "r")
+                self.orthonormal_basis = f["orthonormal_basis"]  # lazy
 
-        filepath = self.filename(prefix=prefix, ext="pkl", directory=directory)
-        with open(filepath, 'rb') as f:
-            loaded_obj = pickle.load(f)
+                print(self.colored_text(f"Orthonormal basis loaded: {filepath}", "blue"))
+            
+            except Exception as e:
+                print(self.colored_text(f"Error loading orthonormal basis from {filepath}: {e}", "red"))
 
-        if not isinstance(loaded_obj, TrainingSetResults):
-            raise ValueError(f"Loaded object is not of type TrainingSetResults. Got {type(loaded_obj)} instead.")
+        return self
+    
+    def save_greedy_errors(self,
+                       prefix="greedy_errors",
+                       directory="Straindata/Greedy",
+                       free_memory=True):
 
-        print(self.colored_text(f"TrainingSetResults loaded from {filepath}", 'blue'))
+        if self.greedy_errors is None:
+            raise ValueError("Greedy errors not available.")
 
-        # If save if True, save the polarizations or residuals in the object as well. Both are these can be big data objects, so avoid this by default.
-        if load_polarisations:
-            loaded_obj.load_polarizations()
+        os.makedirs(directory, exist_ok=True)
+        filepath = self.filename(prefix=prefix, ext="h5", directory=directory)
 
-        if load_residuals:
-            loaded_obj.load_residuals()
+        if not os.path.exists(filepath):
+            with h5py.File(filepath, "w") as f:
 
-        return loaded_obj
+                f.create_dataset(
+                    "greedy_errors",
+                    data=np.asarray(self.greedy_errors),
+                    compression="gzip",
+                    chunks=True
+                )
+
+        self.greedy_errors_file = filepath
+
+        print(self.colored_text(f"Greedy errors saved: {filepath}", "blue"))
+
+        if free_memory:
+            self.greedy_errors = None
+
+        return filepath
+    
+    def load_greedy_errors(self,
+                       prefix="greedy_errors",
+                       directory="Straindata/Greedy"):
+        
+        if self.greedy_errors is None:
+            try:
+                filepath = self.filename(prefix=prefix, ext="h5", directory=directory)
+                f = h5py.File(filepath, "r")
+                self.greedy_errors = f["greedy_errors"]  # lazy
+
+                print(self.colored_text(f"Greedy errors loaded: {filepath}", "blue"))
+            
+            except Exception as e:
+                print(self.colored_text(f"Error loading greedy errors from {filepath}: {e}", "red"))
+        return self
 
 @dataclass
 class FlowDiagnosticResult:
@@ -360,23 +562,16 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         self.chi1_space = self.allowed_chispin_warning(chi1_parameterspace)
         self.chi2_space = self.allowed_chispin_warning(chi2_parameterspace)
 
-        # Build full parameter grid
-        E, L, Q, C1, C2 = np.meshgrid(
-            self.ecc_ref_space,
-            self.mean_ano_ref_space,
-            self.mass_ratio_space,
-            self.chi1_space,
-            self.chi2_space,
-            indexing="ij"
+        self.parameter_grid = np.array(
+            list(itertools.product(
+                self.ecc_ref_space,
+                self.mean_ano_ref_space,
+                self.mass_ratio_space,
+                self.chi1_space,
+                self.chi2_space
+            )),
+            dtype=float
         )
-
-        self.parameter_grid = np.column_stack([
-            E.ravel(),
-            L.ravel(),
-            Q.ravel(),
-            C1.ravel(),
-            C2.ravel()
-        ])
 
         self.minimum_spacing_greedy = minimum_spacing_greedy
 
@@ -389,7 +584,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         self.residuals_space = None
         self.residual_reduced_basis = None
         self.indices_basis = None
-        self.best_rep_parameters = None
         self.empirical_nodes_idx = None
 
         self.highest_tmin_value = None
@@ -446,22 +640,16 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         chi2_space = self.resolve_property(prop=chi2_space, default=self.chi2_space)
 
         # Build full parameter grid
-        E, L, Q, C1, C2 = np.meshgrid(
-            ecc_ref_space,
-            self.mean_ano_ref_space,
-            mass_ratio_space,
-            chi1_space,
-            chi2_space,
-            indexing="ij"
+        parameter_grid = np.array(
+            list(itertools.product(
+                ecc_ref_space,
+                mean_ano_ref_space,
+                mass_ratio_space,
+                chi1_space,
+                chi2_space
+            )),
+            dtype=float
         )
-
-        parameter_grid = np.column_stack([
-            E.ravel(),
-            L.ravel(),
-            Q.ravel(),
-            C1.ravel(),
-            C2.ravel()
-        ])
  
         f_ref = self.resolve_property(prop=f_ref, default=self.f_ref)
         f_lower = self.resolve_property(prop=f_lower, default=self.f_lower)
@@ -506,6 +694,24 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
             truncate_at_tmin=truncate_at_tmin,
         )
 
+
+    def _get_training_obj(self, property):
+        if property == "amplitude":
+            if self.training_amp is None:
+                self.training_amp = TrainingSetResults(
+                    **self.result_kwargs_training(property="amplitude")
+                )
+            return self.training_amp
+        elif property == "phase":
+            if self.training_phase is None:
+                self.training_phase = TrainingSetResults(
+                    **self.result_kwargs_training(property="phase")
+                )
+            return self.training_phase
+        else:
+            raise ValueError(f"Unknown property: {property}")
+        
+
     def generate_property_dataset(self, train_obj: TrainingSetResults, 
                                   ecc_ref_list=None, 
                                   mean_ano_ref_list=None, 
@@ -515,9 +721,8 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                                   save_residuals=True, 
                                   save_polarizations=True,
                                   plot_polarizations=False, save_fig_polarizations=False,
-                                  plot_residuals_time_evolv=False, save_fig_time_evolve=False,
-                                  plot_residuals_eccentric_evolv=False, save_fig_eccentric_evolv=False,  
-                                  show_legend=False
+                                  plot_residuals_time_evolve=False, save_fig_time_evolve=False,
+                                  plot_residuals_eccentric_evolve=False, save_fig_eccentric_evolve=False,  
                                   ):
         """
         Generates a dataset of waveform residuals based on the specified property for a certain range of eccentricities (ecc).
@@ -550,245 +755,42 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         train_obj.mass_ratio_space = self.resolve_property(prop=mass_ratios_list, default=train_obj.mass_ratio_space) 
         train_obj.chi1_space = self.resolve_property(prop=chi1_list, default=train_obj.chi1_space)
         train_obj.chi2_space = self.resolve_property(prop=chi2_list, default=train_obj.chi2_space)
+        train_obj.truncate_at_ISCO = self.resolve_property(prop=train_obj.truncate_at_ISCO, default=self.truncate_at_ISCO)
+        train_obj.truncate_at_tmin = self.resolve_property(prop=train_obj.truncate_at_tmin, default=self.truncate_at_tmin)
 
         try:
         # Attempt to load existing residual dataset
             train_obj = train_obj.load_residuals()
             self.time = train_obj.time
 
-            if plot_residuals_eccentric_evolv or plot_residuals_time_evolv:
-                self._plot_residuals(train_obj, plot_residuals_eccentric_evolv, plot_residuals_time_evolv, save_fig_eccentric_evolv, save_fig_time_evolve, show_legend)
+            if plot_residuals_eccentric_evolve or plot_residuals_time_evolve:
+                self._plot_residuals(train_obj, 
+                                     plot_residuals_eccentric_evolve, save_fig_eccentric_evolve, 
+                                     plot_residuals_time_evolve, save_fig_time_evolve
+                                     )
             
         except Exception as e:
             print(e)
+            traceback.print_exc()
 
             # # If attempt to load residuals failed, generate polarisations and calculate residuals
             # hp_dataset, hc_dataset = self._generate_polarisation_data(train_obj=train_obj, save_polarizations=save_polarizations)
 
             self._calculate_residuals(train_obj=train_obj, 
+                                      truncate_at_ISCO=train_obj.truncate_at_ISCO,
+                                      truncate_at_tmin=train_obj.truncate_at_tmin,
                                       save_residuals=save_residuals, 
                                       save_polarizations=save_polarizations,
                                       plot_polarizations=plot_polarizations, save_fig_polarizations=save_fig_polarizations,
-                                      plot_residuals_eccentric_evolv=plot_residuals_eccentric_evolv, 
-                                      plot_residuals_time_evolv=plot_residuals_time_evolv, 
-                                      save_fig_eccentric_evolv=save_fig_eccentric_evolv, 
-                                      save_fig_time_evolve=save_fig_time_evolve, 
-                                      show_legend=show_legend)
+                                      plot_residuals_eccentric_evolve=plot_residuals_eccentric_evolve, 
+                                      plot_residuals_time_evolve=plot_residuals_time_evolve, 
+                                      save_fig_eccentric_evolve=save_fig_eccentric_evolve, 
+                                      save_fig_time_evolve=save_fig_time_evolve,
+                                      )
             
             # del hp_dataset, hc_dataset  # Free memory
-
         return train_obj
-
-    # def _generate_polarisation_data(self,
-    #                                 train_obj: TrainingSetResults,
-    #                                 truncate_at_ISCO=None,
-    #                                 truncate_at_tmin=None,
-    #                                 plot_polarisations=False,
-    #                                 save_polarizations=True
-    #                                 ):
-    #     """Helper function to generate polarisation data for a list of parameters: eccentricities, mass ratios and spins. 
-    #     The generated waveforms are truncated to the shortest waveform in the dataset, which is determined by the highest eccentricity and mass ratio and lowest spins. 
-    #     This ensures that all waveforms have the same length and can be used for the greedy algorithm and empirical interpolation. 
-    #     If the polarisation datasets already exist, they are loaded from file instead of being generated again."""
-        
-    #     truncate_at_ISCO = self.resolve_property(prop=truncate_at_ISCO, default=self.truncate_at_ISCO)
-    #     truncate_at_tmin = self.resolve_property(prop=truncate_at_tmin, default=self.truncate_at_tmin)
-
-    #     try:
-    #         train_obj = train_obj.load_polarizations()
-    #         self.time = train_obj.time
-
-    #     except Exception as e:
-    #         print(e)
-
-    #         # Choose shortest expected waveform corner
-    #         ecc_short = np.max(train_obj.ecc_ref_space)
-    #         l_short = np.min(train_obj.mean_ano_ref_space)
-    #         q_short = np.max(train_obj.mass_ratio_space)
-    #         chi1_short = np.min(train_obj.chi1_space)
-    #         chi2_short = np.min(train_obj.chi2_space)
-
-    #         # Generate shortest waveform first.
-    #         # update_results=True updates self.time.
-    #         hp_short, hc_short, time_short = self.simulate_waveform(
-    #             ecc_ref=ecc_short,
-    #             mean_ano_ref=l_short,
-    #             mass_ratio=q_short,
-    #             chi1=chi1_short,
-    #             chi2=chi2_short,
-    #             truncate_at_ISCO=truncate_at_ISCO,
-    #             truncate_at_tmin=truncate_at_tmin,
-    #             update_results=True,
-    #         )
-
-    #         print(f"Shortest waveform generated for parameters: ecc={ecc_short}, q={q_short}, chi1={chi1_short}, chi2={chi2_short}. Waveform length: {len(train_obj.time), train_obj.time[0]} samples.")
-    #         n_e = len(train_obj.ecc_ref_space)
-    #         n_l = len(train_obj.mean_ano_ref_space)
-    #         n_q = len(train_obj.mass_ratio_space)
-    #         n_c1 = len(train_obj.chi1_space)
-    #         n_c2 = len(train_obj.chi2_space)
-    #         n_t = len(self.time) # Use updated time array from the shortest waveform
-
-    #         hp_flat = np.zeros((len(train_obj.parameter_grid), n_t))
-    #         hc_flat = np.zeros((len(train_obj.parameter_grid), n_t))
-
-    #         # Find the flat index of the shortest waveform point
-    #         short_mask = (
-    #             (train_obj.parameter_grid[:, 0] == ecc_short) &
-    #             (train_obj.parameter_grid[:, 1] == l_short) &
-    #             (train_obj.parameter_grid[:, 2] == q_short) &
-    #             (train_obj.parameter_grid[:, 3] == chi1_short) &
-    #             (train_obj.parameter_grid[:, 4] == chi2_short)
-    #         )
-
-    #         short_idx = np.where(short_mask)[0][0]
-
-    #         hp_flat[short_idx] = hp_short
-    #         hc_flat[short_idx] = hc_short
-
-    #         # Generate remaining waveforms on the fixed shortened time array
-    #         for idx, (ecc, l, q, chi1, chi2) in enumerate(train_obj.parameter_grid):
-    #             if idx == short_idx:
-    #                 continue
-
-    #             hp, hc, _ = self.simulate_waveform(
-    #                 ecc_ref=ecc,
-    #                 mean_ano_ref=l,
-    #                 mass_ratio=q,
-    #                 chi1=chi1,
-    #                 chi2=chi2,
-    #                 truncate_at_ISCO=False,
-    #                 truncate_at_tmin=False,
-    #                 update_results=False,
-    #             )
-
-    #             hp_flat[idx] = hp
-    #             hc_flat[idx] = hc
-
-    #         train_obj.hp_dataset = hp_flat.reshape(n_e, n_l, n_q, n_c1, n_c2, n_t)
-    #         train_obj.hc_dataset = hc_flat.reshape(n_e, n_l, n_q, n_c1, n_c2, n_t)
-    #         train_obj.time = self.time
-
-    #         print(f"All waveforms generated and reshaped to parameter grid. Dataset shape: {train_obj.hp_dataset.shape}")
-            
-    #         if save_polarizations:
-    #             train_obj.save_polarizations(free_memory=False)
-
-    #     if plot_polarisations:
-    #         self._plot_polarizations_dataset(train_obj, self.parameter_grid)
-
-    #     return train_obj.hp_dataset, train_obj.hc_dataset
-
-#############################################################################
-    # def _plot_polarizations_dataset(self, train_obj: TrainingSetResults, parameter_grid):
-    #     if train_obj.hp_dataset is None:
-    #         train_obj = train_obj.load_polarizations()
-
-    #     hp_flat = train_obj.hp_dataset.reshape(len(parameter_grid), len(train_obj.time))
-
-    #     plt.figure(figsize=(10, 6))
-
-    #     for idx, (ecc, l, q, chi1, chi2) in enumerate(parameter_grid):
-    #         label = f"e={ecc:.3f}, l={l:.3f}, q={q:.2f}, chi1={chi1:.2f}, chi2={chi2:.2f}"
-    #         plt.plot(train_obj.time, hp_flat[idx], linewidth=0.7, label=label)
-
-    #     plt.title("Plus Polarisation Dataset")
-    #     plt.xlabel("Time [M]")
-    #     plt.ylabel(r"$h_+$")
-    #     plt.grid(True)
-
-    #     if len(parameter_grid) <= 15:
-    #         plt.legend(fontsize="small")
-
-    #     plt.tight_layout()
-###############################################################################3
-
-    # def _calculate_residuals(self, 
-    #                         train_obj: TrainingSetResults, 
-    #                         save_residuals=True, 
-    #                         plot_residuals_eccentric_evolv=False, 
-    #                         save_fig_time_evolve=False,
-    #                         plot_residuals_time_evolv=False, 
-    #                         save_fig_eccentric_evolv=False,  
-    #                         show_legend=False
-    #                         ):
-    #     """
-    #     Helper function to calculate residuals for a property given polarisation data.
-    #     """
-
-    #     if train_obj.hp_dataset is None or train_obj.hc_dataset is None:
-    #         raise ValueError(
-    #             "Polarisation datasets are not available. "
-    #             "First run _generate_polarisation_data() to generate the polarisation datasets."
-    #         )
-
-    #     # Dataset dimensions
-    #     n_e = len(train_obj.ecc_ref_space)
-    #     n_l = len(train_obj.mean_ano_ref_space)
-    #     n_q = len(train_obj.mass_ratio_space)
-    #     n_c1 = len(train_obj.chi1_space)
-    #     n_c2 = len(train_obj.chi2_space)
-    #     n_t = len(train_obj.time)
-
-    #     expected_shape = (n_e, n_l, n_q, n_c1, n_c2, n_t)
-
-    #     if train_obj.hp_dataset.shape != expected_shape:
-    #         raise ValueError(
-    #             f"hp_dataset has shape {train_obj.hp_dataset.shape}, "
-    #             f"but expected {expected_shape}."
-    #         )
-
-    #     if train_obj.hc_dataset.shape != expected_shape:
-    #         raise ValueError(
-    #             f"hc_dataset has shape {train_obj.hc_dataset.shape}, "
-    #             f"but expected {expected_shape}."
-    #         )
-
-    #     # Flatten waveform datasets so idx matches train_obj.parameter_grid
-    #     hp_flat = train_obj.hp_dataset.reshape(len(train_obj.parameter_grid), n_t)
-    #     hc_flat = train_obj.hc_dataset.reshape(len(train_obj.parameter_grid), n_t)
-
-    #     residuals_flat = np.zeros((len(train_obj.parameter_grid), n_t))
-
-    #     for idx, (ecc, l, q, chi1, chi2) in enumerate(train_obj.parameter_grid):
-
-    #         residual = self.calculate_residual(
-    #             hp_flat[idx],
-    #             hc_flat[idx],
-    #             mean_ano_ref=l,
-    #             ecc_ref=ecc,
-    #             mass_ratio=q,
-    #             chi1=chi1,
-    #             chi2=chi2,
-    #             property=train_obj.property
-    #         )
-
-    #         residuals_flat[idx] = residual
-
-    #         del residual
-
-    #     train_obj.residuals = residuals_flat.reshape(n_e, n_l, n_q, n_c1, n_c2, n_t)
-    #     train_obj.time = self.time
-
-    #     print(
-    #         f"Generated residual parameter-space dataset for {train_obj.property}: "
-    #         f"{len(train_obj.parameter_grid)} waveforms"
-    #     )
-
-    #     if plot_residuals_eccentric_evolv or plot_residuals_time_evolv:
-    #         self._plot_residuals(
-    #             train_obj,
-    #             plot_residuals_eccentric_evolv,
-    #             plot_residuals_time_evolv,
-    #             save_fig_eccentric_evolv,
-    #             save_fig_time_evolve,
-    #             show_legend=show_legend
-    #         )
-
-    #     if save_residuals:
-    #         train_obj.save_residuals(free_memory=False)
-
-    #     return train_obj.residuals
+   
 
     def _calculate_residuals(self, 
                              train_obj:TrainingSetResults, 
@@ -841,92 +843,121 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                                             mass_ratio=q, 
                                             chi1=chi1, 
                                             chi2=chi2, 
-                                            property=train_obj.property)
+                                            property=train_obj.property
+                                            )
             
             return residual
 
 
         try:
-            train_obj = train_obj.load_residuals()
+            """ Try loading residuals from previous pre-computation """
+            if plot_polarizations:
+                train_obj = train_obj.load_polarizations(prefix="polarisation", directory="Straindata/Polarisations")
+                train_obj = train_obj.load_residuals(prefix="residuals", directory="Straindata/Residuals")
+            else:
+                train_obj = train_obj.load_residuals(prefix="residuals", directory="Straindata/Residuals")
             self.time = train_obj.time
 
         except Exception as e:
+            """No pre-computed residuals found. Attempting to load polarisations to prevent re-computation of waveforms."""
             print(e)
-
-            # Start with longest time_array. Will be shortened iteratively to the shortest time_array.
-            current_time = self.time.copy()
-
-            n_e = len(train_obj.ecc_ref_space)
-            n_l = len(train_obj.mean_ano_ref_space)
-            n_q = len(train_obj.mass_ratio_space)
-            n_c1 = len(train_obj.chi1_space)
-            n_c2 = len(train_obj.chi2_space)
+            traceback.print_exc()
             n_params = len(train_obj.parameter_grid)
+            
+            try:
+                """ Try loading polarisations to prevent re-computation """
+                train_obj = train_obj.load_polarizations(prefix="polarisation", directory="Straindata/Polarisations")
+                self.time = train_obj.time
 
-            # Polarisation datasets
-            hp_flat = np.empty((n_params, len(current_time)))
-            hc_flat = np.empty((n_params, len(current_time)))
-            # Residuals dataset
-            residuals_flat = np.empty((n_params, len(current_time)))
+                hp_flat = train_obj.hp_dataset.reshape(len(train_obj.parameter_grid), len(train_obj.time))
+                hc_flat = train_obj.hc_dataset.reshape(len(train_obj.parameter_grid), len(train_obj.time))
 
-            # Simulate all polarizations and calculate residuals for every parameter combination in the parameter grid.
-            for idx, (ecc, l, q, chi1, chi2) in enumerate(train_obj.parameter_grid):
-                hp, hc, time_array = self.simulate_waveform(
-                    time_array=current_time,
-                    ecc_ref=ecc,
-                    mean_ano_ref=l,
-                    mass_ratio=q,
-                    chi1=chi1,
-                    chi2=chi2,
-                    truncate_at_ISCO=truncate_at_ISCO,
-                    truncate_at_tmin=truncate_at_tmin,
-                    update_results=True,
-                    show_truncation_warnings=False
-                )
+                residuals_flat = np.empty_like(hp_flat)
+                for idx, (ecc, l, q, chi1, chi2) in enumerate(train_obj.parameter_grid):
 
-                # Update mask: keep only the part of base_time covered by this waveform
-                current_mask = (current_time >= time_array[0]) & (current_time <= time_array[-1])
-                current_time = time_array
+                    residual = calculate_residual_wrapper(hp_flat[idx], hc_flat[idx], ecc, l, q, chi1, chi2)
+                    residuals_flat[idx] = residual
 
-                # idxs of the current time array in the previous time array
-                start_idx = np.where(current_mask)[0][0]
-                end_idx = np.where(current_mask)[0][-1] + 1  # +
-                active_n_t = len(current_time)
+                train_obj.residuals = residuals_flat
 
-                # Calculate circular waveform for the same parameters, but with ecc=0, to use as reference for the residual calculation
-                residual = calculate_residual_wrapper(hp, hc, ecc, l, q, chi1, chi2)
+            except Exception as e2:
+                """No pre-computed polarisations and residuals found. Compute all from scratch."""
 
-                # Adjust lengths of the datasets
-                if active_n_t != hp_flat.shape[1]:
-                    hp_flat = hp_flat[:, start_idx:end_idx]
-                    hc_flat = hc_flat[:, start_idx:end_idx]
-                    residuals_flat = residuals_flat[:, start_idx:end_idx]
+                print(e2)
+                traceback.print_exc()
+
+                # Start with longest time_array. Will be shortened iteratively to the shortest time_array.
+                current_time = self.time.copy()
+
                 
-                # Load the simulations into the flattened datasets 
-                hp_flat[idx] = hp
-                hc_flat[idx] = hc
-                residuals_flat[idx] = residual
 
-            train_obj.hp_dataset = hp_flat.reshape(n_e, n_l, n_q, n_c1, n_c2, active_n_t)
-            train_obj.hc_dataset = hc_flat.reshape(n_e, n_l, n_q, n_c1, n_c2, active_n_t)
-            train_obj.residuals = residuals_flat.reshape(n_e, n_l, n_q, n_c1, n_c2, active_n_t)
+                # Polarisation datasets
+                hp_flat = np.empty((n_params, len(current_time)))
+                hc_flat = np.empty_like(hp_flat)
+                # Residuals dataset
+                residuals_flat = np.empty_like(hp_flat)
 
-            # Update time arrays
-            train_obj.time = current_time
-            self.time = current_time
+                # Simulate all polarizations and calculate residuals for every parameter combination in the parameter grid.
+                for idx, (ecc, l, q, chi1, chi2) in enumerate(train_obj.parameter_grid):
+                    hp, hc, time_array = self.simulate_waveform(
+                        time_array=current_time,
+                        ecc_ref=ecc,
+                        mean_ano_ref=l,
+                        mass_ratio=q,
+                        chi1=chi1,
+                        chi2=chi2,
+                        truncate_at_ISCO=truncate_at_ISCO,
+                        truncate_at_tmin=truncate_at_tmin,
+                        update_results=True,
+                        show_truncation_warnings=False
+                    )
 
-            print(self.colored_text(f"All waveforms generated in {(time.time() - start)/60:.2f} minutes.", 'green'))
+                    # Update mask: keep only the part of base_time covered by this waveform
+                    current_mask = (current_time >= time_array[0]) & (current_time <= time_array[-1])
+                    current_time = time_array
 
-            # Save polarisation and residual datasets to file
-            if save_polarizations:
-                train_obj.save_polarizations(free_memory=False)
+                    # idxs of the current time array in the previous time array
+                    start_idx = np.where(current_mask)[0][0]
+                    end_idx = np.where(current_mask)[0][-1] + 1  # +
+                    active_n_t = len(current_time)
+
+                    # Calculate circular waveform for the same parameters, but with ecc=0, to use as reference for the residual calculation
+                    residual = calculate_residual_wrapper(hp, hc, ecc, l, q, chi1, chi2)
+
+                    # Adjust lengths of the datasets
+                    if active_n_t != hp_flat.shape[1]:
+                        hp_flat = hp_flat[:, start_idx:end_idx]
+                        hc_flat = hc_flat[:, start_idx:end_idx]
+                        residuals_flat = residuals_flat[:, start_idx:end_idx]
+                    
+                    # Load the simulations into the flattened datasets 
+                    hp_flat[idx] = hp
+                    hc_flat[idx] = hc
+                    residuals_flat[idx] = residual
+
+                train_obj.hp_dataset = hp_flat
+                train_obj.hc_dataset = hc_flat
+                train_obj.residuals = residuals_flat
+
+                # Update time arrays
+                train_obj.time = current_time
+                self.time = current_time
+
+                print(self.colored_text(f"All residuals generated in {(time.time() - start)/60:.2f} minutes.", 'green'))
+
+                # Save polarisation and residual datasets to file
+                if save_polarizations:
+                    train_obj.save_polarizations(prefix="polarisation", directory="Straindata/Polarisations", free_memory=False)
             
             if save_residuals:
-                train_obj.save_residuals(free_memory=False)
-        
+                train_obj.save_residuals(prefix="residuals", directory="Straindata/Residuals", free_memory=False)
+                # train_obj.save(save_polarizations=save_polarizations, 
+                #                 save_residuals=save_residuals, 
+                #                 free_memory=False)
+
         # Plotting functions
         if plot_polarizations:
-            self._plot_polarizations_dataset(train_obj, self.parameter_grid)
+            self._plot_polarizations(train_obj, save_fig_polarizations=save_fig_polarizations)
 
         # If plot_residuals is True, plot whole residual dataset
         if (plot_residuals_eccentric_evolve is True) or (plot_residuals_time_evolve is True):
@@ -934,141 +965,24 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                                  plot_eccentric_evolve=plot_residuals_eccentric_evolve, save_fig_eccentric_evolve=save_fig_eccentric_evolve, 
                                  plot_time_evolve=plot_residuals_time_evolve, save_fig_time_evolve=save_fig_time_evolve
                                  )
-
+                
         print(self.colored_text(f"Dataset shape: {train_obj.residuals.shape}, N={train_obj.parameter_grid.size} | time_array: [{int(train_obj.time[0])}, {int(train_obj.time[-1])}]", 'green'))
         
         return train_obj.residuals
-
-
-    # def _generate_polarisation_data(self, 
-    #                                 train_obj:TrainingSetResults, 
-    #                                 truncate_at_ISCO=None, 
-    #                                 truncate_at_tmin=None,
-    #                                 save_polarizations=True
-    #                                 ):
-    #     """
-    #     Helper function to generate polarisation data for a list of eccentricities.
-
-    #     Parameters:
-    #     ----------
-    #     ecc_list : list of floats
-    #         List of minimum eccentricities.
-
-    #     Returns:
-    #     -------
-    #     hp_dataset : ndarray
-    #         Plus polarisation data.
-    #     hc_dataset : ndarray
-    #         Cross polarisation data.
-
-    #     """
-
-    #     truncate_at_ISCO = self.resolve_property(prop=truncate_at_ISCO, default=self.truncate_at_ISCO)
-    #     truncate_at_tmin = self.resolve_property(prop=truncate_at_tmin, default=self.truncate_at_tmin)
     
-    #     try:
-    #         train_obj = train_obj.load_polarizations()
-    #         self.time = train_obj.time
 
-    #     except:
-    #         # Get waveform size for truncated ISCO waveform of smallest waveform
-    #         sorted_ecc_list = np.sort(train_obj.ecc_ref_space)
-
-    #         ISCO_ecc = sorted_ecc_list[-1] # Highest eccentricity in the list --> earliest ISCO cut-off
-    #         # update_results=True will update the instance time domain array which is afterwards used on all later generated waveforms.
-    #         hp_ISCO, hc_ISCO, _ = self.simulate_waveform(ecc_ref=ISCO_ecc, mass_ratio=1, chi1=0, chi2=0, truncate_at_ISCO=truncate_at_ISCO, truncate_at_tmin=truncate_at_tmin, update_results=True)
-
-    #         train_obj.hp_dataset = np.zeros((len(train_obj.ecc_ref_space), len(train_obj.mass_ratio_space), len(train_obj.chi1_space), len(train_obj.chi2_space), len(self.time))) 
-    #         train_obj.hc_dataset = np.zeros((len(train_obj.ecc_ref_space), len(train_obj.mass_ratio_space), len(train_obj.chi1_space), len(train_obj.chi2_space), len(self.time)))
-
-    #         for i, ecc in enumerate(train_obj.ecc_ref_space):
-    #             if ecc == ISCO_ecc:
-    #                 # Store first waveform in dataset
-    #                 train_obj.hp_dataset[i] = hp_ISCO
-    #                 train_obj.hc_dataset[i] = hc_ISCO
-    #             else:
-    #                 # No need to truncate again, since the time array is already truncated to the earliest ISCO cut-off
-    #                 train_obj.hp_dataset[i], train_obj.hc_dataset[i], train_obj.time = self.simulate_waveform(ecc_ref=ecc, truncate_at_ISCO=False, truncate_at_tmin=False, update_results=False) 
-
-    #         if save_polarizations:
-    #             train_obj.save_polarizations(free_memory=False)
-
-    #     return train_obj.hp_dataset, train_obj.hc_dataset
-
-    # def _calculate_residuals(self, 
-    #                          train_obj:TrainingSetResults, 
-    #                          save_residuals=True, 
-    #                          plot_residuals_eccentric_evolv=False, save_fig_time_evolve=False,
-    #                          plot_residuals_time_evolv=False, save_fig_eccentric_evolv=False,  
-    #                          show_legend=False
-    #                          ):
-    #     """
-    #     Helper function to calculate residuals for a property given polarisation data.
-
-    #     Parameters:
-    #     ----------
-    #     ecc_list : list of floats
-    #         List of minimum eccentricities.
-    #     hp_dataset : ndarray
-    #         Plus polarisation data.
-    #     hc_dataset : ndarray
-    #         Cross polarisation data.
-    #     property : str
-    #         Specifies which property to calculate ('phase' or 'amplitude').
-
-    #     Returns:
-    #     -------
-    #     residual_dataset : ndarray
-    #         Array of residuals for each eccentricity.
-            
-    #     """
-
-    #     self.circulair_wf()
-
-    #     # Create empty residual dataset
-    #     residual_dataset = np.zeros((len(train_obj.ecc_ref_space), len(self.time)))
-
-    #     # Fill residual dataset with residuals of chosen property for given eccentric parameter space
-    #     for i, ecc in enumerate(train_obj.ecc_ref_space):
-    #         residual = self.calculate_residual(train_obj.hp_dataset[i], train_obj.hc_dataset[i], ecc, train_obj.property)
-    #         residual_dataset[i] = residual
-
-    #         del residual
-
-    #     # Assign the calculated residual dataset to the corresponding training object
-    #     train_obj.residuals = residual_dataset
-    #     train_obj.time = self.time
-
-    #     print(f'Generated residual parameterspace dataset for {train_obj.property} ', len(train_obj.ecc_ref_space), ' waveforms')
-
-    #     # If plot_residuals is True, plot whole residual dataset
-    #     if (plot_residuals_eccentric_evolv is True) or (plot_residuals_time_evolv is True):
-    #         self._plot_residuals(train_obj, plot_residuals_eccentric_evolv, plot_residuals_time_evolv, save_fig_eccentric_evolv, save_fig_time_evolve, show_legend=show_legend)
-        
-    #     if save_residuals:
-    #         train_obj.save_residuals(free_memory=False)
-
-    #     return residual_dataset
-
-    def _plot_polarizations_dataset(self,
+    def _plot_polarizations(self,
                                     train_obj: TrainingSetResults,
                                     save_fig_polarizations=False):
         """
-        Plot plus and cross polarizations from multidimensional datasets.
-
-        Expected shapes:
-            hp_dataset[ecc, mean_ano, q, chi1, chi2, time]
-            hc_dataset[ecc, mean_ano, q, chi1, chi2, time]
-
-        Makes one figure for hp and one figure for hc.
-        Each figure has 5 subplots showing the effect of:
-            ecc, mean_ano, q, chi1, chi2
+        Plot plus and cross polarizations using the same structure as residual plots.
         """
+
         if train_obj.hp_dataset is None or train_obj.hc_dataset is None:
             train_obj = train_obj.load_polarizations()
 
-        hp = train_obj.hp_dataset
-        hc = train_obj.hc_dataset
+        hp = np.asarray(train_obj.hp_dataset)
+        hc = np.asarray(train_obj.hc_dataset)
         time = train_obj.time
 
         ecc_space = train_obj.ecc_ref_space
@@ -1082,212 +996,27 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         n_q = len(q_space)
         n_c1 = len(chi1_space)
         n_c2 = len(chi2_space)
-        n_t = len(time)
 
-
-        # Fixed middle-index baseline for non-varied parameters
+        # ------------------------------------------------------------
+        # baseline indices (same idea as residuals)
+        # ------------------------------------------------------------
         e0 = n_e // 2
         l0 = n_l // 2
         q0 = n_q // 2
         c10 = n_c1 // 2
         c20 = n_c2 // 2
 
-        def low_and_high_indices(n):
-            if n <= 2:
-                return np.arange(n, dtype=int)
-            
-            # pick one low and one high index (avoid exact edges if possible)
-            low = int(0.2 * (n - 1))
-            high = int(0.8 * (n - 1))
-
-            return np.array([low, high], dtype=int)
-        
-        def fixed_text(vary_key):
-            parts = []
-
-            if vary_key != "ecc":
-                parts.append(f"e={float(ecc_space[e0]):.4g}")
-            if vary_key != "mean_ano":
-                parts.append(f"l={float(l_space[l0]):.4g}")
-            if vary_key != "q":
-                parts.append(f"q={float(q_space[q0]):.4g}")
-            if vary_key != "chi1":
-                parts.append(rf"$\chi_1$={float(chi1_space[c10]):.4g}")
-            if vary_key != "chi2":
-                parts.append(rf"$\chi_2$={float(chi2_space[c20]):.4g}")
-
-            return "Fixed: " + ", ".join(parts)
-
-        def make_parameter_effects(dataset):
-            return [
-                {
-                    "key": "ecc",
-                    "name": "eccentricity",
-                    "symbol": "e",
-                    "values": ecc_space,
-                    "data": dataset[:, l0, q0, c10, c20, :],
-                },
-                {
-                    "key": "mean_ano",
-                    "name": "mean anomaly",
-                    "symbol": "l",
-                    "values": l_space,
-                    "data": dataset[e0, :, q0, c10, c20, :],
-                },
-                {
-                    "key": "q",
-                    "name": "mass ratio",
-                    "symbol": "q",
-                    "values": q_space,
-                    "data": dataset[e0, l0, :, c10, c20, :],
-                },
-                {
-                    "key": "chi1",
-                    "name": r"$\chi_1$",
-                    "symbol": r"$\chi_1$",
-                    "values": chi1_space,
-                    "data": dataset[e0, l0, q0, :, c20, :],
-                },
-                {
-                    "key": "chi2",
-                    "name": r"$\chi_2$",
-                    "symbol": r"$\chi_2$",
-                    "values": chi2_space,
-                    "data": dataset[e0, l0, q0, c10, :, :],
-                },
-            ]
-
-        def plot_single_polarization(dataset, pol_name, ylabel, filename_prefix):
-            parameter_effects = make_parameter_effects(dataset)
-
-            fig, axes = plt.subplots(
-                len(parameter_effects),
-                1,
-                figsize=(20, 3.5 * len(parameter_effects)),
-                sharex=True
-            )
-
-            if len(parameter_effects) == 1:
-                axes = [axes]
-
-            for ax, effect in zip(axes, parameter_effects):
-                values = effect["values"]
-                data = effect["data"]
-                selected_indices = low_and_high_indices(len(values))
-
-                for i in selected_indices:
-                    value = values[i]
-
-                    ax.plot(
-                        time,
-                        data[i],
-                        linewidth=0.9,
-                        linestyle="-",
-                        label=f"{effect['symbol']} = {float(value):.4g}"
-                    )
-
-                ax.set_ylabel(ylabel)
-                ax.set_title(
-                    f"{pol_name}: varying {effect['name']}\n"
-                    f"{fixed_text(effect['key'])}",
-                    fontsize=10
-                )
-                ax.grid(True)
-
-                ax.legend(
-                    title=f"Varying {effect['symbol']}",
-                    fontsize="small",
-                    title_fontsize="small",
-                    loc="best",
-                    ncol=1
-                )
-
-            axes[-1].set_xlabel("t [M]")
-
-            fig.suptitle(
-                f"{pol_name} polarization: effect of each parameter",
-                y=1.005
-            )
-
-            plt.tight_layout()
-
-            if save_fig_polarizations is True:
-                figname = train_obj.figname(
-                    prefix=filename_prefix,
-                    directory="Images/Polarisations"
-                )
-                fig.savefig(figname)
-
-        plot_single_polarization(
-            hp,
-            pol_name=r"$h_+$",
-            ylabel=r"$h_+$",
-            filename_prefix="Polarizations_hp"
-        )
-
-        plot_single_polarization(
-            hc,
-            pol_name=r"$h_\times$",
-            ylabel=r"$h_\times$",
-            filename_prefix="Polarizations_hc"
-        )
-
-
-    def _plot_residuals(self, 
-                        train_obj: TrainingSetResults, 
-                        plot_eccentric_evolve=False, save_fig_eccentric_evolve=False,
-                        plot_time_evolve=False, save_fig_time_evolve=False
-                        ):
-        """
-        Plot residuals from multidimensional residual dataset.
-
-        Expected shape:
-            residuals[ecc, mean_ano, q, chi1, chi2, time]
-        """
-
-        residuals = train_obj.residuals
-        time = train_obj.time
-
-        ecc_space = train_obj.ecc_ref_space
-        l_space = train_obj.mean_ano_ref_space
-        q_space = train_obj.mass_ratio_space
-        chi1_space = train_obj.chi1_space
-        chi2_space = train_obj.chi2_space
-
-        n_e = len(ecc_space)
-        n_l = len(l_space)
-        n_q = len(q_space)
-        n_c1 = len(chi1_space)
-        n_c2 = len(chi2_space)
-        n_t = len(time)
-
-        # Set units for plot labels
-        if train_obj.property == "phase":
-            ylabel = r"$\Delta \phi_{22}$ [radians]"
-        elif train_obj.property == "amplitude":
-            ylabel = r"$\Delta A_{22}$"
-        else:
-            raise ValueError(
-                f'Choose property = "phase" or "amplitude", got {train_obj.property}'
-            )
-
-        # Create fixed middle-index baseline for each parameter to visualize the effect of varying one parameter at a time while keeping others fixed.
-        # Plot residuals for every varied parameter in subplot.
-
-        # Fixed middle-index baseline for non-varied parameters
-        e0 = n_e // 2
-        l0 = n_l // 2
-        q0 = n_q // 2
-        c10 = n_c1 // 2
-        c20 = n_c2 // 2
-
-        # For every parameter, select 5 values across the parameter space to vary the effect.
+        # ------------------------------------------------------------
+        # helper: pick representative parameter values
+        # ------------------------------------------------------------
         def five_indices(n):
             if n <= 5:
                 return np.arange(n, dtype=int)
             return np.linspace(0, n - 1, 5, dtype=int)
 
-        # Helper function to generate text for fixed parameters in plot titles
+        # ------------------------------------------------------------
+        # helper: fixed parameter text
+        # ------------------------------------------------------------
         def fixed_text(vary_key):
             parts = []
 
@@ -1304,79 +1033,115 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
 
             return "Fixed: " + ", ".join(parts)
 
+        # ------------------------------------------------------------
+        # shared parameter slicing definition
+        # ------------------------------------------------------------
+
+        # columns:
+        # 0 = ecc
+        # 1 = mean anomaly
+        # 2 = q
+        # 3 = chi1
+        # 4 = chi2
         parameter_effects = [
             {
                 "key": "ecc",
                 "name": "eccentricity",
                 "symbol": "e",
                 "values": ecc_space,
-                "data": residuals[:, l0, q0, c10, c20, :],
+                "column": 0,
             },
             {
                 "key": "mean_ano",
                 "name": "mean anomaly",
                 "symbol": "l",
                 "values": l_space,
-                "data": residuals[e0, :, q0, c10, c20, :],
+                "column": 1,
             },
             {
                 "key": "q",
                 "name": "mass ratio",
                 "symbol": "q",
                 "values": q_space,
-                "data": residuals[e0, l0, :, c10, c20, :],
+                "column": 2,
             },
             {
                 "key": "chi1",
                 "name": r"$\chi_1$",
                 "symbol": r"$\chi_1$",
                 "values": chi1_space,
-                "data": residuals[e0, l0, q0, :, c20, :],
+                "column": 3,
             },
             {
                 "key": "chi2",
                 "name": r"$\chi_2$",
                 "symbol": r"$\chi_2$",
                 "values": chi2_space,
-                "data": residuals[e0, l0, q0, c10, :, :],
+                "column": 4,
             },
         ]
 
         # ------------------------------------------------------------
-        # Residual vs time, one subplot per varied parameter
-        # 5 waveforms per parameter
+        # plotting function (single structure for hp/hc)
         # ------------------------------------------------------------
-        if plot_time_evolve is True:
+        def plot_one(dataset_key, ylabel, prefix):
+           
             fig, axes = plt.subplots(
                 len(parameter_effects),
                 1,
                 figsize=(11, 3.5 * len(parameter_effects)),
-                sharex=True
+                sharex=True,
+                gridspec_kw={"hspace": 0.5}
             )
 
             if len(parameter_effects) == 1:
                 axes = [axes]
 
+            dataset = hp if dataset_key == "hp" else hc
+            grid = np.asarray(train_obj.parameter_grid)
+
             for ax, effect in zip(axes, parameter_effects):
+
                 values = effect["values"]
-                data = effect["data"]
 
                 selected_indices = five_indices(len(values))
 
                 for i in selected_indices:
-                    value = values[i]
+
+                    target_value = values[i]
+
+                    # baseline parameter set
+                    target = [
+                        ecc_space[e0],
+                        l_space[l0],
+                        q_space[q0],
+                        chi1_space[c10],
+                        chi2_space[c20],
+                    ]
+
+                    # vary ONE parameter
+                    target[effect["column"]] = target_value
+
+                    target = np.asarray(target)
+
+                    # find matching waveform
+                    matches = np.all(np.isclose(grid, target), axis=1)
+
+                    if not np.any(matches):
+                        continue
+
+                    idx = np.where(matches)[0][0]
 
                     ax.plot(
                         time,
-                        data[i],
+                        dataset[idx],
                         linewidth=0.9,
-                        linestyle="-",
-                        label=f"{effect['symbol']} = {float(value):.4g}"
+                        label=f"{effect['symbol']} = {float(target_value):.4g}"
                     )
 
                 ax.set_ylabel(ylabel)
                 ax.set_title(
-                    f"Varying {effect['name']} over time\n"
+                    f"{dataset_key}: varying {effect['name']}\n"
                     f"{fixed_text(effect['key'])}",
                     fontsize=10
                 )
@@ -1385,163 +1150,662 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                 ax.legend(
                     title=f"Varying {effect['symbol']}",
                     fontsize="small",
-                    title_fontsize="small",
-                    loc="best",
-                    ncol=1
+                    loc="best"
                 )
 
             axes[-1].set_xlabel("t [M]")
 
             fig.suptitle(
-                f"Residual {train_obj.property}: effect of each parameter",
+                f"{dataset_key} polarization: effect of each parameter",
                 y=1.005
             )
 
             plt.tight_layout()
 
-            if save_fig_time_evolve is True:
+            if save_fig_polarizations:
                 figname = train_obj.figname(
-                    prefix="Residuals_time_evolve",
-                    directory="Images/Residuals"
+                    prefix=prefix,
+                    directory="Images/Polarisations"
                 )
                 fig.savefig(figname)
 
         # ------------------------------------------------------------
-        # Residual vs parameter value, one subplot per varied parameter
-        # 5 selected times
+        # run for hp and hc
         # ------------------------------------------------------------
-        if plot_eccentric_evolve is True:
+        plot_one("hp", r"$h_+$", "Polarizations_hp")
+        plot_one("hc", r"$h_\times$", "Polarizations_hc")
+
+
+    def _plot_residuals(
+        self,
+        train_obj,
+        plot_eccentric_evolve=False,
+        save_fig_eccentric_evolve=False,
+        plot_time_evolve=False,
+        save_fig_time_evolve=False
+    ):
+
+        train_obj.load_residuals()
+
+        residuals = np.asarray(train_obj.residuals)   # (N, T)
+        time = np.asarray(train_obj.time)
+        params = np.asarray(train_obj.parameter_grid)
+
+        ecc_space = train_obj.ecc_ref_space
+        l_space = train_obj.mean_ano_ref_space
+        q_space = train_obj.mass_ratio_space
+        chi1_space = train_obj.chi1_space
+        chi2_space = train_obj.chi2_space
+
+        n_t = len(time)
+
+        if train_obj.property == "phase":
+            ylabel = r"$\Delta \phi_{22}$ [radians]"
+        elif train_obj.property == "amplitude":
+            ylabel = r"$\Delta A_{22}$"
+        else:
+            raise ValueError("property must be phase or amplitude")
+
+        COL = {
+            "ecc": 0,
+            "mean_ano": 1,
+            "q": 2,
+            "chi1": 3,
+            "chi2": 4,
+        }
+
+        names = {
+            "ecc": "eccentricity",
+            "mean_ano": "mean anomaly",
+            "q": "mass ratio",
+            "chi1": r"$\chi_1$",
+            "chi2": r"$\chi_2$",
+        }
+
+        symbols = {
+            "ecc": "e",
+            "mean_ano": "l",
+            "q": "q",
+            "chi1": r"$\chi_1$",
+            "chi2": r"$\chi_2$",
+        }
+
+        def five_indices(n):
+            if n <= 1:
+                return np.array([0], dtype=int)
+            if n <= 5:
+                return np.arange(n, dtype=int)
+            return np.linspace(0, n - 1, 5, dtype=int)
+
+        base_idx = len(residuals) // 2
+
+        def fixed_text(vary_key):
+            parts = []
+
+            if vary_key != "ecc":
+                parts.append(f"e={params[base_idx, 0]:.4g}")
+            if vary_key != "mean_ano":
+                parts.append(f"l={params[base_idx, 1]:.4g}")
+            if vary_key != "q":
+                parts.append(f"q={params[base_idx, 2]:.4g}")
+            if vary_key != "chi1":
+                parts.append(rf"$\chi_1$={params[base_idx, 3]:.4g}")
+            if vary_key != "chi2":
+                parts.append(rf"$\chi_2$={params[base_idx, 4]:.4g}")
+
+            return "Fixed: " + ", ".join(parts)
+
+        # ------------------------------------------------------------
+        # BUILD EFFECTS 
+        # ------------------------------------------------------------
+        parameter_effects = []
+
+        for key, col in COL.items():
+            mask = np.ones(len(residuals), dtype=bool)
+
+            for k2, c2 in COL.items():
+                if k2 != key:
+                    mask &= np.isclose(params[:, c2], params[base_idx, c2])
+
+            idx = np.where(mask)[0]
+
+            parameter_effects.append({
+                "key": key,
+                "col": col,
+                "idx": idx
+            })
+
+        # ============================================================
+        # TIME EVOLUTION PLOT
+        # ============================================================
+        if plot_time_evolve:
+
             fig, axes = plt.subplots(
                 len(parameter_effects),
                 1,
                 figsize=(11, 3.5 * len(parameter_effects)),
-                sharex=False
+                sharex=True,
+                gridspec_kw={"hspace": 0.5}
             )
 
             if len(parameter_effects) == 1:
                 axes = [axes]
 
-            time_indices = five_indices(n_t)
-
             for ax, effect in zip(axes, parameter_effects):
-                values = effect["values"]
-                data = effect["data"]
 
-                for tidx in time_indices:
+                idx = effect["idx"]
+                col = effect["col"]
+
+                selected_indices = np.linspace(
+                    0,
+                    len(idx) - 1,
+                    min(5, len(idx)),
+                    dtype=int
+                )
+
+                for i in selected_indices:
+                    global_idx = idx[i]
+
                     ax.plot(
-                        values,
-                        data[:, tidx],
+                        time,
+                        residuals[global_idx],
                         linewidth=0.9,
                         linestyle="-",
-                        label=f"t/M = {float(time[tidx]):.4g}"
+                        label=f"{symbols[effect['key']]} = {params[global_idx, col]:.4g}"
                     )
 
-                ax.set_xlabel(effect["symbol"])
                 ax.set_ylabel(ylabel)
                 ax.set_title(
-                    f"Residual change while varying {effect['name']}\n"
+                    f"Varying {names[effect['key']]} over time\n"
                     f"{fixed_text(effect['key'])}",
                     fontsize=10
                 )
                 ax.grid(True)
+                ax.legend()
 
-                ax.legend(
-                    title="Selected times",
-                    fontsize="small",
-                    title_fontsize="small",
-                    loc="best",
-                    ncol=1
-                )
+            axes[-1].set_xlabel("t [M]")
 
-            fig.suptitle(
-                f"Residual {train_obj.property}: parameter dependence at selected times",
-                y=1.005
+            if save_fig_time_evolve:
+                fig.savefig(train_obj.figname(
+                    prefix="Residuals_time_evolve",
+                    directory="Images/Residuals"
+                ))
+
+        # ============================================================
+        # PARAMETER EVOLUTION
+        # ============================================================
+        if plot_eccentric_evolve:
+
+            fig, axes = plt.subplots(
+                len(parameter_effects),
+                1,
+                figsize=(11, 3.5 * len(parameter_effects)),
+                gridspec_kw={"hspace": 0.6}
             )
 
-            plt.tight_layout()
+            time_idx = five_indices(n_t)
 
-            if save_fig_eccentric_evolve is True:
-                figname = train_obj.figname(
-                    prefix="Residuals_eccentric_evolve",
+            if len(parameter_effects) == 1:
+                axes = [axes]
+
+            for ax, effect in zip(axes, parameter_effects):
+
+                idx = effect["idx"]
+                col = effect["col"]
+
+                for t in time_idx:
+                    ax.plot(
+                        params[idx, col],
+                        residuals[idx, t],
+                        linewidth=0.9,
+                        linestyle="-",
+                        label=f"t/M = {time[t]:.4g}"
+                    )
+
+                ax.set_title(f"Residual change while varying {names[effect['key']]}\n{fixed_text(effect['key'])}")
+                ax.set_xlabel(symbols[effect['key']])
+                ax.set_ylabel(ylabel)
+                ax.grid(True)
+                ax.legend()
+
+            if save_fig_eccentric_evolve:
+                fig.savefig(train_obj.figname(
+                    prefix="Residuals_param_evolve",
                     directory="Images/Residuals"
-                )
-                fig.savefig(figname)
+                ))
+
+    # def _plot_residuals(
+    #     self,
+    #     train_obj: TrainingSetResults,
+    #     plot_eccentric_evolve=False,
+    #     save_fig_eccentric_evolve=False,
+    #     plot_time_evolve=False,
+    #     save_fig_time_evolve=False
+    # ):
+    #     # Check if residuals are loaded, if not attempt to load
+    #     train_obj.load_residuals()
+
+    #     residuals = np.asarray(train_obj.residuals)  # (N, T)
+    #     time = np.asarray(train_obj.time)
+
+    #     params = np.asarray(train_obj.parameter_grid)  # (N, 5)
+
+    #     ecc_space = train_obj.ecc_ref_space
+    #     l_space = train_obj.mean_ano_ref_space
+    #     q_space = train_obj.mass_ratio_space
+    #     chi1_space = train_obj.chi1_space
+    #     chi2_space = train_obj.chi2_space
+
+    #     n_t = len(time)
+
+    #     if train_obj.property == "phase":
+    #         ylabel = r"$\Delta \phi_{22}$ [radians]"
+    #     elif train_obj.property == "amplitude":
+    #         ylabel = r"$\Delta A_{22}$"
+    #     else:
+    #         raise ValueError("property must be phase or amplitude")
+
+    #     # parameter columns
+    #     COL = {
+    #         "ecc": 0,
+    #         "mean_ano": 1,
+    #         "q": 2,
+    #         "chi1": 3,
+    #         "chi2": 4,
+    #     }
+
+    #     param_spaces = {
+    #         "ecc": ecc_space,
+    #         "mean_ano": l_space,
+    #         "q": q_space,
+    #         "chi1": chi1_space,
+    #         "chi2": chi2_space,
+    #     }
+
+    #     names = {
+    #         "ecc": "eccentricity",
+    #         "mean_ano": "mean anomaly",
+    #         "q": "mass ratio",
+    #         "chi1": r"$\chi_1$",
+    #         "chi2": r"$\chi_2$",
+    #     }
+
+    #     symbols = {
+    #         "ecc": "e",
+    #         "mean_ano": "l",
+    #         "q": "q",
+    #         "chi1": r"$\chi_1$",
+    #         "chi2": r"$\chi_2$",
+    #     }
+
+    #     def five_indices(n):
+    #         if n <= 5:
+    #             return np.arange(n)
+    #         return np.linspace(0, n - 1, 5, dtype=int)
+
+    #     # ------------------------------------------------------------
+    #     # helper: fixed parameter text (median of remaining params)
+    #     # ------------------------------------------------------------
+    #     def fixed_text(vary_key, base_idx):
+    #         parts = []
+    #         for key, col in COL.items():
+    #             if key == vary_key:
+    #                 continue
+    #             v = params[base_idx, col]
+    #             parts.append(f"{symbols[key]}={v:.4g}")
+    #         return "Fixed: " + ", ".join(parts)
+
+    #     # pick a representative baseline sample
+    #     base_idx = len(residuals) // 2
+
+    #     param_effects = []
+    #     for key in COL.keys():
+    #         col = COL[key]
+
+    #         # filter samples where all OTHER parameters are fixed to baseline
+    #         mask = np.ones(len(residuals), dtype=bool)
+
+    #         for k2, c2 in COL.items():
+    #             if k2 != key:
+    #                 mask &= np.isclose(params[:, c2], params[base_idx, c2])
+
+    #         idx = np.where(mask)[0]
+
+    #         param_effects.append({
+    #             "key": key,
+    #             "values": params[idx][:, col] if len(idx) > 0 else param_spaces[key],
+    #             "indices": idx,
+    #             "data": residuals[idx],
+    #             "name": names[key],
+    #             "symbol": symbols[key],
+    #         })
+
+    #     # ------------------------------------------------------------
+    #     # TIME EVOLUTION PLOT
+    #     # ------------------------------------------------------------
+    #     if plot_time_evolve:
+
+    #         fig, axes = plt.subplots(
+    #             len(param_effects),
+    #             1,
+    #             figsize=(11, 3.5 * len(param_effects)),
+    #             sharex=True,
+    #             gridspec_kw={"hspace": 0.5}
+    #         )
+
+    #         for ax, effect in zip(axes, param_effects):
+
+    #             idx = effect["indices"]
+    #             values = effect["values"]
+
+    #             selected_idx = five_indices(len(idx))
+    #             print(self.colored_text(f"Selected indices for {effect['name']}: {selected_idx}", "green"))
+
+    #             for i in selected_idx:
+    #                 ax.plot(
+    #                     time,
+    #                     residuals[idx[i]],
+    #                     label=f"{effect['symbol']}={values[i]:.3g}",
+    #                     linewidth=0.9
+    #                 )
+
+    #             ax.set_title(f"Varying {effect['name']}\n{fixed_text(effect['key'], idx[0])}")
+    #             ax.set_ylabel(ylabel)
+    #             ax.grid(True)
+    #             ax.legend()
+
+    #         axes[-1].set_xlabel("t [M]")
+
+    #         if save_fig_time_evolve:
+    #             fig.savefig(train_obj.figname(
+    #                 prefix="Residuals_time_evolve",
+    #                 directory="Images/Residuals"
+    #             ))
+
+    #     # ------------------------------------------------------------
+    #     # PARAMETER EVOLUTION (value vs residual snapshot)
+    #     # ------------------------------------------------------------
+    #     if plot_eccentric_evolve:
+
+    #         fig, axes = plt.subplots(
+    #             len(param_effects),
+    #             1,
+    #             figsize=(11, 3.5 * len(param_effects)),
+    #             gridspec_kw={"hspace": 0.5}
+    #         )
+
+    #         time_idx = five_indices(n_t)
+
+    #         for ax, effect in zip(axes, param_effects):
+
+    #             idx = effect["indices"]
+    #             values = effect["values"]
+
+    #             for t in time_idx:
+    #                 ax.plot(
+    #                     values,
+    #                     residuals[idx, t],
+    #                     label=f"t={time[t]:.3g}"
+    #                 )
+
+    #             ax.set_title(f"{effect['name']} dependence")
+    #             ax.set_xlabel(effect["symbol"])
+    #             ax.set_ylabel(ylabel)
+    #             ax.grid(True)
+    #             ax.legend()
+
+    #         if save_fig_eccentric_evolve:
+    #             fig.savefig(train_obj.figname(
+    #                 prefix="Residuals_param_evolve",
+    #                 directory="Images/Residuals"
+    #             ))
+
+#####################################################################################3
 
     # def _plot_residuals(self, 
-    #                     train_obj:TrainingSetResults, 
-    #                     plot_eccentric_evolv=False, 
-    #                     plot_time_evolve=False, 
-    #                     save_fig_eccentric_evolve=False, 
-    #                     save_fig_time_evolve=False, 
-    #                     show_legend=False):
-    #     """Function to plot residuals dataset including save figure option."""
-    #     ecc_list = train_obj.ecc_ref_space
-    #     residual_dataset = train_obj.hp_dataset.reshape(len(train_obj.parameter_grid), len(train_obj.time))
+    #                     train_obj: TrainingSetResults, 
+    #                     plot_eccentric_evolve=False, save_fig_eccentric_evolve=False,
+    #                     plot_time_evolve=False, save_fig_time_evolve=False
+    #                     ):
+    #     """
+    #     Plot residuals from multidimensional residual dataset.
 
-    #     print(1, ecc_list, residual_dataset)
-    #     if plot_eccentric_evolve is True:
-    #         fig_residuals_ecc = plt.figure()
-    #         for i in range(0, len(self.time), 100):
-    #             plt.plot(ecc_list, residual_dataset.T[i], label='t/M = ' + f'{round(self.time[i], 1)}', linewidth=0.6)
-                
-    #         plt.xlabel('eccentricity')
-    #         if train_obj.property == 'phase':
-    #             plt.ylabel(' $\Delta \phi_{22}$ [radians]')
-    #         elif train_obj.property == 'amplitude':
-    #             plt.ylabel('$\Delta A_{22}$')
-    #         else:
-    #             print('Choose property = "phase", "amplitude"', train_obj.property)
-    #             sys.exit(1)
+    #     Expected shape:
+    #         residuals[ecc, mean_ano, q, chi1, chi2, time]
+    #     """
 
-    #         plt.title(f'Residuals {train_obj.property}')
-    #         plt.grid(True)
+    #     # residuals = np.reshape(train_obj.residuals, (
+    #     #     len(train_obj.ecc_ref_space),
+    #     #     len(train_obj.mean_ano_ref_space),
+    #     #     len(train_obj.mass_ratio_space),
+    #     #     len(train_obj.chi1_space),
+    #     #     len(train_obj.chi2_space),
+    #     #     len(train_obj.time)
+    #     # ))
 
-    #         if show_legend:
-    #             plt.legend(loc='upper right', fontsize='small', ncol=2)
+    #     time = train_obj.time
 
-    #         plt.tight_layout()
+    #     ecc_space = train_obj.ecc_ref_space
+    #     l_space = train_obj.mean_ano_ref_space
+    #     q_space = train_obj.mass_ratio_space
+    #     chi1_space = train_obj.chi1_space
+    #     chi2_space = train_obj.chi2_space
 
-    #         if save_fig_eccentric_evolve is True:
-    #             ISCO = '' if self.truncate_at_ISCO else 'NO_ISCO_'
-    #             tmin = '' if self.truncate_at_tmin else 'NO_tmin_'
+    #     n_e = len(ecc_space)
+    #     n_l = len(l_space)
+    #     n_q = len(q_space)
+    #     n_c1 = len(chi1_space)
+    #     n_c2 = len(chi2_space)
+    #     n_t = len(time)
 
-    #             figname = train_obj.figname(prefix=f'Residuals_eccentric_evolv', directory='Images/Residuals') # Use the filename method of the training object to generate a consistent filename
-    #             fig_residuals_ecc.savefig(figname)
+    #     # Set units for plot labels
+    #     if train_obj.property == "phase":
+    #         ylabel = r"$\Delta \phi_{22}$ [radians]"
+    #     elif train_obj.property == "amplitude":
+    #         ylabel = r"$\Delta A_{22}$"
+    #     else:
+    #         raise ValueError(
+    #             f'Choose property = "phase" or "amplitude", got {train_obj.property}'
+    #         )
 
-    #             # plt.close('all') # Clean up plot
+    #     # Create fixed middle-index baseline for each parameter to visualize the effect of varying one parameter at a time while keeping others fixed.
+    #     # Plot residuals for every varied parameter in subplot.
 
+    #     # Fixed middle-index baseline for non-varied parameters
+    #     e0 = n_e // 2
+    #     l0 = n_l // 2
+    #     q0 = n_q // 2
+    #     c10 = n_c1 // 2
+    #     c20 = n_c2 // 2
+
+    #     # For every parameter, select 5 values across the parameter space to vary the effect.
+    #     def five_indices(n):
+    #         if n <= 5:
+    #             return np.arange(n, dtype=int)
+    #         return np.linspace(0, n - 1, 5, dtype=int)
+
+    #     # Helper function to generate text for fixed parameters in plot titles
+    #     def fixed_text(vary_key):
+    #         parts = []
+
+    #         if vary_key != "ecc":
+    #             parts.append(f"e={float(ecc_space[e0]):.4g}")
+    #         if vary_key != "mean_ano":
+    #             parts.append(f"l={float(l_space[l0]):.4g}")
+    #         if vary_key != "q":
+    #             parts.append(f"q={float(q_space[q0]):.4g}")
+    #         if vary_key != "chi1":
+    #             parts.append(rf"$\chi_1$={float(chi1_space[c10]):.4g}")
+    #         if vary_key != "chi2":
+    #             parts.append(rf"$\chi_2$={float(chi2_space[c20]):.4g}")
+
+    #         return "Fixed: " + ", ".join(parts)
+
+    #     parameter_effects = [
+    #         {
+    #             "key": "ecc",
+    #             "name": "eccentricity",
+    #             "symbol": "e",
+    #             "values": ecc_space,
+    #             "data": residuals[:, l0, q0, c10, c20, :],
+    #         },
+    #         {
+    #             "key": "mean_ano",
+    #             "name": "mean anomaly",
+    #             "symbol": "l",
+    #             "values": l_space,
+    #             "data": residuals[e0, :, q0, c10, c20, :],
+    #         },
+    #         {
+    #             "key": "q",
+    #             "name": "mass ratio",
+    #             "symbol": "q",
+    #             "values": q_space,
+    #             "data": residuals[e0, l0, :, c10, c20, :],
+    #         },
+    #         {
+    #             "key": "chi1",
+    #             "name": r"$\chi_1$",
+    #             "symbol": r"$\chi_1$",
+    #             "values": chi1_space,
+    #             "data": residuals[e0, l0, q0, :, c20, :],
+    #         },
+    #         {
+    #             "key": "chi2",
+    #             "name": r"$\chi_2$",
+    #             "symbol": r"$\chi_2$",
+    #             "values": chi2_space,
+    #             "data": residuals[e0, l0, q0, c10, :, :],
+    #         },
+    #     ]
+
+    #     # ------------------------------------------------------------
+    #     # Residual vs time, one subplot per varied parameter
+    #     # 5 waveforms per parameter
+    #     # ------------------------------------------------------------
     #     if plot_time_evolve is True:
-    #         fig_residuals_t = plt.figure()
+    #         fig, axes = plt.subplots(
+    #             len(parameter_effects),
+    #             1,
+    #             figsize=(11, 3.5 * len(parameter_effects)),
+    #             sharex=True,
+    #             gridspec_kw={"hspace": 0.5}
+    #         )
 
-    #         for i in range(len(residual_dataset)):
-    #             plt.plot(self.time, residual_dataset[i], label='e$_{ref}$' + f' = {round(ecc_list[i], 3)}', linewidth=0.6)
-               
-    #         plt.xlabel('t [M]')
-    #         if train_obj.property == 'phase':
-    #             plt.ylabel(' $\Delta \phi_{22}$ [radians]')
-    #         elif train_obj.property == 'amplitude':
-    #             plt.ylabel('$\Delta A_{22}$')
-    #         else:
-    #             print('Choose property = "phase", "amplitude"', train_obj.property)
-    #             sys.exit(1)
+    #         if len(parameter_effects) == 1:
+    #             axes = [axes]
 
-    #         plt.title(f'Residuals {train_obj.property}')
-    #         plt.grid(True)
+    #         for ax, effect in zip(axes, parameter_effects):
+    #             values = effect["values"]
+    #             data = effect["data"]
 
-    #         if show_legend:
-    #             plt.legend(loc='upper right', fontsize='small', ncol=2)
+    #             selected_indices = five_indices(len(values))
+
+    #             for i in selected_indices:
+    #                 value = values[i]
+
+    #                 ax.plot(
+    #                     time,
+    #                     data[i],
+    #                     linewidth=0.9,
+    #                     linestyle="-",
+    #                     label=f"{effect['symbol']} = {float(value):.4g}"
+    #                 )
+
+    #             ax.set_ylabel(ylabel)
+    #             ax.set_title(
+    #                 f"Varying {effect['name']} over time\n"
+    #                 f"{fixed_text(effect['key'])}",
+    #                 fontsize=10
+    #             )
+    #             ax.grid(True)
+
+    #             ax.legend(
+    #                 title=f"Varying {effect['symbol']}",
+    #                 fontsize="small",
+    #                 title_fontsize="small",
+    #                 loc="best",
+    #                 ncol=1
+    #             )
+
+    #         axes[-1].set_xlabel("t [M]")
+
+    #         fig.suptitle(
+    #             f"Residual {train_obj.property}: effect of each parameter",
+    #             y=1.005
+    #         )
 
     #         plt.tight_layout()
 
     #         if save_fig_time_evolve is True:
-    #             ISCO = '' if self.truncate_at_ISCO else 'NO_ISCO'
-    #             tmin = '' if self.truncate_at_tmin else 'NO_tmin'
+    #             figname = train_obj.figname(
+    #                 prefix="Residuals_time_evolve",
+    #                 directory="Images/Residuals"
+    #             )
+    #             fig.savefig(figname)
 
-    #             figname = train_obj.figname(prefix=f'Residuals_time_evolv', directory='Images/Residuals') # Use the filename method of the training object to generate a consistent filename
-    #             fig_residuals_t.savefig(figname)
+    #     # ------------------------------------------------------------
+    #     # Residual vs parameter value, one subplot per varied parameter
+    #     # 5 selected times
+    #     # ------------------------------------------------------------
+    #     if plot_eccentric_evolve is True:
+    #         fig, axes = plt.subplots(
+    #             len(parameter_effects),
+    #             1,
+    #             figsize=(11, 3.5 * len(parameter_effects)),
+    #             sharex=False,
+    #             gridspec_kw={"hspace": 0.6}
+    #         )
 
-    #             # plt.close('all')
-    
+    #         if len(parameter_effects) == 1:
+    #             axes = [axes]
+
+    #         time_indices = five_indices(n_t)
+
+    #         for i, (ax, effect) in enumerate(zip(axes, parameter_effects)):
+    #             values = effect["values"]
+    #             data = effect["data"]
+
+    #             for tidx in time_indices:
+    #                 ax.plot(
+    #                     values,
+    #                     data[:, tidx],
+    #                     linewidth=0.9,
+    #                     linestyle="-",
+    #                     label=f"t/M = {float(time[tidx]):.4g}"
+    #                 )
+
+    #             ax.set_xlabel(effect["symbol"])
+    #             ax.set_ylabel(ylabel)
+    #             ax.set_title(
+    #                 f"Residual change while varying {effect['name']}: "
+    #                 f"{fixed_text(effect['key'])}",
+    #                 fontsize=10
+    #             )
+    #             ax.grid(True)
+    #             if i == 0:
+    #                 ax.legend(
+    #                     title="Selected times",
+    #                     fontsize="small",
+    #                     title_fontsize="small",
+    #                     loc="best",
+    #                     ncol=1
+    #                 )
+
+    #         fig.suptitle(
+    #             f"Residual {train_obj.property}: parameter dependence at selected times",
+    #             y=1.005
+    #         )
+
+    #         plt.tight_layout()
+
+    #         if save_fig_eccentric_evolve is True:
+    #             figname = train_obj.figname(
+    #                 prefix="Residuals_eccentric_evolve",
+    #                 directory="Images/Residuals"
+    #             )
+    #             fig.savefig(figname)
+
 
     def _save_residual_dataset(self, train_obj:TrainingSetResults):
         """Function to save residual dataset to file."""
@@ -1556,22 +1820,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         print('Residuals saved to Straindata/Residuals')
 
 
-    def _get_training_obj(self, property):
-        if property == "amplitude":
-            if self.training_amp is None:
-                self.training_amp = TrainingSetResults(
-                    **self.result_kwargs_training(property="amplitude")
-                )
-            return self.training_amp
-        elif property == "phase":
-            if self.training_phase is None:
-                self.training_phase = TrainingSetResults(
-                    **self.result_kwargs_training(property="phase")
-                )
-            return self.training_phase
-        else:
-            raise ValueError(f"Unknown property: {property}")
-        
+  
 
     def get_greedy_parameters(self, 
                               train_obj:TrainingSetResults, 
@@ -1582,34 +1831,54 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                               plot_greedy_vectors=False, save_greedy_vecs_fig=False, 
                               plot_SVD_matrix=False, save_SVD_matrix_fig=False, 
                               plot_basis_indices=False, save_basis_indices_fig=False,
-                              show_legend=False):
+                              show_legend=False,
+                              save_greedy_errors=True,
+                              save_orthonormal_basis=True,
+                              free_memory=True
+                              ):
             """
             Greedy algorithm to select representative vectors from U using an orthonormal basis.
 
             Parameters
             ----------
-            U : ndarray, shape (num_vectors, vector_length)
-                Dataset of vectors to build the greedy basis from.
+            Train_obj : TrainingSetResults
+                Object containing the training set results, including the residuals dataset and parameter grid.
+            min_greedy_error : float, optional
+                Stop the greedy algorithm when the maximum residual norm falls below this value.
             N_greedy_vecs : int, optional
                 Maximum number of vectors to include in the greedy basis.
-            tol : float, optional
-                Stop when the maximum residual norm falls below this tolerance.
-            minimum_spacing : float, optional
-                If not None, greedy points are picked with a minimum spacing in between points.
+            normalize : bool, optional
+                If True, normalize the residuals before applying the greedy algorithm.
+            max_tree_depth : int, optional
+                Maximum depth of the tree in the greedy algorithm. A value of 0 means no tree (standard greedy), 
+                while higher values allow for more complex tree structures that can capture more intricate relationships in the data.
+            plot_greedy_error : bool, optional
+                If True, plots the greedy error convergence as a function of the number of basis vectors.
+            save_greedy_error_fig : bool, optional
+                If True, saves the greedy error convergence plot to a file.
+            plot_greedy_vectors : bool, optional
+                If True, plots the selected greedy vectors in the time domain.
+            save_greedy_vecs_fig : bool, optional
+                If True, saves the greedy vectors plot to a file.
+            plot_SVD_matrix : bool, optional
+                If True, plots the singular values of the residuals dataset to analyze its intrinsic dimensionality.
+            save_SVD_matrix_fig : bool, optional
+                If True, saves the SVD matrix plot to a file.
+            plot_basis_indices : bool, optional
+                If True, plots the distribution of the selected greedy basis indices in the parameter space.
+            save_basis_indices_fig : bool, optional
+                If True, saves the basis indices plot to a file.
 
             Returns
             -------
-            greedy_basis : ndarray
-                Orthonormal greedy basis vectors.
-            greedy_indices : list
-                Indices of the vectors chosen from U.
-            residuals : list
-                Maximum residual norm at each iteration.
+            reduced_basis_object : ReducedBasis
+                ReducedBasis object containing the greedy basis and indices of the selected vectors.
             """
+            if train_obj.residuals is None:
+                raise ValueError("Residuals dataset is not available in the training object. " \
+                "Please run _calculate_residuals() before running the greedy algorithm.")
             
-            residuals_flat = train_obj.residuals.reshape(-1, len(train_obj.time))
-
-            nan_mask = np.isnan(residuals_flat)
+            nan_mask = np.isnan(train_obj.residuals)
 
             if np.any(nan_mask):
                 bad_rows = np.where(np.any(nan_mask, axis=1))[0]
@@ -1623,46 +1892,75 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
 
             # Resolve properties with defaults
             greedy_tol = self.resolve_property(prop=min_greedy_error, default=-np.inf) 
-            nmax = self.resolve_property(prop=N_greedy_vecs, default=residuals_flat.shape[0])
+            nmax = self.resolve_property(prop=N_greedy_vecs, default=train_obj.residuals.shape[0])
 
             # Print warnings for dataset issues that could affect the greedy algorithm performance
-            self._greedy_parameters_warning(dataset=residuals_flat, 
+            self._greedy_parameters_warning(dataset=train_obj.residuals, 
                                             parameter_grid=self.parameter_grid,
                                             time_array=train_obj.time)
             
             # Get reduced basis object
             reduced_basis_object = ReducedBasis(greedy_tol=greedy_tol, normalize=normalize, nmax=nmax, lmax=max_tree_depth)
             # Calculate the greedy indices
-            reduced_basis_object.fit(training_set = residuals_flat,
+            reduced_basis_object.fit(training_set = train_obj.residuals,
                 parameters = self.parameter_grid,
                 physical_points = self.time
                 )
 
-            # Combine the basis indices from all leaves of the tree into a single list of indices
-            train_obj.basis_indices = []
 
             for leaf in reduced_basis_object.tree.leaves:
-                # print(f'Leaf {i} leaf indices: {leaf.indices}, leaf error: {leaf.errors}')    
-                train_obj.basis_indices.extend(int(idx) for idx in leaf.indices)
+                # flat list of all indices
+                train_obj.basis_indices.extend(leaf.indices)
 
+                # nested list: one list per leaf
+                train_obj.leaf_basis_indices.append(leaf.indices)
 
+                # basis vectors
+                train_obj.orthonormal_basis.extend(leaf.basis)
+
+                # errors
+                train_obj.greedy_errors.extend(np.asarray(leaf.errors).ravel())
+
+            # Save large data to file to avoid memory issues
+            if save_greedy_errors:
+                train_obj.save_greedy_errors()
+            
+            if save_orthonormal_basis:
+                train_obj.save_orthonormal_basis()
+
+            ### PLOTTING ###
             if plot_greedy_error:
-                self._plot_greedy_errors(reduced_basis_object=reduced_basis_object, train_obj=train_obj, save_greedy_fig=save_greedy_error_fig)
+                self._plot_greedy_errors(
+                                         train_obj=train_obj, 
+                                         save_greedy_fig=save_greedy_error_fig)
             
             if plot_basis_indices:
-                self.plot_basis_indices(train_obj=train_obj, save_basis_indices_fig=save_basis_indices_fig)
+                self._plot_basis_indices(
+                                        train_obj=train_obj, 
+                                        save_basis_indices_fig=save_basis_indices_fig)
 
             if plot_greedy_vectors:
-                self._plot_greedy_vectors(reduced_basis_object=reduced_basis_object, train_obj=train_obj, save_greedy_vecs_fig=save_greedy_vecs_fig, U=None, show_legend=show_legend)
+                self._plot_greedy_vectors( 
+                                          train_obj=train_obj, 
+                                          save_greedy_vecs_fig=save_greedy_vecs_fig, 
+                                          U=None, 
+                                          show_legend=show_legend)
             
             if plot_SVD_matrix:
-                self._plot_SVD_matrix(train_obj=train_obj, save_SVD_matrix_fig=save_SVD_matrix_fig)
-            
+                self._plot_SVD_matrix(train_obj=train_obj, 
+                                      save_SVD_matrix_fig=save_SVD_matrix_fig)
+
+            if free_memory:
+                train_obj.greedy_errors = None
+                train_obj.orthonormal_basis = None
+
             return reduced_basis_object
     
    
-
-    def plot_basis_indices(self, train_obj:TrainingSetResults, save_basis_indices_fig=False):
+    def _plot_basis_indices(self, 
+                           train_obj:TrainingSetResults, 
+                           save_basis_indices_fig=False
+                           ):
         def compute_chi_eff(params):
             q = params[:, 2]
             chi1 = params[:, 3]
@@ -1754,82 +2052,54 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
             )
             fig.savefig(figname, dpi=200, bbox_inches="tight")
 
+    def _plot_greedy_errors(
+        self,
+        train_obj: TrainingSetResults,
+        save_greedy_fig=False,
+        free_memory=False
+    ):
+        train_obj.load_greedy_errors()
 
-    def _plot_greedy_errors(self, reduced_basis_object: ReducedBasis, train_obj: TrainingSetResults, save_greedy_fig=False):
-        """Function to plot greedy errors of the reduced basis. Option to save figure in Images/Greedy_errors.
-        
-        Properties:
-        - reduced_basis_object: ReducedBasis object from which to extract the greedy basis and calculate projection errors.
-        - train_obj: object containing the dataset of vectors used to build the greedy basis.
-        - save_greedy_fig: bool, if True, saves the figure in Images/Greedy_errors with a name that includes the property and other relevant parameters.
-
-        Returns:
-        - proj_errors: list of projection errors for each number of greedy basis vectors.
-        """
-
-        reduced_basis = []
-        for i in range(len(reduced_basis_object.tree.leaves)):
-                # print(f'Leaf {i} leaf indices: {leaf.indices}, leaf error: {leaf.errors}')    
-                reduced_basis.extend(reduced_basis_object.tree.leaves[i].basis)
-        reduced_basis = np.array(reduced_basis) # (n_greedy_vecs, n_time)
-
-        # # Greedy errors
-        # proj_errors = []
-
-        # for k in range(1, len(reduced_basis) + 1):
-        #     basis_k = reduced_basis[:k]                        # (k, n_time)
-        #     max_proj_err = 0.0
-
-        #     for f in train_obj.residuals: # Loop over all vectors in the original dataset
-        #         # --- Best projection onto span(basis_k) ---
-        #         # Solve min ||f - c @ basis_k||
-        #         coeff_proj, *_ = np.linalg.lstsq(basis_k.T, f, rcond=None)
-        #         f_proj = basis_k.T @ coeff_proj
-
-        #         proj_err = np.linalg.norm(f - f_proj) / np.linalg.norm(f)
-        #         max_proj_err = max(max_proj_err, proj_err)
-
-        #     proj_errors.append(max_proj_err)
-
-        def stack_greedy_errors(node):
-            # if leaf node
-            if hasattr(node, "errors"):
-                return node.errors
-            # otherwise, concatenate the errors of children
-            errs = []
-            if hasattr(node, "children"):
-                for child in node.children:
-                    errs = np.hstack([errs, stack_greedy_errors(child)])
-
-            return errs
-
-        stacked_proj_errors = stack_greedy_errors(reduced_basis_object.tree)
+        stacked_proj_errors = np.asarray(train_obj.greedy_errors).ravel()
 
         fig_greedy_errors = plt.figure()
-        plt.semilogy(np.arange(len(stacked_proj_errors)), stacked_proj_errors, label='greedy error', lw=1.8, color='blue')
-        plt.yscale('log')
-        plt.ylabel(f'Greedy error {train_obj.property}')
-        plt.title(f'Greedy error {train_obj.property} per section for max_tree_depth = {reduced_basis_object.lmax}, tree_leaves = {len(reduced_basis_object.tree.leaves)}')
+        plt.semilogy(
+            np.arange(len(stacked_proj_errors)),
+            stacked_proj_errors,
+            label="greedy error",
+            lw=1.8,
+            color="blue",
+        )
+        plt.yscale("log")
+        plt.ylabel(f"Greedy error {train_obj.property}")
+        plt.title(
+            f"Greedy error {train_obj.property} per section "
+            f"tree_leaves = {len(train_obj.leaf_basis_indices)}"
+        )
         plt.legend()
 
-        # ax[1].semilogy(np.arange(len(proj_errors)), proj_errors, label='greedy error', lw=1.8, color='blue')
-        # ax[1].set_xlabel('# of greedy vectors')
-        # ax[1].set_yscale('log')
-        # ax[1].set_ylabel('Greedy error')
-        # ax[1].set_title('Greedy error over the full basis')
-        # ax[1].legend()
-
         if save_greedy_fig:
-            figname = train_obj.figname(prefix=f'Greedy_error', directory='Images/Greedy_errors') # Use the figname method of the training object to generate a consistent filename
+            figname = train_obj.figname(
+                prefix="Greedy_error",
+                directory="Images/Greedy_errors",
+            )
             fig_greedy_errors.savefig(figname)
 
-            # plt.close('all')
+        if free_memory:
+            train_obj.greedy_errors = None
 
         return stacked_proj_errors
+    
 
-    def _plot_SVD_matrix(self, train_obj: TrainingSetResults, save_SVD_matrix_fig=False):
+    def _plot_SVD_matrix(self, 
+                         train_obj: TrainingSetResults, 
+                         save_SVD_matrix_fig=False,
+                         free_memory=True
+                         ):
         """Function to plot the SVD matrix of the dataset. Option to save figure in Images/SVD_matrices."""
-
+        # Check if residuals are loaded, if not attempt to load
+        train_obj.load_residuals()
+        
         # Perform SVD on the dataset
         U, S, Vt = np.linalg.svd(train_obj.residuals, full_matrices=False)
 
@@ -1876,1018 +2146,120 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
 
             # plt.close('all')
 
-    # def _plot_greedy_vectors(self, reduced_basis_object, property, save_greedy_vecs_fig, U=None, show_legend=True):
-    #     """Function to plot and option to save the greedy basis vectors. If U is specified, also plot complete dataset before greedy algorithm."""
-      
-    #     fig_greedy_vecs, (ax_main, ax_bottom) = plt.subplots(
-    #         2, 1, figsize=(12, 6),
-    #         gridspec_kw={'height_ratios': [4, 0.5]}
-    #     )
+        if free_memory:
+            del U, S, Vt
+            train_obj.residuals = None
 
-    #     # --- Top plot: dataset and greedy basis vectors ---
-    #     if U is not None:
-    #         for i, vec in enumerate(U):
-    #             ax_main.plot(vec, color='grey', alpha=0.3, label='Vector dataset' if i == 0 else None)
+    def _plot_greedy_vectors(
+            self,
+            train_obj: TrainingSetResults,
+            save_greedy_vecs_fig=False,
+            U=None,
+            show_legend=False,
+            free_memory=False
+        ):
+        """Plot greedy basis vectors (no empirical nodes)."""
+        children = len(train_obj.leaf_basis_indices)
+        print(f"Number of child nodes: {children}")
 
-    #     for j in range(len(reduced_basis_object.tree.leaves)):
-    #         for i, vec in enumerate(reduced_basis_object.tree.leaves[j].basis):
-    #             ax_main.plot(vec, linewidth=0.6,
-    #                         label=f'$e$={round(self.ecc_ref_space[self.indices_basis[i]], 3)}')
-    
-        
-
-    #     ax_main.set_ylabel('Vector Value')
-    #     ax_main.set_title(f'Greedy Basis Vectors ({len(self.indices_basis)} vectors) for {property}')
-    #     if show_legend:
-    #         ax_main.legend()
-    #     ax_main.grid(True)
-
-    #     # --- Bottom plot: eccentric points and greedy indices ---
-    #     ecc_values = self.ecc_ref_space # assuming first component = eccentricity
-    #     y = np.zeros(len(self.ecc_ref_space))
-
-    #     # All dataset points
-    #     ax_bottom.plot(ecc_values, y, color='grey', alpha=0.6, label='Dataset points')
-
-    #     # Greedy-selected points
-    #     ax_bottom.scatter(ecc_values[self.indices_basis], y[self.indices_basis], color='red', s=20, label='Greedy parameters')
-
-    #     ax_bottom.set_yticks([])
-    #     ax_bottom.set_xlabel('Vector index / parameter')
-    #     ax_bottom.grid(True, axis='x', linestyle='--', alpha=0.5)
-    #     if show_legend:
-    #         ax_main.legend(loc='best', ncol=3, fontsize='small')
-
-
-    #     plt.tight_layout()
-    #     fig_greedy_vecs.show()
-
-
-    #     if save_greedy_vecs_fig:
-    #         os.makedirs('Images/Greedy_vectors', exist_ok=True)
-    #         figname = f'Images/Greedy_vectors/Greedy_vectors_{property}_M={self.total_mass}_ecc=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_space)}_ms={self.minimum_spacing_greedy}.png'
-
-    #         plt.savefig(figname)
-            
-    #         print(self.colored_text(f'Greedy vectors fig saved to {figname}', 'blue'))
-    #         # plt.close('all')
-
-    def _plot_greedy_vectors(self, reduced_basis_object: ReducedBasis, train_obj: TrainingSetResults, save_greedy_vecs_fig=False, U=None, show_legend=True):
-        """Function to plot and optionally save the greedy basis vectors.
-        If U is specified, also plot complete dataset before greedy algorithm.
-        """
-
-        # Detect tree size from number of leaves
-        children = len(reduced_basis_object.tree.leaves)
-        print(f'Number of child nodes: {children}')
-
-        # Base figure size
         base_width = 30
         base_height = 5
+        fig_height = base_height + 1.5 * children if children > 0 else base_height
 
-        # Extend height with number of leaves
-        fig_height = base_height + 2.5*children if children > 0 else base_height
-
-        fig_greedy_vecs, (ax_main, ax_bottom) = plt.subplots(
-            2, 1,
+        fig_greedy_vecs, ax_main = plt.subplots(
+            1, 1,
             figsize=(base_width, fig_height),
-            gridspec_kw={'height_ratios': [5, 2]}
         )
 
         # --------------------------------------------------
-        # Top plot
+        # Optional: full dataset overlay
         # --------------------------------------------------
         if U is not None:
             for i, vec in enumerate(U):
                 ax_main.plot(
+                    self.time,
                     vec,
-                    color='grey',
+                    color="grey",
                     alpha=0.3,
-                    label='Vector dataset' if i == 0 else None
+                    label="Training vectors" if i == 0 else None,
                 )
 
-        for j in range(len(reduced_basis_object.tree.leaves)):
-            leaf = reduced_basis_object.tree.leaves[j]
-            for i, vec in enumerate(leaf.basis):
-                label = None
-                if i < len(train_obj.basis_indices):
-                    label = f'$e$={round(self.ecc_ref_space[train_obj.basis_indices[i]], 3)}'
-                ax_main.plot(vec, linewidth=0.6, label=label)
+        # --------------------------------------------------
+        # Plot greedy basis vectors grouped by leaf
+        # --------------------------------------------------
+        if train_obj.orthonormal_basis is None:
+            train_obj.load_orthonormal_basis()
 
-        ax_main.set_ylabel('Vector Value')
+        print(f"Loaded orthonormal basis with {len(train_obj.orthonormal_basis)} vectors.")
+
+        basis_array = np.asarray(train_obj.orthonormal_basis)
+
+        for leaf_id, idxs in enumerate(train_obj.leaf_basis_indices):
+            idxs = np.asarray(idxs, dtype=int)
+            basis = basis_array[idxs]
+
+            for j, vec in enumerate(basis):
+                label = (
+                    f"Leaf {leaf_id}, e={train_obj.parameter_grid[idxs[j]]}"
+                    if show_legend else None
+                )
+
+                ax_main.plot(
+                    self.time,
+                    vec,
+                    linewidth=0.8,
+                    label=label,
+                )
+
+        ax_main.set_ylabel("Basis function amplitude")
+        ax_main.set_xlabel("time [M]")
         ax_main.set_title(
-            f'Greedy Basis Vectors ({len(train_obj.basis_indices)} vectors for {train_obj.property})'
+            f"Greedy Basis Vectors "
+            f"({len(train_obj.basis_indices)} total, "
+            f"{children} leaves)"
         )
 
         if show_legend:
-            ax_main.legend(loc='best', ncol=3)
+            ax_main.legend(loc="best", ncol=3)
 
         ax_main.grid(True)
-
-        # --------------------------------------------------
-        # Bottom plot: visualize tree splitting
-        # --------------------------------------------------
-
-        # First pass:
-        # traverse the tree, assign one unique color per node, and collect counts by depth
-        traversal = []
-        depth_counts = {}
-
-        color_counter = 0
-        stack = [(reduced_basis_object.tree, 0, f"C{color_counter}")]
-
-        while stack:
-            node, depth, color = stack.pop()
-            traversal.append((node, depth, color))
-
-            if hasattr(node, 'indices') and node.indices is not None:
-                n_greedy = len(node.indices)
-            else:
-                n_greedy = 0
-
-            if depth not in depth_counts:
-                depth_counts[depth] = []
-            depth_counts[depth].append(n_greedy)
-
-            # Assign globally unique colors to children
-            if hasattr(node, 'children') and node.children is not None:
-                for child in reversed(node.children):
-                    color_counter += 1
-                    stack.append((child, depth + 1, f"C{color_counter}"))
-            else:
-                # Fallback for split flags without explicit child objects
-                if hasattr(node, 'idxs_subspace1') and node.idxs_subspace1 is not None:
-                    color_counter += 1
-                    stack.append((node, depth + 1, f"C{color_counter}"))
-                if hasattr(node, 'idxs_subspace0') and node.idxs_subspace0 is not None:
-                    color_counter += 1
-                    stack.append((node, depth + 1, f"C{color_counter}"))
-
-        # Build one greedy label per depth
-        depth_labels = {}
-        for d, counts in depth_counts.items():
-            counts_str = ", ".join(str(c) for c in counts)
-            point_word = "point" if len(counts) == 1 and counts[0] == 1 else "points"
-            depth_labels[d] = f"Greedy picks (depth {d}: {counts_str} {point_word})"
-
-        used_depth_labels = set()
-        used_dataset_label = False
-
-        # Second pass: actual plotting
-        for node, depth, color in traversal:
-            x = np.asarray(node.train_parameters).squeeze()
-
-            ax_bottom.scatter(
-                x,
-                [depth] * len(x),
-                s=20,
-                alpha=0.3,
-                color='grey',
-                label=f"Node depth {depth} ({len(x)} pts)" if (depth == 0 and not used_dataset_label) else None
-            )
-
-            if depth == 0:
-                used_dataset_label = True
-
-            if hasattr(node, 'indices') and node.indices is not None:
-                greedy_params = x[node.indices]
-
-                ax_bottom.scatter(
-                    greedy_params,
-                    [depth] * len(greedy_params),
-                    s=80,
-                    edgecolor='k',
-                    facecolor=color,
-                    label=depth_labels[depth] if depth not in used_depth_labels else None
-                )
-
-                used_depth_labels.add(depth)
-
-        ax_bottom.set_xlabel("Eccentricity")
-        ax_bottom.set_ylabel("Tree depth")
-        ax_bottom.grid(True, axis='x', linestyle='--', alpha=0.5)
-
-
-        ax_bottom.legend(loc='best')
-
-        plt.tight_layout()
-
-        if save_greedy_vecs_fig:
-            figname = train_obj.figname(prefix=f'Greedy_vectors', directory='Images/Greedy_vectors') # Use the figname method of the training object to generate a consistent filename
-            plt.savefig(figname)
-
-
-    def get_greedy_parameters_old(self, U, property, min_greedy_error=None, N_greedy_vecs=None, reg=1e-6, plot_greedy_error=False, save_greedy_error_fig=False, plot_greedy_vectors=False, save_greedy_vecs_fig=False, plot_greedy_basis_formation=False, minimum_spacing=None):
-        """
-        Greedy algorithm to select representative vectors from U using an orthonormal basis.
-
-        Parameters
-        ----------
-        U : ndarray, shape (num_vectors, vector_length)
-            Dataset of vectors to build the greedy basis from.
-        N_greedy_vecs : int, optional
-            Maximum number of vectors to include in the greedy basis.
-        tol : float, optional
-            Stop when the maximum residual norm falls below this tolerance.
-        minimum_spacing : float, optional
-            If not None, greedy points are picked with a minimum spacing in between points.
-
-        Returns
-        -------
-        greedy_basis : ndarray
-            Orthonormal greedy basis vectors.
-        greedy_indices : list
-            Indices of the vectors chosen from U.
-        residuals : list
-            Maximum residual norm at each iteration.
-        """
-
-        if minimum_spacing is None:
-            minimum_spacing = self.minimum_spacing_greedy
-            print('minimum spacing: ', minimum_spacing)
-
-        # Make a copy of U and normalize each vector to avoid scale issues
-        U = U.copy()
-        time_array = self.time
-        folder_img = f'test_{property}_{N_greedy_vecs}'
-
-        U_normalized = normalize(U, axis=1)[1:] # Skip the first row (zero vector of ecc=0) to prevent false uniqueness due to inner product of zero vectors
-        num_vectors = U.shape[0]
-
-        greedy_basis_orthonormal = []
-        greedy_basis = []
-        greedy_indices = []
-        greedy_errors = []
-        
-        # Get delta ecc_ref for application of minimum_spacing
-        delta_ecc_ref =self.ecc_ref_space[1] -self.ecc_ref_space[0]
-        minimum_spacing_idx = int(minimum_spacing / delta_ecc_ref)
-        
-        # Mask to track valid vectors (True = can be picked)
-        valid_mask = np.ones(U_normalized.shape[0], dtype=bool)
-
-        for step in range(num_vectors):
-            # Stop if no more valid vectors due to minimum spacing
-            if not valid_mask.any():
-                print(self.colored_text(f'WARNING: break in get_greedy_params at N_greedy_vecs = {len(greedy_indices)}. No more valid vectors due to minimum spacing constraint of {minimum_spacing}.', 'red'))
-                if property == 'phase':
-                    self.N_basis_vecs_phase = len(greedy_indices)
-                elif property == 'amplitude':
-                    self.N_basis_vecs_amp = len(greedy_indices)
-
-                break
-
-            # Compute residuals: h - sum_i <h, e_i> e_i for all vectors h in U
-            if len(greedy_basis_orthonormal) == 0:
-                # First iteration: residuals are just the norms of U
-                residual_norms = np.linalg.norm(U_normalized, axis=1)
-
-            else:
-                
-
-                # Stack basis for matrix operations
-                B = np.vstack(greedy_basis_orthonormal)  # shape: (m, vector_length)
-                # Compute inner products <h, e_i> for all h in U
-                coeffs = U_normalized @ B.T      # shape: (num_vectors, m)
-                # Reconstruct projections
-                U_proj = coeffs @ B              # shape: (num_vectors, vector_length)
-                # Residuals
-                residual_norms = np.linalg.norm(U_normalized - U_proj, axis=1)
-
-                # Accumulated rounding error
-                # orth_err = np.linalg.norm(B @ B.T - np.eye(len(B)), 'fro')
-                # print("orthogonal error:", orth_err)
-                
-                if plot_greedy_basis_formation:
-                    max_idx = np.argmax(residual_norms)
-
-                    fig_comp_greedy, axs = plt.subplots(4, 1, figsize=(15, 15))
-
-                    print('shapes: ', coeffs.shape, U_proj.shape, residual_norms.shape)
-                    axs[0].scatter(self.ecc_ref_space[greedy_indices], np.zeros(len(greedy_indices)), label=f'current greedy indices, i={step}')
-                    axs[0].scatter(self.ecc_ref_space[0], 0, c='orange', label='minimum spacing')
-                    axs[0].scatter(self.ecc_ref_space[minimum_spacing_idx], 0, c='orange')
-                    axs[0].plot(self.ecc_ref_space[1:], residual_norms,  label=f'step = {step}')
-                    axs[0].set_xlabel('ecc')
-                    axs[0].set_ylabel('residuals norm')
-                    axs[0].legend()
-
-                    axs[1].scatter(self.ecc_ref_space[greedy_indices], np.zeros(len(greedy_indices)))
-                    for i in range(len(U_normalized)):
-                        axs[1].plot(time_array, U_normalized.T, color='grey')
-                    for j in range(step):
-                        axs[1].plot(time_array, U_normalized[greedy_indices[j] - 1], color='red')
-                    axs[1].plot(time_array, U_normalized[greedy_indices[-1] - 1], label='last added vec', color='blue')
-                    # axs[1].plot(self.ecc_ref_space[1:], residual_norms,  label=f'step = {step}')
-                    axs[1].set_ylabel('residuals diff')
-                    axs[1].legend()
-
-
-                    axs[2].scatter(self.ecc_ref_space[greedy_indices], np.zeros(len(greedy_indices)), label=f'current greedy indices, i={step}')
-                    axs[2].plot(self.ecc_ref_space[1:], coeffs)
-                    axs[2].set_ylabel('coeffs')
-                    axs[2].legend()
-
-                    colors = plt.cm.tab10.colors[:7]
-                    for i,c in zip([1, 2, 3, 4, 5, 6, max_idx], colors):
-                        # axs[3].plot(U_normalized[i], label="U_normalized", c=c)
-                        # axs[3].plot(U_proj[i], label="U_proj", c=c)
-                        axs[3].plot(U_normalized[i] - U_proj[i], label=f"residual {str(i)}", c=c)
-                    axs[3].legend()
-                    axs[3].set_ylabel('residuals vec')
-                    axs[3].set_xlabel('time')
-
-                    os.makedirs(f'Images/{folder_img}/', exist_ok=True)
-                    fig_comp_greedy.savefig(f'Images/{folder_img}/test_greedy_{step}.png')
-
-
-
-            # Apply mask: exclude already-picked vectors + minimum spacing. Set non pick to -infinity so they are never picked.
-            masked_residuals = np.where(valid_mask, residual_norms, -np.inf)
-
-            # Find the vector with the largest residual
-            max_idx = np.argmax(masked_residuals)
-            max_res = residual_norms[max_idx]
-
-            # Save highest residual --> greedy error
-            greedy_errors.append(round(float(max_res), 6)) 
-            greedy_indices.append(int(max_idx + 1))  # +1 to account for the zero vector at index 0. int for clearer show of greedy incidces
-            greedy_basis.append(U[max_idx + 1])  # Store the original vector from U
-
-            # Add new vector to the orthonormal basis
-            new_vec = U_normalized[max_idx].copy()
-
-            # Modified Gram-Schmidt: single pass
-            for b in greedy_basis_orthonormal:   # use the orthonormal vectors
-                new_vec -= np.dot(new_vec, b) * b
-
-            # second pass (re-orthogonalize to remove numerical residue)
-            for b in greedy_basis_orthonormal:
-                new_vec -= np.dot(new_vec, b) * b
-
-            # Normalise vector
-            norm = np.linalg.norm(new_vec)
-            new_vec /= norm
-
-            greedy_basis_orthonormal.append(new_vec)
-
-            # Update mask to enforce minimum spacing around this index
-            start = max(0, max_idx - minimum_spacing_idx)
-            end = min(valid_mask.size, max_idx + minimum_spacing_idx + 1)
-            valid_mask[start:end] = False
-
-            # --- Check stopping conditions ---
-            if min_greedy_error is not None and (max_res <= min_greedy_error or len(greedy_basis) == len(U)):
-                break
-            if N_greedy_vecs is not None and len(greedy_basis) >= N_greedy_vecs:
-                break
-            
-
-        # Stack basis for convenience
-        greedy_basis = np.vstack(greedy_basis)
-        greedy_basis_orthonormal = np.vstack(greedy_basis_orthonormal)
-
-        #  Plot greedy errors if requested
-        if plot_greedy_error:
-            self._plot_greedy_errors(greedy_errors, property, save_greedy_error_fig)
-
-        if plot_greedy_vectors:
-            # self._plot_greedy_vectors(U, greedy_basis_orthonormal, greedy_indices, property, save_greedy_vecs_fig)
-            self._plot_greedy_vectors(U=U, greedy_basis=greedy_basis, greedy_parameters_idx=greedy_indices, property=property, save_greedy_vecs_fig=save_greedy_vecs_fig)
-
-        print(f'Highest error of best approximation of the basis: {round(np.min(greedy_errors), 5)} | {len(greedy_basis)} basis vectors')
-        print(greedy_indices, greedy_errors)
-
-        return greedy_indices, greedy_basis_orthonormal
-
-
-    def _plot_greedy_vectors_old(self, greedy_basis, greedy_parameters_idx, property, save_greedy_vecs_fig, U=None):
-        """Function to plot and option to save the greedy basis vectors. If U is specified, also plot complete dataset before greedy algorithm."""
-
-        fig_greedy_vecs, (ax_main, ax_bottom) = plt.subplots(
-            2, 1, figsize=(12, 6),
-            gridspec_kw={'height_ratios': [4, 0.5]}
-        )
-
-        # --- Top plot: dataset and greedy basis vectors ---
-        if U is not None:
-            for i, vec in enumerate(U):
-                ax_main.plot(vec, color='grey', alpha=0.3, label='Vector dataset' if i == 0 else None)
-
-        for i, vec in enumerate(greedy_basis):
-            ax_main.plot(vec, color='red', linewidth=0.6,
-                        label=f'{elf.ecc_ref_space[greedy_parameters_idx[i]]}')
-
-        
-
-        ax_main.set_ylabel('Vector Value')
-        ax_main.set_title(f'Greedy Basis Vectors ({len(greedy_basis)} vectors) for {property}')
-        ax_main.legend()
-        ax_main.grid(True)
-
-        # --- Bottom plot: eccentric points and greedy indices ---
-        ecc_values =self.ecc_ref_space # assuming first component = eccentricity
-        y = np.zeros(len(self.ecc_ref_space))
-
-        # All dataset points
-        ax_bottom.plot(ecc_values, y, color='grey', alpha=0.6, label='Dataset points')
-
-        # Greedy-selected points
-        ax_bottom.scatter(ecc_values[greedy_parameters_idx], y[greedy_parameters_idx], color='red', s=50, label='Greedy parameters')
-
-        ax_bottom.set_yticks([])
-        ax_bottom.set_xlabel('Vector index / parameter')
-        ax_bottom.grid(True, axis='x', linestyle='--', alpha=0.5)
-        ax_main.legend(loc='best', ncol=3, fontsize='small')
-
-
-        plt.tight_layout()
-        fig_greedy_vecs.show()
-
-
-        if save_greedy_vecs_fig:
-            os.makedirs('Images/Greedy_vectors', exist_ok=True)
-            plt.savefig(f'Images/Greedy_vectors/Greedy_vectors_{property}_M={self.total_mass}_ecc=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_space)}_ms={self.minimum_spacing_greedy}.png')
-            print('Greedy vectors fig saved to Images/Greedy_vectors')
-            # plt.close('all')
-
-    def _plot_greedy_errors_old(self, greedy_errors, property, save_greedy_fig):
-        """Function to plot and option to save the greedy errors."""
-
-        N_basis_vectors = np.arange(1, len(greedy_errors) + 1)
-
-        fig_greedy_errors = plt.figure(figsize=(7, 5))
-        plt.plot(N_basis_vectors, greedy_errors, label='Greedy Errors')
-        plt.scatter(N_basis_vectors, greedy_errors, s=4)
-        # for i, label in enumerate(self.ecc_ref_space[greedy_parameters_idx]):
-        #     plt.annotate(label, (N_basis_vectors[i], greedy_errors[i]), textcoords="offset points", xytext=(5, 5), ha='center', fontsize=5.5)
-        plt.xlabel('Number of Waveforms')
-        if property == 'phase':
-            plt.ylabel(f'Greedy error $\Delta \phi$')
-        elif property == 'amplitude':
-            plt.ylabel(f'Greedy error $\Delta A$')
-        plt.yscale('log')
-        # plt.title('Greedy errors of residual {} for N = {}'.format(property, len(greedy_errors)-1))
-        plt.grid(True)
-        fig_greedy_errors.show()
-
-        if save_greedy_fig:
-            os.makedirs('Images/Greedy_errors', exist_ok=True)
-            plt.savefig(f'Images/Greedy_errors/Greedy_error_{property}_M={self.total_mass}_ecc=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_space)}_gerr={min(greedy_errors)}_ms={self.minimum_spacing_greedy}.png')
-            
-            print('Greedy error fig saved to Images/Greedy_errors')
-            # plt.close('all')
-        
-
-    def _plot_validation_errors_old(self, validation_vecs, greedy_basis, trivial_basis, property, save_validation_fig):
-        """Function to plot and option to save validation errors."""
-        
-        def compute_proj_errors(basis, V, reg=1e-6):
-            """Computes the projection errors when approximating target vectors V using the basis."""
-            
-            normalized_basis = basis / np.linalg.norm(basis, axis=1, keepdims=True)
-            normalized_V = V / np.linalg.norm(V, axis=1, keepdims=True)
-            G = np.dot(normalized_basis, normalized_basis.T) + reg * np.eye(normalized_basis.shape[0])
-            R = np.dot(normalized_basis, normalized_V.T)
-            errors = []
-            
-            for N in range(len(normalized_basis) + 1):
-                V_proj = np.dot(np.linalg.solve(G[:N, :N], R[:N, :]).T, normalized_basis[:N, :]) if N > 0 else np.zeros_like(V)
-                errors.append(np.max(np.linalg.norm(normalized_V - V_proj, axis=1)).round(6))
-            return errors
-        
-        greedy_validation_errors = compute_proj_errors(greedy_basis, validation_vecs)
-        trivial_validation_errors = compute_proj_errors(trivial_basis, validation_vecs)
-        N_basis_vectors = np.arange(1, len(greedy_validation_errors) + 1)
-
-        plt.figure(figsize=(7, 5))
-        plt.plot(N_basis_vectors, greedy_validation_errors, label='Greedy Basis Errors')
-        plt.plot(N_basis_vectors, trivial_validation_errors, label='Trivial Basis Errors')
-        plt.scatter(N_basis_vectors, greedy_validation_errors, s=4)
-        plt.scatter(N_basis_vectors, trivial_validation_errors, s=4)
-        plt.xlabel('Number of Waveforms')
-        plt.ylabel('Validation Error')
-        plt.yscale('log')
-        plt.legend()
-        plt.grid(True)
-
-        if save_validation_fig:
-            os.makedirs('Images/Validation_errors', exist_ok=True)
-            plt.savefig(f'Images/Validation_errors/Validation_error_{property}_M={self.total_mass}_ecc=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_space)}.png')
-        
-        # plt.close('all')
-
-    def get_empirical_nodes_old(self, reduced_basis, property, plot_emp_nodes_at_ecc=True, save_fig=True):
-        """
-        Perform the Empirical Interpolation Method (EIM).
-        
-        Parameters
-        ----------
-        reduced_basis : ndarray, shape (m, L)
-            The reduced basis vectors (m basis functions, each of length L).
-        grid_points : ndarray, shape (L,)
-            The discrete grid points (t_l values).
-
-        Returns
-        -------
-        emp_nodes_idx : list of int
-            Indices of empirical nodes in the grid.
-        emp_nodes : list of float
-            The actual grid point locations.
-        """
-        m, L = reduced_basis.shape
-        emp_nodes_idx = []
-        emp_nodes = []
-
-        U, S, VT = np.linalg.svd(reduced_basis)
-        plt.semilogy(S, 'o-')
-        plt.title("Singular Values of Reduced Basis")
-        # plt.show()
-
-        # Step 1 — first node: pick the max abs value from first basis vector
-        i = np.argmax(np.abs(reduced_basis[0]))
-        emp_nodes_idx.append(i)
-
-        # Loop for j = 2 ... m
-        for j in range(1, m):
-            # Build V matrix (j-1 x j-1) from previous basis vectors at previous nodes
-            V = reduced_basis[:j, emp_nodes_idx]
-            print(f"Iteration {j}:")
-            print(f"Rank of V:", np.linalg.matrix_rank(V), ' should be smaller than {j}')
-            print("Condition number of V:", np.linalg.cond(V), ' should be > 1e10')
-            # print('V: ', V)
-            # # Solve for coefficients that interpolate e_j at previous nodes
-            # coeffs = np.linalg.solve(V, reduced_basis[j, emp_nodes_idx])
-
-            coeffs = np.linalg.pinv(V) @ reduced_basis[j, emp_nodes_idx]
-            # Build interpolant on whole grid
-            interpolant = np.dot(coeffs, reduced_basis[:j])
-
-            # Compute residual
-            residual = reduced_basis[j] - interpolant
-
-            # Pick next node as location of max abs residual
-            i = np.argmax(np.abs(residual))
-            emp_nodes_idx.append(i)
-
-        emp_nodes = self.time[emp_nodes_idx]
-        # print(emp_nodes_idx, emp_nodes)
-
-        # Optional: Plot the empirical nodes if plot_emp_nodes_at_ecc is set
-        if plot_emp_nodes_at_ecc:
-            self._plot_empirical_nodes(emp_nodes_idx, property, plot_emp_nodes_at_ecc, save_fig)
-
-        return emp_nodes_idx, emp_nodes
-    
-    def get_empirical_nodes_old2(self, reduced_basis, property, plot_emp_nodes_at_ecc=True, save_fig=True):
-        """
-        Reduced basis needs to be orthonormal!
-        """
-        
-        m, L = reduced_basis.shape
-
-        emp_nodes_idx = []
-        emp_nodes = []
-        time_grid = self.time  # Assuming this is your grid points
-
-        # # Initial SVD check
-        # U, S, VT = np.linalg.svd(reduced_basis)
-        # plt.semilogy(S, 'o-')
-        # plt.title("Singular Values of Reduced Basis")
-        # plt.show()
-
-        # First node selection
-        i = np.argmax(np.abs(reduced_basis[0]))
-        emp_nodes_idx.append(int(i))
-
-        for j in range(1, reduced_basis.shape[0]):
-            V = reduced_basis[:j, emp_nodes_idx]
-            coeffs = np.linalg.pinv(V) @ reduced_basis[j, emp_nodes_idx]
-            interpolant = np.dot(coeffs, reduced_basis[:j])
-            residual = reduced_basis[j] - interpolant
-
-            # # --- Enhanced Residual Visualization ---
-            # plt.figure(figsize=(15, 10))
-            
-            # # Plot 1: Current basis vector being approximated
-            # plt.subplot(3, 1, 1)
-            # plt.plot(time_grid, reduced_basis[j], 'b-', label=f'Basis Vector {j}')
-            # plt.scatter(time_grid[emp_nodes_idx], reduced_basis[j, emp_nodes_idx], 
-            #         c='blue', marker='o', label='Node Values')
-            # plt.title(f'Target Basis Vector {j} to Approximate')
-            # plt.legend()
-            
-            # Plot 2: Interpolant construction
-            # plt.subplot(3, 1, 2)
-            # for k in range(j):
-            #     plt.plot(time_grid, coeffs[k] * reduced_basis[k], '--', alpha=0.5, 
-            #             label=f'{coeffs[k]:.2f}×Basis{k}')
-            # plt.plot(time_grid, interpolant, 'r-', linewidth=2, label='Interpolant Sum')
-            # plt.scatter(time_grid[emp_nodes_idx], interpolant[emp_nodes_idx], 
-            #         c='red', marker='x', label='Interpolant at Nodes')
-            # plt.title('Interpolant Construction (Weighted Sum of Previous Basis)')
-            # plt.legend()
-            
-            # # Plot 3: Residual calculation
-            # plt.subplot(3, 1, 3)
-            # plt.plot(time_grid, reduced_basis[j], 'b-', label='Original Vector')
-            # plt.plot(time_grid, interpolant, 'r-', label='Interpolant')
-            # plt.plot(time_grid, residual, 'g-', label='Residual')
-            # plt.scatter(time_grid[emp_nodes_idx], np.zeros_like(emp_nodes_idx),
-            #         c='black', marker='x', label='Existing Nodes')
-            # new_node = np.argmax(np.abs(residual))
-            # plt.scatter(time_grid[new_node], residual[new_node], 
-            #         c='magenta', s=100, label='New Node Candidate')
-            # plt.title(f'Residual Calculation (Max at {time_grid[new_node]:.2f})')
-            # plt.legend()
-            
-            # plt.tight_layout()
-            # plt.show()
-
-            i = np.argmax(np.abs(residual))
-            emp_nodes_idx.append(int(i))
-
-        # --- Final Plots ---
-        emp_nodes = self.time[emp_nodes_idx]
-        print(emp_nodes_idx, emp_nodes)
-        
-        # Plot 5: All Basis Vectors with Final Nodes
-        plt.figure(figsize=(12, 6))
-        # for k in range(m):
-            # plt.plot(self.time, reduced_basis[k], alpha=0.5, label=f"Basis {k}" if k < 5 else None)
-        plt.scatter(emp_nodes, np.zeros_like(emp_nodes), c='red', marker='x', s=100, label="EIM Nodes")
-        plt.title(f"Final Basis Vectors and Selected Nodes for {property}")
-        plt.xlabel("Time")
-        plt.ylabel("Basis Value")
-        plt.legend(ncol=2)
-        plt.grid(True)
-        # plt.show()
-
-        # Plot 6: Node Distribution Histogram
-        # if len(emp_nodes_idx) > 1:
-            # distances = np.diff(np.sort(emp_nodes_idx))
-            # plt.figure(figsize=(8, 4))
-            # plt.hist(distances, bins=20)
-            # plt.title("Distance Between Consecutive Nodes")
-            # plt.xlabel("Grid Points")
-            # plt.ylabel("Frequency")
-            # plt.show()
-
-        if plot_emp_nodes_at_ecc:
-            self._plot_empirical_nodes(emp_nodes_idx, property, plot_emp_nodes_at_ecc, save_fig)
-
-        return emp_nodes_idx
-
-    def gram_schmidt_rows(self, V, tol=1e-12, verbose=True):
-        """
-        Orthonormalize a set of row vectors using a numerically stable 
-        Modified Gram–Schmidt process with reorthogonalization.
-
-        Parameters
-        ----------
-        V : np.ndarray
-            Shape (n_vec, n_dim). Each row is a vector to orthonormalize.
-        tol : float, optional
-            Threshold below which a vector is considered linearly dependent and skipped.
-        verbose : bool, optional
-            If True, prints diagnostic messages for dependent rows.
-
-        Returns
-        -------
-        Q : np.ndarray
-            Orthonormalized rows (shape (n_valid_vecs, n_dim)).
-        """
-
-        V = np.asarray(V, dtype=float).copy()
-        n_vec, n_dim = V.shape
-        Q_list = []
-
-        for i in range(n_vec):
-            v = V[i].copy()
-
-            # First orthogonalization pass
-            for q in Q_list:
-                v -= np.dot(q, v) * q
-
-            # Second orthogonalization pass (reorthogonalization)
-            for q in Q_list:
-                v -= np.dot(q, v) * q
-
-            norm = np.linalg.norm(v)
-
-            if norm < tol:
-                if verbose:
-                    print(f"⚠️  Skipping row {i} (norm={norm:.2e}) — linearly dependent or near-zero.")
-                continue  # skip nearly dependent vector
-
-            Q_list.append(v / norm)
-
-        if not Q_list:
-            raise ValueError("All input vectors were linearly dependent or zero.")
-
-        Q = np.vstack(Q_list)
-        return Q
-
-    
-    def empirical_interpolation_from_dataset(self, waveforms_dataset, property, plot_emp_nodes_at_ecc=True, save_fig=True):
-        """
-        Compute empirical interpolation nodes directly from a dataset (not from a reduced basis).
-
-        Parameters
-        ----------
-        property_matrix : np.ndarray
-            2D array with shape (num_waveforms, num_points).
-            Each row is a waveform (or function sampled at discrete points).
-        N_nodes : int
-            Desired number of empirical nodes to select.
-
-        Returns
-        -------
-        emp_nodes_idx : list
-            List of indices of selected empirical nodes.
-        """
-
-        if property == 'phase':
-            N_nodes = self.N_basis_vecs_phase
-        if property == 'amplitude':
-            N_nodes = self.N_basis_vecs_amp
-
-        
-        def calc_empirical_interpolant(property_array, reduced_basis, emp_nodes_idx):
-            """
-            Calculates the empirical interpolant for a specific waveform property using a reduced basis.
-            
-            Parameters:
-            ----------------
-            - property_array (numpy.ndarray): The waveform property values (e.g., phase or amplitude).
-            - reduced_basis (numpy.ndarray): Reduced basis of residual properties.
-            - emp_nodes_idx (list): Indices of empirical nodes.
-
-            Returns:
-            ----------------
-            - empirical_interpolant (numpy.ndarray): The computed empirical interpolant of the waveform property.
-            """
-            
-            empirical_interpolant = np.zeros_like(property_array)
-            m = len(emp_nodes_idx)
-            
-            # Prepare interpolation coefficients
-            B_j_vec = np.zeros((reduced_basis.shape[1], m))
-            V = np.array([[reduced_basis[i][emp_nodes_idx[j]] for i in range(m)] for j in range(m)])
-            V_inv = np.linalg.pinv(V)  # pseudo-inverse for stability
-
-            # Calculate B_j interpolation vector
-            for t in range(reduced_basis.shape[1]):
-                for i in range(m):
-                    B_j_vec[t, i] = np.dot(reduced_basis[:, t], V_inv[:, i])
-
-            # Compute the empirical interpolant
-            for j in range(reduced_basis.shape[0]):
-                empirical_interpolant += B_j_vec[:, j] * property_array[emp_nodes_idx[j]]
-
-            return empirical_interpolant
-        
-        reduced_basis = self.gram_schmidt_rows(waveforms_dataset)
-        
-        # Initialize with the index of the maximum value in the first basis vector
-        i = np.argmax(reduced_basis[0])
-        emp_nodes_idx = [i]
-        EI_error = []
-
-        # Loop through the reduced basis to calculate interpolants
-        for j in range(1, N_nodes):
-            empirical_interpolant = calc_empirical_interpolant(reduced_basis[j], reduced_basis[:j], emp_nodes_idx)
-            residuals = empirical_interpolant - reduced_basis[j][:, np.newaxis].T
-            EI_error.append(np.linalg.norm(residuals))
-
-            # Identify the next empirical node based on the maximum residual
-            next_idx = np.argmax(np.abs(residuals))
-            emp_nodes_idx.append(next_idx)
-
-        #     # Inside the loop
-        #     fig_residuals = plt.figure(figsize=(8, 4))
-        #     plt.plot(np.abs(residuals).flatten(), label=f"Step {j}")
-        #     plt.axvline(next_idx, color='r', linestyle='--', label=f"New node {next_idx}")
-        #     plt.title(f"Residual at Step {j}")
-        #     plt.xlabel("Sample index")
-        #     plt.ylabel("|Residual|")
-        #     plt.legend()
-        #     plt.tight_layout()
-        #     fig_residuals.savefig(f'Images/Empirical_nodes/test_residuals_{j}.png')
-
-        # fig_error = plt.figure(figsize=(6, 4))
-        # plt.semilogy(EI_error, marker='o')
-        # plt.title("Empirical Interpolation Error Convergence")
-        # plt.xlabel("Iteration")
-        # plt.ylabel("‖Residual‖₂")
-        # plt.grid(True, which='both', ls='--')
-        # fig_error.savefig('Images/Empirical_nodes/test_error.png')
-
-        # # Example: Compare the 3rd waveform’s true vs interpolated
-        # j = 2
-        # wf_true = reduced_basis[j]
-        # wf_interp = calc_empirical_interpolant(wf_true, reduced_basis[:j], emp_nodes_idx[:j])
-
-        # fig_compare = plt.figure(figsize=(8, 4))
-        # plt.plot(wf_true, label="True waveform", lw=2)
-        # plt.plot(wf_interp, '--', label="Interpolated", lw=2)
-        # plt.scatter(emp_nodes_idx[:j], wf_true[emp_nodes_idx[:j]], color='red', label="Empirical nodes")
-        # plt.title(f"Empirical Interpolation at Step {j}")
-        # plt.legend()
         # plt.tight_layout()
-        # fig_compare.savefig('Images/Empirical_nodes/test_compare.png')
+
+        if save_greedy_vecs_fig:
+            figname = train_obj.figname(
+                prefix="Greedy_vectors",
+                directory="Images/Greedy_vectors",
+            )
+            fig_greedy_vecs.savefig(figname)
+
+        if free_memory:
+            train_obj.orthonormal_basis = None
+
+        return fig_greedy_vecs
 
 
-        # Optional: Plot the empirical nodes if plot_emp_nodes_at_ecc is set
-        if plot_emp_nodes_at_ecc:
-            self._plot_empirical_nodes_from_dataset(emp_nodes_idx, property, plot_emp_nodes_at_ecc, save_fig)
-        
-        return emp_nodes_idx
-
-    def get_empirical_nodes_test(self, reduced_basis, property, plot_emp_nodes_at_ecc=True, save_fig=True):
+    def get_empirical_nodes(self, 
+                            reduced_basis_object: ReducedBasis, 
+                            train_obj: TrainingSetResults, 
+                            plot_first_N_vectors=None,
+                            plot_emp_nodes_on_basis=False, save_emp_nodes_on_basis_fig=False, 
+                            plot_interpolation_matrix=False, save_interpolation_matrix_fig=False, 
+                            plot_proj_vs_eim_error=False, save_proj_vs_eim_error_fig=False):
         """
         Calculate the empirical nodes for a given dataset based on a reduced basis of residual properties.
 
         Parameters:
         ----------------
-        - reduced_basis (numpy.ndarray): Reduced basis of residual properties (phase or amplitude).
-        - property (str): Waveform property to evaluate, options are "phase" or "amplitude".
-        - plot_emp_nodes_at_ecc (float, optional): If set, plots the empirical nodes at a specified eccentricity value.
-        - save_fig (bool, optional): Saves the empirical nodes plot if set to True.
-
-        Returns:
-        ----------------
-        - emp_nodes_idx (list): Indices of empirical nodes for the given dataset.
-        """
-
-
-        def calc_empirical_interpolant(property_array, reduced_basis, emp_nodes_idx):
-            """
-            Compute empirical interpolant for a waveform property using reduced basis.
-            """
-            m = len(emp_nodes_idx)
-            empirical_interpolant = np.zeros_like(property_array)
-
-            m = len(emp_nodes_idx)
-            V = reduced_basis[:m, emp_nodes_idx].T
-            rhs = property_array[emp_nodes_idx]
-
-
-            # Solve for coefficients (α)
-            try:
-                alpha = np.linalg.solve(V, rhs)
-            except np.linalg.LinAlgError:
-                alpha = np.linalg.pinv(V) @ rhs
-
-            # Compute interpolant
-            empirical_interpolant = np.sum(alpha[:, None] * reduced_basis[:m, :], axis=0)
-
-            return empirical_interpolant
-        
-        if property == 'phase':
-            N_nodes = self.N_basis_vecs_phase
-        if property == 'amplitude':
-            N_nodes = self.N_basis_vecs_amp
-
-        if reduced_basis.shape[0] < reduced_basis.shape[1]:
-            # assume rows = functions (waveforms)
-            reduced_basis = reduced_basis.T
-
-        # Each row = a basis vector
-        reduced_basis = np.array(reduced_basis, dtype=float)
-        reduced_basis /= np.linalg.norm(reduced_basis, axis=1)[:, None]
-
-        
-        # Initialize
-        i0 = np.argmax(np.abs(reduced_basis[0]))
-        emp_nodes_idx = [i0]
-        EI_error = []
-
-        for j in range(1, N_nodes):
-            property_array = reduced_basis[j]
-            empirical_interpolant = calc_empirical_interpolant(property_array, reduced_basis[:j], emp_nodes_idx)   
-
-
-            residuals = property_array - empirical_interpolant
-            print(f'EI error: {np.linalg.norm(residuals)}')
-            EI_error.append(np.linalg.norm(residuals))
-
-            next_idx = np.argmax(np.abs(residuals))
-            emp_nodes_idx.append(next_idx)
-
-
-            # Inside the loop
-            if j%100 == 0:
-                fig_residuals = plt.figure(figsize=(8, 4))
-                plt.plot(np.abs(residuals).flatten(), label=f"Step {j}")
-                plt.axvline(next_idx, color='r', linestyle='--', label=f"New node {next_idx}")
-                plt.title(f"Residual at Step {j}")
-                plt.xlabel("Sample index")
-                plt.ylabel("|Residual|")
-                plt.legend()
-                plt.tight_layout()
-                fig_residuals.savefig(f'Images/Empirical_nodes/test_residuals_{j}.png')
-
-
-        fig_error = plt.figure(figsize=(6, 4))
-        plt.semilogy(EI_error, marker='o')
-        plt.title("Empirical Interpolation Error Convergence")
-        plt.xlabel("Iteration")
-        plt.ylabel("‖Residual‖₂")
-        plt.grid(True, which='both', ls='--')
-        fig_error.savefig('Images/Empirical_nodes/test_error.png')
-
-        # Example: Compare the 3rd waveform’s true vs interpolated
-        j = 2
-        wf_true = reduced_basis[j]
-        wf_interp = calc_empirical_interpolant(wf_true, reduced_basis[:j], emp_nodes_idx[:j])
-
-        fig_compare = plt.figure(figsize=(8, 4))
-        plt.plot(wf_true, label="True waveform", lw=2)
-        plt.plot(wf_interp, '--', label="Interpolated", lw=2)
-        plt.scatter(emp_nodes_idx[:j], wf_true[emp_nodes_idx[:j]], color='red', label="Empirical nodes")
-        plt.title(f"Empirical Interpolation at Step {j}")
-        plt.legend()
-        plt.tight_layout()
-        fig_compare.savefig('Images/Empirical_nodes/test_compare.png')
-
-        # Optional: Plot the empirical nodes if plot_emp_nodes_at_ecc is set
-        if plot_emp_nodes_at_ecc:
-            self._plot_empirical_nodes(emp_nodes_idx, property, plot_emp_nodes_at_ecc, save_fig)
-        
-        return emp_nodes_idx
-
-
-    def _compute_empirical_nodes(self, orthonormal_basis):
-        """
-        Compute empirical interpolation nodes for a single global reduced basis.
-
-        Parameters
-        ----------
-        orthonormal_basis : np.ndarray
-            Array of shape (n_basis, n_samples), where each row is one basis vector.
-            This should be orthonormalized already.
-
-        Returns
-        -------
-        empirical_nodes : np.ndarray
-            Indices of the empirical interpolation nodes.
-
-        If return_interpolant=True, also returns
-        ----------------------------------------
-        interpolant : np.ndarray
-            Interpolant matrix of shape (n_samples, n_basis).
-
-        """
-        basis = np.asarray(orthonormal_basis)
-
-        if basis.ndim != 2:
-            raise ValueError("orthonormal_basis must have shape (n_basis, n_samples)")
-
-        n_basis, _ = basis.shape
-        if n_basis == 0:
-            raise ValueError("orthonormal_basis must contain at least one basis vector")
-
-        empirical_nodes = []
-
-        # First node
-        first_node = int(np.argmax(np.abs(basis[0])))
-        empirical_nodes.append(first_node)
-
-        # Greedy EIM node selection
-        for i in range(1, n_basis):
-            prev_basis = basis[:i]  # shape: (i, n_samples)
-            node_idx = np.array(empirical_nodes, dtype=int)
-
-            # Matrix of previous basis vectors evaluated at previous nodes
-            A = prev_basis[:, node_idx].T  # shape: (i, i)
-
-            # Current basis vector evaluated at previous nodes
-            b = basis[i, node_idx]         # shape: (i,)
-
-            # Interpolate current basis vector from previous ones
-            coeffs = np.linalg.solve(A, b)
-            interpolant = coeffs @ prev_basis
-            residual = basis[i] - interpolant
-
-            new_node = int(np.argmax(np.abs(residual)))
-            empirical_nodes.append(new_node)
-
-        empirical_nodes = np.asarray(empirical_nodes, dtype=int)
-
-        return empirical_nodes, interpolant
-
-
-    def get_empirical_nodes(self, reduced_basis_object: ReducedBasis, train_obj: TrainingSetResults, plot_emp_nodes_on_basis=False, save_emp_nodes_on_basis_fig=False, plot_interpolation_matrix=False, save_interpolation_matrix_fig=False, plot_proj_vs_eim_error=False, save_proj_vs_eim_error_fig=False, eim_per_leaf=True):
-        """
-        Calculate the empirical nodes for a given dataset based on a reduced basis of residual properties.
-
-        Parameters:
-        ----------------
-        - reduced_basis (numpy.ndarray): Reduced basis of residual properties (phase or amplitude).
-        - property (str): Waveform property to evaluate, options are "phase" or "amplitude".
-        - plot_emp_nodes_at_ecc (float, optional): If set, plots the empirical nodes at a specified eccentricity value.
-        - save_fig (bool, optional): Saves the empirical nodes plot if set to True.
+        - reduced_basis_object (ReducedBasis): The reduced basis object containing the greedy basis and tree structure.
+        - train_obj (TrainingSetResults): The training object containing the dataset and parameter grid.
+        - plot_first_N_vectors (int, optional): If specified, only plot the first N reduced basis vectors when visualizing empirical nodes on the basis functions.
+            If None, plots all basis vectors.
+        - plot_emp_nodes_on_basis (bool, optional): If True, plots the empirical nodes on top of the reduced basis functions for each leaf in the tree.
+        - save_emp_nodes_on_basis_fig (bool, optional): If True, saves the figure of empirical nodes on basis functions to a file.
+        - plot_interpolation_matrix (bool, optional): If True, plots the interpolation matrix to visualize how the empirical nodes are selected across the time domain.
+        - save_interpolation_matrix_fig (bool, optional): If True, saves the interpolation matrix figure to a file.
+        - plot_proj_vs_eim_error (bool, optional): If True, plots the projection error of the reduced basis approximation versus the empirical interpolation error to analyze the relationship between the greedy basis construction and the empirical interpolation accuracy.
+        - save_proj_vs_eim_error_fig (bool, optional): If True, saves the projection vs EIM error figure to a file.
 
         Returns:
         ----------------
@@ -2899,66 +2271,81 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         # Get empirical nodes for each leaf (greedy parameters section) in the tree
         eim = EmpiricalInterpolation(reduced_basis_object)
         eim.fit()
+
         # Stack empirical nodes from all leaves into the training object
-        for i, leaf in enumerate(reduced_basis_object.tree.leaves):
-            # print(f"Leaf {i} | Empirical nodes: {leaf.empirical_nodes}")
+        for leaf in reduced_basis_object.tree.leaves:
             train_obj.empirical_indices.extend(leaf.empirical_nodes)
-
-        # else:
-        #     # Orthonormalize the full (combined tree) reduced basis
-        #     global_basis = np.vstack([leaf.basis for leaf in reduced_basis_object.tree.leaves])
-        #     global_basis_ortho = orth(global_basis.T).T
-        #     # Create new ReducedBasis object to store with orthonormalized global basis
-        #     empirical_indices, interpolant = self._compute_empirical_nodes(global_basis_ortho)
-        #     train_obj.empirical_indices = empirical_indices
-
-
-        # print('Empirical nodes:', emp_nodes_idx,
-        #     '\nlength of empirical nodes:', len(emp_nodes_idx),
-        #     '\nlength of reduced basis:', len(reduced_basis_object.tree.leaves[i].indices)) # .indices refers to the indices of the greedy basis vectors
-        
+            train_obj.leaf_nodes_indices.append(leaf.empirical_nodes)
 
         # Optional: plot empirical nodes at eccentricity
         if plot_interpolation_matrix:
-            self._plot_interpolation_matrix(reduced_basis_object, save_fig=save_interpolation_matrix_fig)
+            self._plot_interpolation_matrix(train_obj=train_obj, 
+                                            save_fig=save_interpolation_matrix_fig)
 
         if plot_proj_vs_eim_error:
-            self._plot_projection_vs_eim_error(reduced_basis_object=reduced_basis_object, train_obj=train_obj, save_fig=save_proj_vs_eim_error_fig)
+            self._plot_projection_vs_eim_error(train_obj=train_obj, 
+                                               save_fig=save_proj_vs_eim_error_fig)
 
         if plot_emp_nodes_on_basis:
-            self._plot_emp_nodes_on_basis(reduced_basis_object, train_obj, save_fig=save_emp_nodes_on_basis_fig)
-        
-        # if plot_emp_nodes_at_ecc:
-        #     self._plot_empirical_nodes(emp_nodes_idx, property, plot_emp_nodes_at_ecc, save_fig)
+            self._plot_emp_nodes_on_basis(train_obj=train_obj, 
+                                          first_N_vectors=plot_first_N_vectors, 
+                                          save_fig=save_emp_nodes_on_basis_fig)
 
         return train_obj.empirical_indices
 
-
-    def _plot_emp_nodes_on_basis(self, reduced_basis_object : ReducedBasis, train_obj: TrainingSetResults, save_fig=False):
+    def _plot_emp_nodes_on_basis(self, 
+                                train_obj: TrainingSetResults, 
+                                first_N_vectors=None,
+                                save_fig=False):
         """  
-        Plot the empirical nodes on top of the reduced basis functions for each leaf in the tree.
+        Plot the empirical nodes on top of the reduced basis functions for each leaf in the tree,
+        plus a compact visualization of node locations.
         """
-        for i, leaf in enumerate(reduced_basis_object.tree.leaves):
-            reduced_basis = leaf.basis # ORTHONORMALIZED basis functions
-            eim_nodes = leaf.empirical_nodes
+        # Load if needed
+        train_obj.load_orthonormal_basis()
 
-            fig_emp_nodes, ax = plt.subplots(figsize=(20,5))
+        # Plot per leaf: basis functions + nodes
+        current_idx=0
+        for i in range(len(train_obj.leaf_basis_indices)):
+            len_leaf_basis = len(train_obj.leaf_basis_indices[i])
+            
+            # Get the reduced basis functions for this leaf
+            reduced_basis = np.array(train_obj.orthonormal_basis)[current_idx : current_idx + len_leaf_basis]
+            current_idx+=len(train_obj.leaf_basis_indices[i])
+            
+            # Only plot the first N vectors for clarity if specified
+            if first_N_vectors is None:
+                first_N_vectors = len_leaf_basis
+            if len(reduced_basis) > first_N_vectors:
+                reduced_basis = reduced_basis[:first_N_vectors]
 
-            # Plot basis functions
-            for j in range(len(eim_nodes)):
+            eim_nodes = train_obj.leaf_nodes_indices[i]
+            # --- Create 2-row layout (3:1 ratio) ---
+            fig_emp_nodes, (ax, ax_nodes) = plt.subplots(
+                2, 1,
+                figsize=(20, 6),
+                sharex=True,
+                gridspec_kw={"height_ratios": [3, 1]}
+            )
+
+            # =======================
+            # Top plot: basis + nodes
+            # =======================
+            for k in range(len(reduced_basis)):
                 ax.plot(
                     self.time,
-                    reduced_basis[j],
+                    reduced_basis[k],
                     alpha=0.7,
                     lw=1.5
                 )
 
                 # Mark node for that basis function
                 ax.scatter(
-                    self.time[eim_nodes[j]],
-                    reduced_basis[j, eim_nodes[j]],
+                    self.time[eim_nodes],
+                    reduced_basis[k, eim_nodes],
                     color="red",
-                    zorder=5
+                    zorder=5,
+                    s=2
                 )
 
             # Vertical lines for all nodes
@@ -2966,199 +2353,104 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                 ax.axvline(self.time[node], color='red', alpha=0.2)
 
             ax.set_ylabel("Basis function amplitude")
-            ax.set_xlabel("time [M]")
             ax.set_title(f"Reduced basis functions and empirical interpolation nodes: leaf {i}")
+
+            # =======================
+            # Bottom plot: node locations
+            # =======================
+            y_line = 0.0  # horizontal reference
+
+            # horizontal line
+            ax_nodes.hlines(y_line, self.time[0], self.time[-1], color="black", lw=1)
+
+            # scatter nodes on line
+            ax_nodes.scatter(
+                self.time[eim_nodes],
+                [y_line] * len(eim_nodes),
+                color="red",
+                zorder=5
+            )
+
+            # clean look
+            ax_nodes.set_yticks([])
+            ax_nodes.set_xlabel("time [M]")
+            ax_nodes.set_title("Empirical node locations")
+
+            # optional: remove spines for clarity
+            ax_nodes.spines["left"].set_visible(False)
+            ax_nodes.spines["right"].set_visible(False)
+            ax_nodes.spines["top"].set_visible(False)
 
             fig_emp_nodes.tight_layout()
 
             if save_fig:
-                figname = train_obj.figname(prefix=f"RB_functions_with_emp_nodes_leaf_{i}", directory="Images/Empirical_nodes")
-                # fig_path = f'Images/Empirical_nodes/RB_functions_with_emp_nodes_leaf_{i}_e=[{min(self.ecc_ref_space)}, {max(self.ecc_ref_space)}, N={len(self.ecc_ref_space)}]_f_lower={self.f_lower}_f_ref={self.f_ref}_gN={len(self.indices_basis)}.png'
-                # os.makedirs(os.path.dirname(figname), exist_ok=True)
+                figname = train_obj.figname(
+                    prefix=f"RB_functions_with_emp_nodes_leaf_{i}",
+                    directory="Images/Empirical_nodes"
+                )
                 fig_emp_nodes.savefig(figname)
-                # self.colored_text(f'Figure is saved in {figname}', "blue")
 
 
-
-
-    # def _plot_interpolation_matrix(self, reduced_basis_object, save_fig=False):
-    #     print(len(reduced_basis_object.tree.leaves))
-    #     fig, ax = plt.subplots(len(reduced_basis_object.tree.leaves), 1, figsize=(6,5))
-
-    #     for i in range(len(reduced_basis_object.tree.leaves)):
-    #         reduced_basis = reduced_basis_object.tree.leaves[i].basis # ORTHONORMALIZED basis functions 
-    #         eim_nodes = reduced_basis_object.tree.leaves[i].empirical_nodes # indices of empirical nodes
-
-    #         # Interpolation matrix: V_{ij} = φ_i(t_j)
-    #         V = reduced_basis[:, eim_nodes]
-
-    #         im = ax.imshow(V, aspect='auto', origin='lower')
-
-    #         ax[0].set_title("EIM interpolation matrix")
-    #         ax[i].set_xlabel("Empirical node index")
-    #         ax[i].set_ylabel("Basis index")
-
-    #     fig.colorbar(im, ax=ax)
-
-    #     plt.tight_layout()
-
-    #     if save_fig:
-    #         fig_path = f'Images/Empirical_nodes/EIM_interpolation_matrix_M={self.total_mass}_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_space)}_gN={len(self.indices_basis)}_ms={self.minimum_spacing_greedy}.png'
-    #         os.makedirs(os.path.dirname(fig_path), exist_ok=True)
-    #         fig.savefig(fig_path)
-    #         print(f'Figure is saved in {fig_path}')
-
-    #     return V
-
-    def _plot_interpolation_matrix(self, reduced_basis_object, save_fig=False):
-        n_leaves = len(reduced_basis_object.tree.leaves)
+    def _plot_interpolation_matrix(self, 
+                                    train_obj: TrainingSetResults,
+                                    save_fig=False):
+        
+        n_leaves = len(train_obj.leaf_nodes_indices)
 
         fig, ax = plt.subplots(n_leaves, 1, squeeze=False)
         ax = ax.ravel()
 
-        for i, leaf in enumerate(reduced_basis_object.tree.leaves):
-            reduced_basis = leaf.basis
-            eim_nodes = leaf.empirical_nodes
+        current_idx=0
+        for leaf_id in range(len(train_obj.leaf_basis_indices)):
+            len_leaf_basis = len(train_obj.leaf_basis_indices[leaf_id])
+            # Get the reduced basis functions for this leaf
+            reduced_basis = np.array(train_obj.orthonormal_basis)[current_idx : current_idx + len_leaf_basis]
+            current_idx+=len(train_obj.leaf_basis_indices[leaf_id])
+            
+            eim_nodes = train_obj.leaf_nodes_indices[leaf_id]
 
             # Assuming basis shape = (n_basis, n_samples)
             V = reduced_basis[:, eim_nodes]
 
-            im = ax[i].imshow(V, aspect='auto', origin='lower')
-            ax[i].set_title(f"EIM interpolation matrix (leaf {i})")
-            ax[i].set_xlabel("Empirical node index")
-            ax[i].set_ylabel("Basis index")
+            im = ax[leaf_id].imshow(V, aspect='auto', origin='lower')
+            ax[leaf_id].set_title(f"EIM interpolation matrix (leaf {leaf_id})")
+            ax[leaf_id].set_xlabel("Empirical node index")
+            ax[leaf_id].set_ylabel("Basis index")
 
         fig.colorbar(im, ax=ax)
 
         plt.tight_layout()
 
         if save_fig:
-            fig_path = (
-                f"Images/Empirical_nodes/Interpolation_matrix/"
-                f"EIM_interpolation_matrix_M={self.total_mass}"
-                f"_f_lower={self.f_lower}"
-                f"_f_ref={self.f_ref}"
-                f"_iN={len(self.ecc_ref_space)}"
-                f"_gN={len(self.indices_basis)}"
-                f"_ms={self.minimum_spacing_greedy}.png"
+            fig_path = train_obj.figname(
+                prefix="EIM_interpolation_matrix",
+                directory="Images/Empirical_nodes"
             )
-            os.makedirs(os.path.dirname(fig_path), exist_ok=True)
+
             fig.savefig(fig_path)
-            print(self.colored_text(f"Figure is saved in {fig_path}", "blue"))
 
-    # def _plot_projection_vs_eim_error(self, reduced_basis_object, dataset, property=None, save_fig=False):
-    #     """
-    #     Compare best projection error and EIM interpolation error
-    #     on the same dataset, leaf by leaf.
 
-    #     Parameters
-    #     ----------
-    #     reduced_basis_object : ReducedBasis
-    #         Object containing leaf bases and empirical nodes.
-    #     dataset : ndarray, shape (num_vectors, vector_length)
-    #         Dataset used to test the approximation errors.
-    #     property : str, optional
-    #         'phase' or 'amplitude', only used for labeling/saving.
-    #     save_fig : bool, optional
-    #         If True, save figure.
-
-    #     Returns
-    #     -------
-    #     all_proj_errors : list of lists
-    #         Projection errors per leaf.
-    #     all_eim_errors : list of lists
-    #         EIM errors per leaf.
-    #     """
-    #     self.property_warning(property)
-
-    #     n_leaves = len(reduced_basis_object.tree.leaves)
-    #     fig, axs = plt.subplots(n_leaves, 1, figsize=(8, 4 * n_leaves))
-    #     axs = np.atleast_1d(axs)
-
-    #     all_proj_errors = []
-    #     all_eim_errors = []
-
-    #     for i, leaf in enumerate(reduced_basis_object.tree.leaves):
-    #         reduced_basis = np.asarray(leaf.basis)              # (n_basis, n_time)
-    #         eim_nodes = np.asarray(leaf.empirical_nodes)
-    #         print(np.asarray(dataset), dataset.shape)
-    #         leaf_dataset = np.asarray(dataset)[leaf.indices]    # test only on this leaf's data
-
-    #         proj_errors = []
-    #         eim_errors = []
-
-    #         for k in range(1, len(eim_nodes) + 1):
-    #             basis_k = reduced_basis[:k]                     # (k, n_time)
-    #             nodes_k = eim_nodes[:k]
-
-    #             # Interpolation matrix
-    #             V_k = basis_k[:, nodes_k]                       # (k, k)
-
-    #             max_proj_err = 0.0
-    #             max_eim_err = 0.0
-
-    #             for f in leaf_dataset:
-    #                 norm_f = np.linalg.norm(f)
-    #                 if norm_f == 0:
-    #                     continue
-
-    #                 # Best projection
-    #                 coeff_proj, *_ = np.linalg.lstsq(basis_k.T, f, rcond=None)
-    #                 f_proj = basis_k.T @ coeff_proj
-    #                 proj_err = np.linalg.norm(f - f_proj) / norm_f
-    #                 max_proj_err = max(max_proj_err, proj_err)
-
-    #                 # EIM approximation
-    #                 f_nodes = f[nodes_k]
-    #                 coeff_eim = np.linalg.solve(V_k.T, f_nodes)
-    #                 f_eim = basis_k.T @ coeff_eim
-    #                 eim_err = np.linalg.norm(f - f_eim) / norm_f
-    #                 max_eim_err = max(max_eim_err, eim_err)
-
-    #             proj_errors.append(max_proj_err)
-    #             eim_errors.append(max_eim_err)
-
-    #         all_proj_errors.append(proj_errors)
-    #         all_eim_errors.append(eim_errors)
-
-    #         axs[i].semilogy(range(1, len(eim_nodes)), proj_errors[:-1], marker='o', label='Projection error')
-    #         axs[i].semilogy(range(1, len(eim_nodes)), eim_errors[:-1], marker='s', label='EIM error')
-    #         axs[i].set_xlabel("Number of modes / EIM nodes")
-    #         axs[i].set_ylabel("Max relative error")
-    #         axs[i].set_title(f"Leaf {i} (last dataset point has been ignored for better visualization)")
-    #         axs[i].grid(True)
-    #         axs[i].legend()
-
-    #     fig.suptitle("Projection error vs EIM error", y=1.02)
-    #     fig.tight_layout()
-
-    #     if save_fig:
-    #         fig_path = (
-    #             f'Images/Empirical_nodes/Errors/'
-    #             f'EIM_projection_vs_eim_error_{property}_'
-    #             f'M={self.total_mass}_f_lower={self.f_lower}_f_ref={self.f_ref}_'
-    #             f'iN={len(self.ecc_ref_space)}_'
-    #             f'gN={len(self.indices_basis)}_'
-    #             f'ms={self.minimum_spacing_greedy}.png'
-    #         )
-    #         os.makedirs(os.path.dirname(fig_path), exist_ok=True)
-    #         fig.savefig(fig_path)
-    #         print(self.colored_text(f'Figure is saved in {fig_path}', 'blue'))
-
-    #     return all_proj_errors, all_eim_errors
-
-    def _plot_projection_vs_eim_error(self, reduced_basis_object, train_obj:TrainingSetResults, save_fig=False):
-
+    def _plot_projection_vs_eim_error(self, 
+                                      train_obj:TrainingSetResults, 
+                                      save_fig=False):
+        # Check if residuals are loaded, if not attempt to load
+        train_obj.load_residuals()
         dataset = np.asarray(train_obj.residuals)
 
         all_proj_errors = []
         all_eim_errors = []
         all_ratios = []
 
-        for i, leaf in enumerate(reduced_basis_object.tree.leaves):
-            reduced_basis = np.asarray(leaf.basis)          # (n_basis, n_time)
-            eim_nodes = np.asarray(leaf.empirical_nodes)
-            leaf_dataset = dataset[leaf.indices]            # data belonging to this leaf
+        current_idx=0
+        # Get per leaf variables and calculate errors
+        for leaf_id in range(len(train_obj.leaf_basis_indices)):
+            len_leaf_basis = len(train_obj.leaf_basis_indices[leaf_id])
+            # Get the reduced basis functions for this leaf
+            reduced_basis = np.array(train_obj.orthonormal_basis)[current_idx : current_idx + len_leaf_basis]
+            current_idx+=len(train_obj.leaf_basis_indices[leaf_id])
+
+            eim_nodes = np.asarray(train_obj.leaf_nodes_indices[leaf_id])
+            leaf_dataset = dataset[train_obj.leaf_basis_indices[leaf_id]]            # data belonging to this leaf
 
             proj_errors = []
             eim_errors = []
@@ -3218,7 +2510,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
             axs[0].semilogy(x, proj_errors, marker='o', label='Projection error')
             axs[0].semilogy(x, eim_errors, marker='s', label='EIM error')
             axs[0].set_ylabel("Max relative error")
-            axs[0].set_title(f"Projection error vs EIM error — Leaf {i}")
+            axs[0].set_title(f"Projection error vs EIM error — Leaf {leaf_id}")
             axs[0].grid(True)
             axs[0].legend()
    
@@ -3232,261 +2524,21 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
             fig.tight_layout()
 
             if save_fig:
-                fig_path = (
-                    f'Images/Empirical_nodes/Errors/'
-                    f'EIM_projection_vs_eim_error_leaf={i}_{property}_'
-                    f'M={self.total_mass}_f_lower={self.f_lower}_f_ref={self.f_ref}_'
-                    f'iN={len(self.ecc_ref_space)}_'
-                    f'gN={len(self.indices_basis)}_'
-                    f'ms={self.minimum_spacing_greedy}.png'
+                fig_path = train_obj.figname(
+                    prefix=f"Projection_vs_EIM_error_leaf_{leaf_id}",
+                    directory="Images/Empirical_nodes"
                 )
-                os.makedirs(os.path.dirname(fig_path), exist_ok=True)
                 fig.savefig(fig_path)
-                print(self.colored_text(f'Figure for leaf {i} is saved in {fig_path}', 'blue'))
 
         return all_proj_errors, all_eim_errors, all_ratios
-
-    # def _plot_projection_vs_eim_error(self, reduced_basis_object, save_fig=False):
-    #     fig_proj_vs_eim_error, axs = plt.subplots(len(reduced_basis_object.tree.leaves), 1)
-    #     axs = np.atleast_1d(axs) # In case there's only one leaf, ensure axs is always an array for consistent indexing
-
-    #     for i in range(len(reduced_basis_object.tree.leaves)):
-    #         reduced_basis = reduced_basis_object.tree.leaves[i].basis # ORTHONORMALIZED basis functions 
-    #         eim_nodes = reduced_basis_object.tree.leaves[i].empirical_nodes
-
-    #         proj_errors = []
-    #         eim_errors = []
-
-    #         for k in range(1, len(eim_nodes) + 1):
-    #             basis_k = reduced_basis[:k]                        # (k, n_time)
-    #             nodes_k = eim_nodes[:k]
-
-    #             # EIM interpolation operator, matching your implementation
-    #             V_k = np.array([[basis_k[m, t] for t in nodes_k] for m in range(k)])
-    #             invVt_k = np.linalg.inv(V_k.T)
-    #             interpolant_k = basis_k.T @ invVt_k              # (n_time, k)
-
-    #             max_proj_err = 0.0
-    #             max_eim_err = 0.0
-
-    #             for f in reduced_basis:  # Loop over all basis functions as test functions
-    #                 # --- Best projection onto span(basis_k) ---
-    #                 # Solve min ||f - c @ basis_k||
-    #                 coeff_proj, *_ = np.linalg.lstsq(basis_k.T, f, rcond=None)
-    #                 f_proj = basis_k.T @ coeff_proj
-
-    #                 proj_err = np.linalg.norm(f - f_proj) / np.linalg.norm(f)
-    #                 max_proj_err = max(max_proj_err, proj_err)
-
-    #                 # --- EIM reconstruction from node values only ---
-    #                 f_nodes = f[nodes_k]
-    #                 f_eim = interpolant_k @ f_nodes
-
-    #                 eim_err = np.linalg.norm(f - f_eim) / np.linalg.norm(f)
-    #                 max_eim_err = max(max_eim_err, eim_err)
-
-    #             proj_errors.append(max_proj_err)
-    #             eim_errors.append(max_eim_err)
-        
-    #         axs[i].semilogy(range(1, len(eim_nodes)), proj_errors[:-1], marker='o', label='Projection error')
-    #         axs[i].semilogy(range(1, len(eim_nodes)), eim_errors[:-1], marker='s', label='EIM error')
-    #         axs[i].set_xlabel("Number of modes / EIM nodes")
-    #         axs[i].set_ylabel("Max relative error")
-
-    #     axs[0].set_title("Projection error vs EIM error")
-    #     axs[0].grid(True)
-    #     plt.legend()
-
-    #     fig_proj_vs_eim_error.tight_layout()
-
-    #     if save_fig:
-    #         fig_path = f'Images/Empirical_nodes/Errors/EIM_projection_vs_eim_error_M={self.total_mass}_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_space)}_gN={len(self.indices_basis)}_ms={self.minimum_spacing_greedy}.png'
-    #         os.makedirs(os.path.dirname(fig_path), exist_ok=True)
-    #         fig_proj_vs_eim_error.savefig(fig_path)
-    #         print(self.colored_text(f'Figure is saved in {fig_path}', 'blue'))
-
-    #     return proj_errors, eim_errors
-
-    def _plot_empirical_nodes(self, emp_nodes_idx, property, eccentricity, save_fig):
-        """
-        Helper function to plot empirical nodes for a given eccentricity.
-
-        Parameters:
-        ----------------
-        - emp_nodes_idx (list): Indices of the empirical nodes.
-        - property (str): Waveform property being plotted (e.g., "phase" or "amplitude").
-        - eccentricity (float): Eccentricity value for the plot.
-        - save_fig (bool): If True, saves the plot to a file.
-        """
-        # Get the waveform at the requested eccentricity
-        hp, hc, _ = self.simulate_waveform(ecc_ref=eccentricity)
-
-        fig, ax = plt.subplots(figsize=(12, 6))
-
-        # Plot the waveform and the empirical nodes together for reference
-        ax.plot(self.time, hp, linewidth=0.2, color='black', label=f'$h_+$: ecc = {eccentricity}')
-        ax.plot(self.time, hc, linewidth=0.2, linestyle='dashed', color='black', label=f'$h_\times$: ecc = {eccentricity}')
-        ax.scatter(self.time[emp_nodes_idx], np.zeros(len(emp_nodes_idx)), color='red', s=8)
-
-        ax.set_ylabel(f'$h_{{22}}$')
-        ax.set_xlabel('t [M]')
-        ax.legend(loc='upper left')
-
-        # IF savefig is set to True, save the figure
-        if save_fig:
-            fig_path = f'Images/Empirical_nodes/EIM_{property}_e={eccentricity}_M={self.total_mass}_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_space)}_gN={len(self.indices_basis)}_ms={self.minimum_spacing_greedy}.png'
-            os.makedirs(os.path.dirname(fig_path), exist_ok=True)
-            fig.savefig(fig_path)
-            print(self.colored_text(f'Figure is saved in {fig_path}', 'blue'))
-
-    def _plot_empirical_nodes_from_dataset(self, emp_nodes_idx, property, eccentricity, save_fig):
-        """
-        Helper function to plot empirical nodes for a given eccentricity.
-
-        Parameters:
-        ----------------
-        - emp_nodes_idx (list): Indices of the empirical nodes.
-        - property (str): Waveform property being plotted (e.g., "phase" or "amplitude").
-        - eccentricity (float): Eccentricity value for the plot.
-        - save_fig (bool): If True, saves the plot to a file.
-        """
-        # Get the waveform at the requested eccentricity
-        hp, hc, _ = self.simulate_waveform(ecc_ref=eccentricity)
-
-        fig, ax = plt.subplots(figsize=(12, 6))
-
-        # Plot the waveform and the empirical nodes together for reference
-        ax.plot(self.time, hp, linewidth=0.2, color='black', label=f'$h_+$: ecc = {eccentricity}')
-        ax.plot(self.time, hc, linewidth=0.2, linestyle='dashed', color='black', label=f'$h_\times$: ecc = {eccentricity}')
-        ax.scatter(self.time[emp_nodes_idx], np.zeros(len(emp_nodes_idx)), color='red', s=8)
-
-        ax.set_ylabel(f'$h_{{22}}$')
-        ax.set_xlabel('t [M]')
-        ax.legend(loc='upper left')
-
-        # IF savefig is set to True, save the figure
-        if save_fig:
-            fig_path = f'Images/Empirical_nodes/EIM_dataset_{property}_e={eccentricity}_M={self.total_mass}_f_lower={self.f_lower}_f_ref={self.f_ref}_iN={len(self.ecc_ref_space)}_gN={len(self.indices_basis)}_ms={self.minimum_spacing_greedy}.png'
-            os.makedirs(os.path.dirname(fig_path), exist_ok=True)
-            fig.savefig(fig_path)
-            print(self.colored_text(f'Figure is saved in {fig_path}', 'blue'))
-
   
     
-    def get_training_set_greedy(self, 
-                                property, 
-                                emp_nodes_of_full_dataset=False, 
-                                min_greedy_error=None, N_greedy_vecs=None, 
-                                plot_training_set=False, save_fig_training_set=False,
-                                plot_greedy_error=False, save_fig_greedy_error=False,
-                                plot_greedy_vecs=False, save_fig_greedy_vecs=False,
-                                plot_emp_nodes_on_basis=False, save_fig_emp_nodes_on_basis=False,
-                                plot_emp_nodes_at_ecc=False, save_fig_emp_nodes_at_ecc=False,  
-                                plot_residuals_eccentric=False, save_fig_residuals_eccentric=False, 
-                                plot_residuals_time=False, save_fig_residuals_time=False,  
-                                plot_interpolation_matrix=False, save_fig_interpolation_matrix=False,
-                                plot_proj_vs_eim_error=False, save_fig_proj_vs_eim_error=False,
-                                save_residuals=True, 
-                                save_polarizations=True,
-                                save_train_obj_to_file=True,
-                                clean_residuals=False
-                                ):
-        """
-        Generate a training set for the surrogate model by calculating residuals, selecting greedy parameters, and determining empirical nodes.
-        
-        Parameters:
-        ----------------
-        - property (str): Waveform property (e.g., 'phase' or 'amplitude') for generating the dataset.
-        - min_greedy_error (float, optional): Minimum greedy error threshold for stopping criterion in greedy selection.
-        - N_greedy_vecs (int, optional): Number of greedy vectors to select.
-        - plot_training_set (bool, optional): If True, plots the training set.
-        - plot_greedy_error (bool, optional): If True, plots greedy error.
-        - plot_emp_nodes_at_ecc (float or bool, optional): If True, plots empirical nodes at specified eccentricity.
-        - save_fig (bool, optional): If True, saves the plot of the training set.
-        - save_dataset_to_file (bool, optional): If True, saves the generated dataset.
 
-        Returns:
-        ----------------
-        - residual_training_set (numpy.ndarray): Training set of residuals at empirical nodes.
-        """
-        # Import from class object if min_greedy and N_greedy vecs are not specified
-        if (min_greedy_error is None) and (N_greedy_vecs is None):
-            if property == 'phase':
-                min_greedy_error = self.min_greedy_error_phase
-                N_greedy_vecs = self.N_basis_vecs_phase
-            elif property == 'amplitude':
-                min_greedy_error = self.min_greedy_error_amp
-                N_greedy_vecs = self.N_basis_vecs_amp
-
-        # Either create or get already existing training object for the specified property (phase or amplitude)
-        train_obj = self._get_training_obj(property)
-
-        # Step 1: Generate residuals for the full parameter space
-        train_obj = self.generate_property_dataset(
-            train_obj=train_obj,
-            save_polarizations=save_polarizations,
-            save_residuals=save_residuals,
-            plot_residuals_eccentric_evolv=plot_residuals_eccentric,
-            plot_residuals_time_evolv=plot_residuals_time,
-            save_fig_eccentric_evolv=save_fig_residuals_eccentric,
-            save_fig_time_evolve=save_fig_residuals_time
-        )
-
-        # Step 2: Select the best representative parameters using a greedy algorithm
-        # print('Calculating greedy parameters...')
-        reduced_basis_object = self.get_greedy_parameters(
-            train_obj=train_obj,
-            N_greedy_vecs=N_greedy_vecs,
-            min_greedy_error=min_greedy_error,
-            plot_greedy_error=plot_greedy_error,
-            save_greedy_error_fig=save_fig_greedy_error,
-            plot_greedy_vectors=plot_greedy_vecs,
-            save_greedy_vecs_fig=save_fig_greedy_vecs
-        )
-        # print(f'Greedy parameters {property}: {train_obj.basis_indices}, length: {len(train_obj.basis_indices)}  ')
-
-        self.best_rep_parameters = list(self.ecc_ref_space[train_obj.basis_indices])
-        
-        # Step 3: Calculate empirical nodes of the greedy basis
-        # print('Calculating empirical nodes...')
-        if emp_nodes_of_full_dataset:
-            train_obj.empirical_indices = self.empirical_interpolation_from_dataset(
-            waveforms_dataset=train_obj.residuals,
-            property=property,
-            plot_emp_nodes_at_ecc=plot_emp_nodes_at_ecc,
-            save_fig=save_fig_emp_nodes_at_ecc
-        )
-        else:
-            train_obj.empirical_indices = self.get_empirical_nodes(
-                reduced_basis_object=reduced_basis_object,
-                train_obj=train_obj,
-                plot_emp_nodes_on_basis=plot_emp_nodes_on_basis,
-                save_emp_nodes_on_basis_fig=save_fig_emp_nodes_on_basis,
-                plot_interpolation_matrix=plot_interpolation_matrix,
-                save_interpolation_matrix_fig=save_fig_interpolation_matrix,
-                plot_proj_vs_eim_error=plot_proj_vs_eim_error,
-                save_proj_vs_eim_error_fig=save_fig_proj_vs_eim_error
-            )
-
-    
-        train_obj.residual_basis = train_obj.residuals[train_obj.basis_indices] # shape (n_greedy_vecs, n_time)
-        train_obj.training_set = train_obj.residual_basis[:, train_obj.empirical_indices]
-        self.time_training = self.time[train_obj.empirical_indices]
-
-        # Optionally plot the training set
-        if plot_training_set:
-            self._plot_training_set(train_obj, save_fig_training_set, show_legend=False)
-
-        if save_train_obj_to_file:
-            train_obj.save()
-
-        # Clean memory of objects that are no longer needed
-        if clean_residuals:
-            del train_obj.residuals, train_obj.residual_basis
-
-        return train_obj
-
-    def _plot_training_set(self, train_obj:TrainingSetResults, save_fig, show_legend=True):
+    def _plot_emp_nodes_on_residuals(self, 
+                                     train_obj:TrainingSetResults, 
+                                     save_fig, 
+                                     N_greedy_vecs_to_plot=20,
+                                     show_legend=True):
         """
         Helper function to plot and optionally save the training set of residuals.
 
@@ -3496,11 +2548,24 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         - property (str): The waveform property ('phase' or 'amplitude').
         - save_fig (bool): If True, saves the plot to a file.
         """
+        # Check if residuals are loaded, if not attempt to load
+        train_obj.load_residuals()
+
+        basis_indices_sorted = np.sort(train_obj.basis_indices)
+        plot_residuals_idx = basis_indices_sorted[
+            np.linspace(
+                0,
+                len(basis_indices_sorted) - 1,
+                N_greedy_vecs_to_plot,
+                dtype=int
+            )
+        ]
+
         fig, ax = plt.subplots()
 
-        for i, idx in enumerate(train_obj.basis_indices):
-            ax.plot(self.time, train_obj.residual_basis[i], label=f'e={round(self.ecc_ref_space[idx], 3)}', linewidth=0.6)
-            ax.scatter(self.time[train_obj.empirical_indices], train_obj.residual_basis[i][train_obj.empirical_indices])
+        for idx in plot_residuals_idx:
+            ax.plot(self.time, train_obj.residuals[idx], label=f'e, l, q, x1, x2 = [{train_obj.parameter_grid[idx]}]', linewidth=0.6)
+            ax.scatter(self.time[train_obj.empirical_indices], train_obj.residuals[idx][train_obj.empirical_indices])
 
         ax.set_xlabel('t [M]')
         ax.set_ylabel('greedy residual')
@@ -4490,40 +3555,271 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
             "rms_z": rms_z[hard_idx],
             "max_abs_z": max_abs_z[hard_idx],
         }
+    
 
-# Sampling parameters
-sampling_frequency = 2048 # or 4096
-duration = 4 # seconds
-time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
+    def get_training_set_greedy(self, 
+                            property, 
+                            min_greedy_error=None, N_greedy_vecs=None, 
+                            plot_training_set=False, save_fig_training_set=False,
+                            plot_greedy_error=False, save_fig_greedy_error=False,
+                            plot_emp_nodes_on_basis=False, save_fig_emp_nodes_on_basis=False,
+                            plot_residuals_eccentric=False, save_fig_residuals_eccentric=False, 
+                            plot_residuals_time=False, save_fig_residuals_time=False,  
+                            plot_interpolation_matrix=False, save_fig_interpolation_matrix=False,
+                            plot_proj_vs_eim_error=False, save_fig_proj_vs_eim_error=False,
+                            plot_basis_indices=False, save_fig_basis_indices=False,
+                            save_residuals=True, 
+                            save_polarizations=True,
+                            save_train_obj=True,
+                            free_memory=True
+                            ):
+        """
+        Generate a training set for the surrogate model by calculating residuals, selecting greedy parameters, and determining empirical nodes.
+        
+        Parameters:
+        ----------------
+        - property (str): Waveform property (e.g., 'phase' or 'amplitude') for generating the dataset.
+        - min_greedy_error (float, optional): Minimum greedy error threshold for stopping criterion in greedy selection.
+        - N_greedy_vecs (int, optional): Number of greedy vectors to select.
+        - plot_training_set (bool, optional): If True, plots the training set.
+        - plot_greedy_error (bool, optional): If True, plots greedy error.
+        - plot_emp_nodes_at_ecc (float or bool, optional): If True, plots empirical nodes at specified eccentricity.
+        - save_fig (bool, optional): If True, saves the plot of the training set.
+        - save_dataset_to_file (bool, optional): If True, saves the generated dataset.
 
+        Returns:
+        ----------------
+        - train_obj (TrainingSet): An object containing the generated training set and related information.
+        """
+        # Import from class object if min_greedy and N_greedy vecs are not specified
+        if (min_greedy_error is None) and (N_greedy_vecs is None):
+            if property == 'phase':
+                min_greedy_error = self.min_greedy_error_phase
+                N_greedy_vecs = self.N_basis_vecs_phase
+            elif property == 'amplitude':
+                min_greedy_error = self.min_greedy_error_amp
+                N_greedy_vecs = self.N_basis_vecs_amp
 
-gt = Generate_TrainingSet(time_array=time_array,
-                          ecc_ref_parameterspace=np.linspace(0.001, 0.3, num=20),
-                          mean_ano_parameterspace=[0],
-                          mass_ratio_parameterspace=np.linspace(1, 20, num=20),
-                          chi1_parameterspace=[0],
-                          chi2_parameterspace=[0],
-                          min_greedy_error_amp=1e-8,
-                          min_greedy_error_phase=1e-8,
-                          truncate_at_tmin=True,
-                          truncate_at_ISCO=True,
-                          f_lower=10)
+        # Either create or get already existing training object for the specified property (phase or amplitude)
+        train_obj = self._get_training_obj(property)
+
+        try:
+            train_obj = train_obj.load()
+            self.time = train_obj.time
+
+            print('greedy errors:', train_obj.greedy_errors)
+
+            # Plotting after loading
+            if plot_residuals_eccentric or plot_residuals_time:
+                self._plot_residuals(train_obj=train_obj,
+                                        plot_eccentric_evolve=plot_residuals_eccentric, save_fig_eccentric_evolve=save_fig_residuals_eccentric,
+                                        plot_time_evolve=plot_residuals_time, save_fig_time_evolve=save_fig_residuals_time
+                                        )
+            if plot_emp_nodes_on_basis:
+                self._plot_emp_nodes_on_basis(train_obj=train_obj, 
+                                            save_fig=save_fig_emp_nodes_on_basis
+                                            )
+            if plot_greedy_error:
+                self._plot_greedy_errors(train_obj=train_obj,
+                                        save_greedy_fig=save_fig_greedy_error
+                                        )
+
+            if plot_interpolation_matrix:
+                self._plot_interpolation_matrix(train_obj=train_obj,
+                                            save_fig=save_fig_interpolation_matrix
+                                            )
+            if plot_proj_vs_eim_error:
+                self._plot_projection_vs_eim_error(train_obj=train_obj, 
+                                                save_fig=save_fig_proj_vs_eim_error
+                                                )
+            if plot_basis_indices:
+                self._plot_basis_indices(train_obj=train_obj, 
+                                        save_basis_indices_fig=save_fig_basis_indices
+                                        )
+
+        except Exception as e:
+            print(e)
+            traceback.print_exc()
+            # Step 1: Generate residuals for the full parameter space
+            train_obj = self.generate_property_dataset(
+                train_obj=train_obj,
+                save_polarizations=save_polarizations,
+                save_residuals=save_residuals,
+                plot_residuals_eccentric_evolve=plot_residuals_eccentric,
+                plot_residuals_time_evolve=plot_residuals_time,
+                save_fig_eccentric_evolve=save_fig_residuals_eccentric,
+                save_fig_time_evolve=save_fig_residuals_time
+            )
+
+            # Step 2: Select the best representative parameters using a greedy algorithm
+            # print('Calculating greedy parameters...')
+            reduced_basis_object = self.get_greedy_parameters(
+                train_obj=train_obj,
+                N_greedy_vecs=N_greedy_vecs,
+                min_greedy_error=min_greedy_error,
+                plot_greedy_error=plot_greedy_error,
+                save_greedy_error_fig=save_fig_greedy_error,
+                plot_basis_indices=plot_basis_indices,
+                save_basis_indices_fig=save_fig_basis_indices,
+                free_memory=False
+            )
+            # print(f'Greedy parameters {property}: {train_obj.basis_indices}, length: {len(train_obj.basis_indices)}  ')
+
+            # Step 3: Calculate empirical nodes of the greedy basis
+            train_obj.empirical_indices = self.get_empirical_nodes(
+                reduced_basis_object=reduced_basis_object,
+                train_obj=train_obj,
+                plot_emp_nodes_on_basis=plot_emp_nodes_on_basis,
+                save_emp_nodes_on_basis_fig=save_fig_emp_nodes_on_basis,
+                plot_interpolation_matrix=plot_interpolation_matrix,
+                save_interpolation_matrix_fig=save_fig_interpolation_matrix,
+                plot_proj_vs_eim_error=plot_proj_vs_eim_error,
+                save_proj_vs_eim_error_fig=save_fig_proj_vs_eim_error
+            )
+
+            residual_basis = train_obj.residuals[train_obj.basis_indices] # shape (n_greedy_vecs, n_time)
+            train_obj.training_set = residual_basis[:, train_obj.empirical_indices]
+            self.time_training = self.time[train_obj.empirical_indices]
+
+            print('greedy errors:', train_obj.greedy_errors)
+            if save_train_obj:
+                train_obj.save(save_residuals=save_residuals, save_polarizations=save_polarizations)
+
+            del residual_basis
+
+        # Optionally plot the training set
+        if plot_training_set:
+            self._plot_emp_nodes_on_residuals(train_obj, save_fig_training_set, show_legend=False)
+
+        # Clean memory of objects that are no longer needed
+        if free_memory:
+            train_obj.residuals = None
+            train_obj.orthonormal_basis = None
+            train_obj.greedy_errors = None
+
+        return train_obj
+
+# # Sampling parameters
+# sampling_frequency = 2048 # or 4096
+# duration = 4 # seconds
+# time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
 
 # gt = Generate_TrainingSet(time_array=time_array,
 #                           ecc_ref_parameterspace=np.linspace(0.001, 0.3, num=2),
+#                           mean_ano_parameterspace=np.linspace(0, 2*np.pi, num=2),
+#                           mass_ratio_parameterspace=np.linspace(1, 20, num=2),
+#                           chi1_parameterspace=np.linspace(-0.9, 0.9, num=2),
+#                           chi2_parameterspace=np.linspace(-0.9, 0.9, num=2),
+#                           min_greedy_error_amp=1e-6,
+#                           min_greedy_error_phase=1e-6,
+#                           truncate_at_tmin=True,
+#                           truncate_at_ISCO=True,
+#                           f_lower=10)
+
+# tr_obj_p = gt._get_training_obj('phase')
+# tr_obj_a = gt._get_training_obj('amplitude')
+
+# gt._calculate_residuals(tr_obj_p,
+#                         plot_polarizations=True,
+#                         plot_residuals_time_evolve=True,
+#                         plot_residuals_eccentric_evolve=True
+#                         )
+# print(tr_obj_p.residuals.shape)
+# plt.show()
+
+# gt._calculate_residuals(tr_obj_a,
+# plot_polarizations=True,
+# plot_residuals_time_evolve=True,
+# plot_residuals_eccentric_evolve=True
+# )
+
+# # plt.show()
+
+# gt.get_greedy_parameters(tr_obj_p,
+#                          plot_greedy_error=True,
+#                          plot_basis_indices=True,
+#                          )
+
+# gt.get_greedy_parameters(tr_obj_a,
+# plot_greedy_error=True,
+# plot_basis_indices=True,
+# )
+
+# gt.get_training_set_greedy(property="phase", 
+#     plot_interpolation_matrix=True, save_fig_interpolation_matrix=True,
+#     plot_proj_vs_eim_error=True, save_fig_proj_vs_eim_error=True,
+#     plot_residuals_time=True, save_fig_residuals_time=True,
+#     plot_emp_nodes_on_basis=True, save_fig_emp_nodes_on_basis=True,
+#     plot_training_set=True, save_fig_training_set=True,
+#     plot_residuals_eccentric=True, save_fig_residuals_eccentric=True,
+#     plot_greedy_error=True, save_fig_greedy_error=True,
+#     plot_basis_indices=True, save_fig_basis_indices=True,
+#     )
+
+############################################333
+# Sampling parameters
+# sampling_frequency = 2048 # or 4096
+# duration = 4 # seconds
+# time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
+
+# gt = Generate_TrainingSet(
+#                           time_array=time_array,
+#                           ecc_ref_parameterspace=np.linspace(0.001, 0.3, num=5),
+#                           mean_ano_parameterspace=np.linspace(0, 2*np.pi, num=5),
+#                           mass_ratio_parameterspace=np.linspace(1, 20, num=5),
+#                           chi1_parameterspace=np.linspace(-0.9, 0.9, num=5),
+#                           chi2_parameterspace=np.linspace(-0.9, 0.9, num=5),
+#                           min_greedy_error_amp=1e-6,
+#                           min_greedy_error_phase=1e-6,
+#                           truncate_at_tmin=True,
+#                           truncate_at_ISCO=True,
+#                           f_lower=10
+#                           )
+
+# tr_obj_p = gt._get_training_obj('phase')
+# tr_obj_a = gt._get_training_obj('amplitude')
+
+# gt._calculate_residuals(tr_obj_p,
+#                         # plot_polarizations=True,
+#                         # plot_residuals_time_evolve=True,
+#                         # plot_residuals_eccentric_evolve=True
+#                         )
+
+# rb_obj_p = gt.get_greedy_parameters(tr_obj_p,
+#                         #  plot_greedy_error=True,
+#                         #  plot_basis_indices=True,
+#                          )
+
+# gt.get_empirical_nodes(reduced_basis_object=rb_obj_p,
+#                        train_obj=tr_obj_p, 
+#                     #    plot_emp_nodes_on_basis=True
+#                        )
+
+# gt = Generate_TrainingSet(time_array=time_array,
+#                           ecc_ref_parameterspace=np.linspace(0.001, 0.3, num=20),
 #                           mean_ano_parameterspace=[0],
+#                           mass_ratio_parameterspace=np.linspace(1, 20, num=20),
+#                           chi1_parameterspace=[0],
+#                           chi2_parameterspace=[0],
+#                           min_greedy_error_amp=1e-8,
+#                           min_greedy_error_phase=1e-8,
+#                           truncate_at_tmin=True,
+#                           truncate_at_ISCO=True,
+#                           f_lower=10)
+
+# gt = Generate_TrainingSet(time_array=time_array,
+#                           ecc_ref_parameterspace=np.linspace(0.001, 0.3, num=2),
+#                           mean_ano_parameterspace=[0, np.pi],
 #                           mass_ratio_parameterspace=[1, 2],
-#                           chi1_parameterspace=np.linspace(-0.9, 0.9, num=20)[[8, 10, 1]],
+#                           chi1_parameterspace=np.linspace(-0.9, 0.9, num=10),
 #                           chi2_parameterspace=[0],
 #                           min_greedy_error_amp=1e-8,
 #                           min_greedy_error_phase=1e-8,
 #                           f_lower=10)
 
 
-train_obj_p = gt._get_training_obj('phase')
-gt._calculate_residuals(train_obj_p)
-
-gt.get_greedy_parameters(train_obj_p, N_greedy_vecs=200, plot_greedy_error=True, plot_basis_indices=True)
+# train_obj_p = gt._get_training_obj('phase')
+# gt._calculate_residuals(train_obj_p)
 
 
 # train_obj_a = gt._get_training_obj('amplitude')
@@ -4534,23 +3830,27 @@ gt.get_greedy_parameters(train_obj_p, N_greedy_vecs=200, plot_greedy_error=True,
 
 
 # gt.get_training_set_greedy(property="amplitude", 
-#                            plot_emp_nodes_on_basis=True,
-#                            plot_greedy_error=True,
-#                            plot_greedy_vecs=True,
-#                            plot_training_set=True,
-#                            plot_residuals_eccentric=True,
-#                            plot_interpolation_matrix=True,
-#                            plot_proj_vs_eim_error=True,
-#                            plot_residuals_time=True)
+#                             plot_interpolation_matrix=True, save_fig_interpolation_matrix=True,
+#                             plot_proj_vs_eim_error=True, save_fig_proj_vs_eim_error=True,
+#                             plot_greedy_vecs=True, save_fig_greedy_vecs=True,
+#                             plot_residuals_time=True, save_fig_residuals_time=True,
+#                             plot_emp_nodes_on_basis=True, save_fig_emp_nodes_on_basis=True,
+#                             plot_training_set=True, save_fig_training_set=True,
+#                             plot_residuals_eccentric=True, save_fig_residuals_eccentric=True,
+#                             plot_greedy_error=True,save_fig_greedy_error=True
+#                         )
 
 # gt.get_training_set_greedy(property="phase", 
-#                            plot_emp_nodes_on_basis=True,
-#                            plot_greedy_error=True,
-#                            plot_greedy_vecs=True,
-#                            plot_training_set=True,
-#                            plot_residuals_eccentric=True,
-#                            plot_interpolation_matrix=True,
-#                            plot_proj_vs_eim_error=True,
-#                            plot_residuals_time=True)
-plt.show()
+#                             plot_interpolation_matrix=True, save_fig_interpolation_matrix=True,
+#                             plot_proj_vs_eim_error=True, save_fig_proj_vs_eim_error=True,
+#                             plot_greedy_vecs=True, save_fig_greedy_vecs=True,
+#                             plot_residuals_time=True, save_fig_residuals_time=True,
+#                             plot_emp_nodes_on_basis=True, save_fig_emp_nodes_on_basis=True,
+#                             plot_training_set=True, save_fig_training_set=True,
+#                             plot_residuals_eccentric=True, save_fig_residuals_eccentric=True,
+#                             plot_greedy_error=True, save_fig_greedy_error=True,
+#                             plot_basis_indices=True, save_fig_basis_indices=True,
+#                             )
+
+# plt.show()
 # plt.close("all")

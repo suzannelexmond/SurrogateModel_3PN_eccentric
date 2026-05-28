@@ -197,13 +197,12 @@ class GPRFitResults(Warnings):
 class Generate_Offline_Surrogate(Generate_TrainingSet):
 
     def __init__(self, time_array, 
-                 mass_ratio_range=[1, 20], 
-                 ecc_ref_range=[0.0, 0.3], 
-                 mean_ano_ref_range=[0, 2*np.pi], 
-                 chi1_range=[-0.995, 0.995], 
-                 chi2_range=[-0.995, 0.995], 
-                 amount_input_wfs=100, 
-                 amount_output_wfs=500, 
+                 ecc_ref_parameterspace=np.linspace(0.0, 0.3, num=50), 
+                 mean_ano_parameterspace=np.linspace(0.0, 2*np.pi, num=50), 
+                 mass_ratio_parameterspace=np.linspace(1, 20, num=50),
+                 chi1_parameterspace=np.linspace(-0.995, 0.995, num=50),
+                 chi2_parameterspace=np.linspace(-0.995, 0.995, num=50),
+                 M_output_wfs_per_dimension=500, 
                  N_basis_vecs_amp=None, 
                  N_basis_vecs_phase=None, 
                  min_greedy_error_amp=None, 
@@ -224,24 +223,28 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                 sys.exit(1)
 
         # Input refers to the dataset used to pick the training set, output refers to the parameterspace of the computed surrogate
-        self.ecc_ref_parameterspace_range = ecc_ref_range
-        self.ecc_ref_space_input = self.allowed_eccentricity_warning(np.linspace(*ecc_ref_range, amount_input_wfs).round(4))
-        self.ecc_ref_space_output = self.allowed_eccentricity_warning(np.linspace(*ecc_ref_range, amount_output_wfs).round(4))
+        # Check if property is valid and adjust settings accordingly
+        self.ecc_ref_space_input = self.allowed_eccentricity_warning(ecc_ref_parameterspace)
+        self.mass_ratio_space_input = self.allowed_mass_ratio_warning(mass_ratio_parameterspace)
+        self.mean_ano_ref_space_input = self.allowed_mean_anomaly_warning(mean_ano_parameterspace)
+        self.chi1_space_input = self.allowed_chispin_warning(chi1_parameterspace)
+        self.chi2_space_input = self.allowed_chispin_warning(chi2_parameterspace)
 
-        self.mean_ano_ref_space_input = self.allowed_mean_anomaly_warning(np.linspace(*mean_ano_ref_range, amount_input_wfs).round(4))
-        self.mean_ano_ref_space_output = self.allowed_mean_anomaly_warning(np.linspace(*mean_ano_ref_range, amount_output_wfs).round(4))
+        self.ecc_ref_parameterspace_range = min(ecc_ref_parameterspace), max(ecc_ref_parameterspace)
+        self.ecc_ref_space_output = self.allowed_eccentricity_warning(np.linspace(*self.ecc_ref_parameterspace_range, M_output_wfs_per_dimension).round(4))
 
-        self.mass_ratio_space_input = self.allowed_mass_ratio_warning(np.linspace(*mass_ratio_range, amount_input_wfs).round(4))
-        self.mass_ratio_space_output = self.allowed_mass_ratio_warning(np.linspace(*mass_ratio_range, amount_output_wfs).round(4))
+        self.mean_ano_ref_parameterspace_range = min(mean_ano_parameterspace), max(mean_ano_parameterspace)
+        self.mean_ano_ref_space_output = self.allowed_mean_anomaly_warning(np.linspace(*self.mean_ano_ref_parameterspace_range, M_output_wfs_per_dimension).round(4))
 
-        self.chi1_space_input = self.allowed_chispin_warning(np.linspace(*chi1_range, amount_input_wfs).round(4))
-        self.chi1_space_output = self.allowed_chispin_warning(np.linspace(*chi1_range, amount_output_wfs).round(4))
+        self.mass_ratio_parameterspace_range = min(mass_ratio_parameterspace), max(mass_ratio_parameterspace)
+        self.mass_ratio_space_output = self.allowed_mass_ratio_warning(np.linspace(*self.mass_ratio_parameterspace_range, M_output_wfs_per_dimension).round(4))
 
-        self.chi2_space_input = self.allowed_chispin_warning(np.linspace(*chi2_range, amount_input_wfs).round(4))
-        self.chi2_space_output = self.allowed_chispin_warning(np.linspace(*chi2_range, amount_output_wfs).round(4))
+        self.chi1_parameterspace_range = min(chi1_parameterspace), max(chi1_parameterspace)
+        self.chi1_space_output = self.allowed_chispin_warning(np.linspace(*self.chi1_parameterspace_range, M_output_wfs_per_dimension).round(4))
 
-        self.amount_input_wfs = amount_input_wfs
-        self.amount_output_wfs = amount_output_wfs
+        self.chi2_parameterspace_range = min(chi2_parameterspace), max(chi2_parameterspace)
+        self.chi2_space_output = self.allowed_chispin_warning(np.linspace(*self.chi2_parameterspace_range, M_output_wfs_per_dimension).round(4))
+
 
         self.training_set_selection = training_set_selection
 
@@ -350,6 +353,292 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             
             return issues
     
+    # def _gaussian_process_regression_t(self, 
+    #                                    time_node, 
+    #                                    train_obj:TrainingSetResults, 
+    #                                    optimized_kernel=None, 
+    #                                    plot_kernels=False, 
+    #                                    save_fig_kernels=False,
+    #                                    time_coupled=False
+    #                                    ):
+    #     """
+    #     fit_to_params: choose 'greedy' for fitting to greedy paramaters, or choors 'GPR_opt' for fitting to GPR optimized chosen parameters
+    #     """
+
+    #     if time_coupled is False:
+    #         # Assume no time-correlation
+    #         X = np.asarray(self.parameter_grid)
+    #         X_train = X[train_obj.basis_indices]
+    #     else:
+    #         # Assume time-correlation by including time as an additional input dimension. 
+    #         # This allows the GPR to learn correlations across time nodes, 
+    #         # but also increases the dimensionality of the input space and may require more careful kernel selection and hyperparameter tuning.
+    #         X_param = np.asarray(self.parameter_grid)
+
+    #         t = np.full((X_param.shape[0], 1), self.time[time_node])
+
+    #         X_train = np.hstack([
+    #             X_param[train_obj.basis_indices],
+    #             t[train_obj.basis_indices]
+    #         ])
+
+    #         X = np.hstack([
+    #             X_param,
+    #             t
+    #         ])
+        
+    #     y_train = np.squeeze(train_obj.training_set.T[time_node])
+
+    #     # ------------------------------------------------------------
+    #     # SCALE INPUTS
+    #     # ------------------------------------------------------------
+
+    #     scaler_x = StandardScaler()
+    #     X_train_scaled = scaler_x.fit_transform(X_train)
+    #     X_scaled = scaler_x.transform(X)
+
+    #     scaler_y = StandardScaler()
+    #     y_train_scaled = scaler_y.fit_transform(
+    #         y_train.reshape(-1, 1)
+    #     ).flatten()
+
+    #     # ------------------------------------------------------------
+    #     # ESTIMATE CHARACTERISTIC LENGTH SCALE
+    #     # ------------------------------------------------------------
+
+    #     nn = NearestNeighbors(n_neighbors=2)
+    #     nn.fit(X_train_scaled)
+
+    #     distances, indices = nn.kneighbors(X_train_scaled)
+
+    #     median_nn_distance = np.median(distances[:, 1])
+
+    #     base_ls = max(0.1, median_nn_distance * 2)
+
+    #     print("base_ls =", base_ls)
+
+    #     # ------------------------------------------------------------
+    #     # INPUT DIMENSION
+    #     # ------------------------------------------------------------
+
+    #     dim = X_train_scaled.shape[1]
+
+    #     # ------------------------------------------------------------
+    #     # KERNEL SEARCH PARAMETERS
+    #     # ------------------------------------------------------------
+
+    #     # ls_multipliers = [0.3, 1.0, 3.0, 10.0]
+    #     # ls_upper_bounds = [0.5, 1.0, 2.0, 5.0]
+
+    #     # smoothness_params = [0.5, 1.5, 2.5]
+
+    #     ls_multipliers = [1.0]
+    #     smoothness_params = [1.5]
+
+    #     kernels = []
+
+    #     # ============================================================
+    #     # 1. ISOTROPIC MATERN KERNELS
+    #     # ============================================================
+
+    #     for nu in smoothness_params:
+
+    #         for ls_mult in ls_multipliers:
+
+    #             for ls_ub in ls_upper_bounds:
+
+    #                 ls = base_ls * ls_mult
+
+    #                 if ls <= ls_ub:
+
+    #                     kernel = Matern(
+    #                         length_scale=ls,
+    #                         length_scale_bounds=(1e-2, ls_ub),
+    #                         nu=nu
+    #                     )
+
+    #                     kernels.append({
+    #                         "kernel": kernel,
+    #                         "type": "isotropic",
+    #                         "nu": nu,
+    #                         "ls_ub": ls_ub
+    #                     })
+
+    #     # ============================================================
+    #     # 2. ANISOTROPIC MATERN KERNELS
+    #     # ============================================================
+
+    #     for nu in smoothness_params:
+
+    #         for ls_mult in ls_multipliers:
+
+    #             for ls_ub in ls_upper_bounds:
+
+    #                 ls = base_ls * ls_mult
+
+    #                 if ls <= ls_ub:
+
+    #                     kernel = Matern(
+    #                         length_scale=np.ones(dim) * ls,
+    #                         length_scale_bounds=(1e-2, ls_ub),
+    #                         nu=nu
+    #                     )
+
+    #                     kernels.append({
+    #                         "kernel": kernel,
+    #                         "type": "anisotropic",
+    #                         "nu": nu,
+    #                         "ls_ub": ls_ub
+    #                     })
+
+    #     # ============================================================
+    #     # ADD WHITE NOISE KERNELS
+    #     # ============================================================
+
+    #     # noise_levels = [1e-8, 1e-6, 1e-4]
+    #     noise_levels = [1e-6]
+
+    #     extra_kernels = []
+
+    #     for entry in kernels:
+
+    #         for noise in noise_levels:
+
+    #             noisy_kernel = (
+    #                 entry["kernel"]
+    #                 + WhiteKernel(
+    #                     noise_level=noise,
+    #                     noise_level_bounds=(1e-10, 1e-1)
+    #                 )
+    #             )
+
+    #             extra_kernels.append({
+    #                 "kernel": noisy_kernel,
+    #                 "type": entry["type"] + "_noise",
+    #                 "nu": entry["nu"],
+    #                 "ls_ub": entry["ls_ub"],
+    #                 "noise": noise
+    #             })
+
+    #     kernels.extend(extra_kernels)
+
+    #     print(f"Generated {len(kernels)} kernels")
+
+
+    #     y_predict_kernels = []
+    #     y_predict_std_kernels = []
+    #     lml_kernels = []
+    #     scores_kernels = []
+        
+    #     best_score = -np.inf
+    #     best_lml = -np.inf
+    #     best_train_rmse = np.inf
+
+    #     alpha = 10.0
+
+    #     for kernel in kernels:
+    #         try:
+    #             start = time.time()
+    #             # if optimized_kernel is None:
+    #             #     gaussian_process = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=10, random_state=42)
+    #             # else:
+    #             #     gaussian_process = GaussianProcessRegressor(kernel=optimized_kernel, optimizer=None)
+    #             # print(self.colored_text(f'Trying kernel: {kernel[0]} with ls_bounds=[0.1, {kernel[1]}]', 'blue'))
+    #             gaussian_process = GaussianProcessRegressor(kernel=kernel[0], n_restarts_optimizer=20, random_state=42)
+                
+    #             # Fit the GP model on scaled data
+    #             gaussian_process.fit(X_train_scaled, y_train_scaled)
+    #             optimized_kernel = gaussian_process.kernel_
+
+    #             end = time.time()
+
+    #             # Log-Marginal Likelihood
+    #             lml = gaussian_process.log_marginal_likelihood_value_
+
+    #             # Calculate training score (RMSE on training data)
+    #             y_pred_train, std_train = gaussian_process.predict(X_train_scaled, return_std=True)
+    #             train_rmse = np.sqrt(
+    #                 np.mean((y_pred_train - y_train_scaled)**2)
+    #             )
+
+    #             score = lml - alpha * train_rmse
+
+    #             # Print the optimized kernel and hyperparameters
+    #             # print(f"kernel = {kernel[0]}, ls_bounds=[0.1, {kernel[1]}]; Optimized kernel: {optimized_kernel} | time = {end - start:.2f}s | LML = {lml:.4f}, training_score = {train_rmse}")
+
+    #             # Make predictions on scaled X
+    #             y_predict_scaled, std_prediction_scaled = gaussian_process.predict(X_scaled, return_std=True)
+    #             y_predict = scaler_y.inverse_transform(y_predict_scaled.reshape(-1, 1)).flatten()
+    #             y_predict_std = std_prediction_scaled * scaler_y.scale_[0]
+
+    #             y_predict_kernels.append(y_predict)
+    #             y_predict_std_kernels.append(y_predict_std)
+
+    #             self._diagnose_gpr_issues(gaussian_process, X_train_scaled, y_train_scaled)
+
+    #             if score > best_score:
+    #                 best_score = score
+
+    #                 best_lml = lml
+    #                 best_train_rmse = train_rmse
+
+    #                 best_guess_kernel = kernel
+    #                 best_optimized_kernel = optimized_kernel
+
+    #                 best_y_predict = y_predict
+    #                 best_y_predict_std = y_predict_std
+
+    #         except Exception as e:
+    #             print(self.colored_text(f'GPR failed for kernel {kernel}: {e}', 'red'))
+    #             traceback.print_exc()
+    #             continue
+
+    #     print(
+    #         self.colored_text(
+    #             f"Best kernel = {best_optimized_kernel} | "
+    #             f"LML = {best_lml:.4f} | "
+    #             f"RMSE = {best_train_rmse:.6e} | "
+    #             f"Score = {best_score:.4f}",
+    #             "green"
+    #         )
+    #     )
+    #     lml_kernels.append(best_lml)
+    #     scores_kernels.append(best_score)
+
+
+    #     if plot_kernels is True:
+    #         GPR_fit = plt.figure()
+
+    #         for i in range(len(y_predict_kernels)):
+    #             plt.scatter(X_train, y_train, color='red', label="Observations", s=10)
+    #             plt.plot(X, y_predict_kernels[i], label='Mean prediction', linewidth=0.8)
+    #             plt.fill_between(
+    #                 X.ravel(),
+    #             (y_predict_kernels[i] - 1.96 * y_predict_std_kernels[i]), 
+    #             (y_predict_kernels[i] + 1.96 * y_predict_std_kernels[i]),
+    #                 alpha=0.5,
+    #                 label=r"95% confidence interval",
+    #             )
+    #         plt.legend(loc = 'upper left')
+    #         plt.xlabel("$e$")
+    #         if property == 'amplitude':
+    #             plt.ylabel("$f_A(e)$")
+    #         elif property == 'phase':
+    #             plt.ylabel("$f_{\phi}(e)$")
+    #         plt.title(f"GPR {property} at T_{time_node}, best optimized kernel: {best_optimized_kernel[0]} with ls_bounds=[0.1, {best_optimized_kernel[1]}]")
+    #         # plt.show()
+
+    #         if save_fig_kernels is True:
+    #             figname = f'Images/Gaussian_kernels/Gaussian_kernels_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}_Ni={len(self.ecc_ref_space)}]_No={len(self.ecc_ref_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_basis_vecs_phase}_Nga={self.N_basis_vecs_amp}.png'
+                
+    #             # Ensure the directory exists, creating it if necessary and save
+    #             os.makedirs('Images/Gaussian_kernels', exist_ok=True)
+    #             GPR_fit.savefig(figname)
+
+    #             print(self.colored_text(f'Figure is saved in {figname}', 'blue'))
+
+    #     # return gpr_obj
+    #     return best_y_predict, [(best_y_predict - 1.96 * best_y_predict_std), (best_y_predict + 1.96 * best_y_predict_std)], best_optimized_kernel, best_lml
 
     def _gaussian_process_regression_test(self, time_node, train_obj:TrainingSetResults, optimized_kernel=None, plot_kernels=False, save_fig_kernels=False):
         """
@@ -484,6 +773,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
 
             except Exception as e:
                 print(self.colored_text(f'GPR failed for kernel {kernel}: {e}', 'red'))
+                traceback.print_exc()
                 continue
 
         print(self.colored_text(f"Best guess kernel = {best_guess_kernel}; Optimized kernel: {best_optimized_kernel} | time = {end - start:.2f}s | LML = {best_lml:.4f} | X_train_scaled = {X_train_scaled[:10]} | Y_train_scaled = {y_train_scaled[:10]}", 'green'))
@@ -662,15 +952,23 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             train_obj = train_obj.load()
 
         except Exception as e:
-            print(f'line {getframeinfo(f).lineno}: {e}')
+            print(e)
+            traceback.print_exc()
 
-            if training_set is None:
+            if train_obj.training_set is None:
+                print('check 0')
                 try:
                     train_obj = train_obj.load()
+                    print('check 1')
                 except Exception as e:
-                    print(f'line {getframeinfo(f).lineno}: {e}')
+                    print(e)
+                    print('check 2')
+                    traceback.print_exc()
                     # Generate the training set of greedy parameters at empirical nodes
                     train_obj = self.get_training_set_greedy(property=property, min_greedy_error=min_greedy_error, N_greedy_vecs=N_basis_vecs)
+            
+            print(f"Training set for {property} has {len(train_obj.basis_indices)} basis vectors and {len(train_obj.empirical_indices)} empirical nodes.")
+            print(train_obj.training_set)
 
             # Create empty arrays to save fitvalues
             gpr_obj.mean_predictions = np.zeros((train_obj.training_set.shape[1], len(self.ecc_ref_space_output)))
@@ -754,7 +1052,8 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                     self.time = data['time']
 
             except Exception as e:
-                print(f'line {getframeinfo(f).lineno}: {e}')
+                print(e)
+                traceback.print_exc()
                 train_obj_output = TrainingSetResults(**self.result_kwargs_training(property=property, ecc_ref_space=self.ecc_ref_space_output))
                 residual_parameterspace_output = self.generate_property_dataset(train_obj_output, save_dataset_to_file=True)
 
@@ -786,13 +1085,15 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             try:
                 gpr_obj = gpr_obj.load()
             except Exception as e:
-                print(f'line {getframeinfo(f).lineno}: {e}. \n Make sure to run fit_to_training_set() before plotting')
+                print(e, '\n Make sure to run fit_to_training_set() before plotting')
+                traceback.print_exc()
 
         if train_obj.training_set is None:
             try:
                 train_obj = train_obj.load()
             except Exception as e:
-                print(f'line {getframeinfo(f).lineno}: {e}. \n Make sure to run fit_to_training_set before plotting')
+                print(e, '\n Make sure to run fit_to_training_set before plotting')
+                traceback.print_exc()
 
         train_output_param_space = TrainingSetResults(**self.result_kwargs_training(property=train_obj.property, ecc_ref_space=self.ecc_ref_space_output))
         train_output_param_space = self.generate_property_dataset(train_obj=train_output_param_space, save_residuals=True, save_polarizations=True)
@@ -929,7 +1230,8 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             load_B_matrix.close()
 
         except Exception as e:
-            print(f'line {getframeinfo(f).lineno}: {e}')
+            print(e)
+            traceback.print_exc()
             
             m, time_length = train_obj.residual_basis.shape
             B_matrix = np.zeros((m, time_length))
@@ -965,36 +1267,35 @@ duration = 4 # seconds
 time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
 
 gt = Generate_Offline_Surrogate(time_array=time_array, 
-                                ecc_ref_range=[0.0, 0.1], 
-                                mean_ano_ref_range=[0, 0],
-                                mass_ratio_range=[1, 1],
-                                chi1_range=[0, 0],
-                                chi2_range=[0, 0],
-                                amount_input_wfs=100, 
-                                amount_output_wfs=500, 
+                                ecc_ref_parameterspace=np.linspace(0.001, 0.1, num=3),
+                                mean_ano_parameterspace=np.linspace(0, 2*np.pi, num=3),
+                                mass_ratio_parameterspace=[1],
+                                chi1_parameterspace=[0],
+                                chi2_parameterspace=[0],
+                                M_output_wfs_per_dimension=500, 
                                 min_greedy_error_amp=1e-8,
                                 min_greedy_error_phase=1e-6,
                                 minimum_spacing_greedy=0.003, 
                                 training_set_selection='greedy')
-train_obj_p = gt._get_training_obj('phase')
-# gt.generate_property_dataset(train_obj=train_obj_p, 
-#                              plot_residuals_eccentric_evolv=True,
-#                              plot_residuals_time_evolv=True
-#                              )
-# gt.get_training_set_greedy(property='phase', 
-#                            min_greedy_error=1e-8, 
-#                            plot_greedy_error=True,
-#                            plot_emp_nodes_at_ecc=True, 
-#                            plot_training_set=True,
-#                            plot_greedy_vecs=True,
-#                            plot_emp_nodes_on_basis=True)
 
-gt.fit_to_training_set('amplitude', min_greedy_error=1e-8, save_fits_to_file=True, 
-                           plot_GPR_fits=True, save_fig_GPR_fits=True, 
-                        #    plot_residuals_ecc_evolve=True, save_fig_ecc_evolve=True, 
-                        #    plot_residuals_time_evolve=True, save_fig_time_evolve=True,
-                           )
-    # gt.fit_to_training_set('amplitude', min_greedy_error=1e-6, save_fits_to_file=True, plot_GPR_fits=True, save_fig_GPR_fits=True, plot_residuals_ecc_evolve=True, save_fig_ecc_evolve=True, plot_residuals_time_evolve=True, save_fig_time_evolve=True)
+train_obj_p = gt._get_training_obj('phase')
+gt.generate_property_dataset(train_obj=train_obj_p, 
+                            #  plot_residuals_eccentric_evolve=True,
+                            #  plot_residuals_time_evolve=True,
+                             )
+gt.get_training_set_greedy(property='phase', 
+                           min_greedy_error=1e-8, 
+                           plot_greedy_error=True,
+                           plot_training_set=True,
+                           plot_emp_nodes_on_basis=True)
 
 plt.show()
-# gt.fit_to_training_set('amplitude', N_basis_vecs=21, save_fits_to_file=True)
+gt.fit_to_training_set('amplitude', min_greedy_error=1e-8, save_fits_to_file=True, 
+                           plot_GPR_fits=True, save_fig_GPR_fits=True, 
+                           plot_residuals_ecc_evolve=True, save_fig_ecc_evolve=True, 
+                           plot_residuals_time_evolve=True, save_fig_time_evolve=True,
+                           )
+#     # gt.fit_to_training_set('amplitude', min_greedy_error=1e-6, save_fits_to_file=True, plot_GPR_fits=True, save_fig_GPR_fits=True, plot_residuals_ecc_evolve=True, save_fig_ecc_evolve=True, plot_residuals_time_evolve=True, save_fig_time_evolve=True)
+
+# plt.show()
+# # gt.fit_to_training_set('amplitude', N_basis_vecs=21, save_fits_to_file=True)

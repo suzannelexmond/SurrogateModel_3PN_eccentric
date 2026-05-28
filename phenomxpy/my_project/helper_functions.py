@@ -108,13 +108,14 @@ class Warnings:
     def _greedy_parameters_warning(self, dataset, parameter_grid, time_array):
         """Helper function to check for numerical issues in the greedy algorithm."""
         # Check for numerical issues before running the greedy algorithm
-        residuals_flat = dataset.reshape(-1, len(time_array))
-        
-        U = residuals_flat
+        print('dataset.shape:', dataset.shape, type(dataset))
+        U = np.asarray(dataset) # convert dataset fropm hdf5 to numpy array 
+        residuals_flat = U.reshape(-1, len(time_array)) 
+
         params = parameter_grid
 
-        finite_rows = np.all(np.isfinite(U), axis=1)
-        norms = np.linalg.norm(U, axis=1)
+        finite_rows = np.all(np.isfinite(residuals_flat), axis=1)
+        norms = np.linalg.norm(residuals_flat, axis=1)
         near_zero_rows = norms < 1e-14
 
         bad_mask = (~finite_rows) | near_zero_rows
@@ -126,7 +127,7 @@ class Warnings:
             fig_bad_indices = plt.figure(figsize=(10, 6))
             
             for idx in bad_indices:
-                plt.plot(time_array, dataset[idx], label=f"Bad idx {idx}")
+                plt.plot(time_array, residuals_flat[idx], label=f"Bad idx {idx}")
 
             plt.xlabel("Time")
             plt.ylabel("Residual")
@@ -136,7 +137,7 @@ class Warnings:
 
         if len(bad_indices) > 0:
             print(f"Warning: {len(bad_indices)} problematic rows detected before greedy.")
-            print(f"U shape: {U.shape}")
+            print(f"residuals_flat shape: {residuals_flat.shape}")
             print(f"parameter_grid shape: {params.shape}")
             print(f"finite rows: {finite_rows.sum()} / {len(finite_rows)}")
             print(f"non-finite rows: {np.sum(~finite_rows)}")
@@ -150,7 +151,7 @@ class Warnings:
             non_finite_indices = np.where(~finite_rows)[0]
 
             for idx in non_finite_indices[:20]:
-                row = U[idx]
+                row = residuals_flat[idx]
                 bad_time_indices = np.where(~np.isfinite(row))[0]
 
                 print(f"\nbad idx: {idx}")
@@ -162,7 +163,6 @@ class Warnings:
                     first_bad_time_idx = bad_time_indices[0]
                     print(f"first bad time index: {first_bad_time_idx}")
                     print(f"bad time: {time_array[first_bad_time_idx]}")
-
 
     
     

@@ -12,42 +12,6 @@ class Generate_TrainingSet_GPR_Opt(Generate_Offline_Surrogate):
     property calculations and waveform generation.
 
     """
-    # def __init__(self, time_array, ecc_ref_parameterspace, N_basis_vecs_amp=None, N_basis_vecs_phase=None, min_greedy_error_amp=None, min_greedy_error_phase=None, minimum_spacing_greedy=0.005, f_ref=20, f_lower=10, chi1=0, chi2=0, phiRef=0., rel_anomaly=0., inclination=0., truncate_at_ISCO=True, truncate_at_tmin=True):
-    #     """
-    #     Parameters:
-    #     ----------------
-    #     time_array [s], np.array : Time array in seconds.
-    #     ecc_ref [dimensionless], float: Eccentricity of binary at start f_lower
-    #     total_mass [M_sun], int : Total mass of the binary in solar masses
-    #     f_lower [Hz], float: Start frequency of the waveform
-    #     f_ref [Hz], float: Reference frequency at which the waveform parameters (eccentricity, spin, ...) are defined.
-    #     chi1 [dimensionless], float, ndarray : Spin of primary. If float, interpreted as z component
-    #     chi2 [dimensionless], float, ndarray : Spin of secondary. If float, interpreted as z component
-    #     rel_anomaly [rad], float : Relativistic anomaly. Radial phase which parametrizes the orbit within the Keplerian (relativistic) parametrization. Defaults to 0 (periastron).
-    #     inclination [rad], float : Inclination angle of the binary system. Defaults to 0 (face-on).
-    #     luminosity_distance [Mpc], float : Luminosity distance of the binary in megap
-    #     parameter_space_input [dimensionless], float, ndarray : Numpy array of eccentric values used to calculate training set. MORE VALUES RESULTS IN LARGER COMPUTATIONAL TIME!
-    #     residual_greedy_basis [dimenionless OR rad], narray, float: Stores the residual greedy basis, set later during get_greedy_parameters().
-    #     greedy_parameters_idx [dimensionless], narray, float: Holds indices of greedy parameters, set later during get_greedy_parameters().
-    #     empirical_nodes_idx [dimenionless], narray, int: Stores indices of empirical nodes, to be set during get_empirical_nodes().
-
-    #     """
-    #     self.ecc_ref_space = ecc_ref_parameterspace
-    #     self.minimum_spacing_greedy = minimum_spacing_greedy
-
-    #     self.min_greedy_error_amp = min_greedy_error_amp
-    #     self.min_greedy_error_phase = min_greedy_error_phase
-    #     self.N_basis_vecs_amp = N_basis_vecs_amp
-    #     self.N_basis_vecs_phase = N_basis_vecs_phase
-
-    #     # To be stored parameters
-    #     self.residual_reduced_basis = None
-    #     self.indices_basis = None
-    #     self.empirical_nodes_idx = None
-
-    #     self.highest_tmin_value = None
-    #     # Inherit parameters from all previously defined classes
-    #     Waveform_Properties.__init__(self, time_array=time_array, ecc_ref=None, total_mass=None, luminosity_distance=None, f_lower=f_lower, f_ref=f_ref, chi1=chi1, chi2=chi2, phiRef=phiRef, rel_anomaly=rel_anomaly, inclination=inclination, truncate_at_ISCO=truncate_at_ISCO, truncate_at_tmin=truncate_at_tmin)
 
     def __init__(
         self,
@@ -92,13 +56,37 @@ class Generate_TrainingSet_GPR_Opt(Generate_Offline_Surrogate):
             )
 
 
-    def fit_to_training_set_GPR_opt(self, property, N_GPR_basis_vecs, min_greedy_error=None, N_basis_vecs=None, training_set=None, X_train=None, save_fits_to_file=True, plot_kernels=False, 
-                            plot_GPR_fits=False, save_fig_GPR_fits=False, save_fig_kernels=False, plot_residuals_ecc_evolve=False, save_fig_ecc_evolve=False, plot_residuals_time_evolve=False, save_fig_time_evolve=False,
-                            plot_greedy_vecs=False, save_fig_greedy_vecs=False, plot_greedy_error=False, save_fig_greedy_error=False, plot_emp_nodes_at_ecc=False, save_fig_emp_nodes=False, plot_training_set=False, save_fig_training_set=False):
+    def fit_to_training_set_GPR_opt(self, 
+                                    property, 
+                                    N_GPR_basis_vecs, 
+                                    min_greedy_error=None, 
+                                    N_basis_vecs=None, 
+                                    N_ini_greedy_vecs=3,
+                                    training_set=None, 
+                                    X_train=None, 
+                                    save_fits_to_file=True, 
+                                    plot_kernels=False, save_fig_kernels=False,
+                                    plot_GPR_fits=False, save_fig_GPR_fits=False,
+                                    plot_residuals_ecc_evolve=False, save_fig_ecc_evolve=False, 
+                                    plot_residuals_time_evolve=False, save_fig_time_evolve=False,
+                                    plot_greedy_vecs=False, save_fig_greedy_vecs=False, 
+                                    plot_greedy_error=False, save_fig_greedy_error=False, 
+                                    plot_emp_nodes_at_ecc=False, save_fig_emp_nodes=False, 
+                                    plot_training_set=False, save_fig_training_set=False
+                                    ):
         
-        
+        # training object for the chosen property (phase or amplitude)
+        gpr_obj = self._get_gpr_obj(property)
+        train_obj = self._get_training_obj(property)
+
         # Get first 3 points to produce a start for GPR
-        residual_training_set = self.get_training_set_greedy(property, N_greedy_vecs=3, emp_nodes_of_full_dataset=True, plot_greedy_error=plot_greedy_error, save_fig_greedy_error=save_fig_greedy_error, plot_emp_nodes_at_ecc=plot_emp_nodes_at_ecc, save_fig_emp_nodes=save_fig_emp_nodes, plot_training_set=plot_training_set, save_fig_training_set=save_fig_training_set, 
+        residual_training_set = self.get_training_set_greedy(property, 
+                                                             N_greedy_vecs=N_ini_greedy_vecs, 
+                                                             emp_nodes_of_full_dataset=True, 
+                                                             plot_greedy_error=plot_greedy_error, 
+                                                             save_fig_greedy_error=save_fig_greedy_error, 
+                                                             plot_emp_nodes_at_ecc=plot_emp_nodes_at_ecc, save_fig_emp_nodes=save_fig_emp_nodes, 
+                                                             plot_training_set=plot_training_set, save_fig_training_set=save_fig_training_set, 
                         save_dataset_to_file=True, plot_greedy_vecs=plot_greedy_vecs, save_fig_greedy_vecs=save_fig_greedy_vecs)
 
         while len(self.residual_reduced_basis) <= N_GPR_basis_vecs:
@@ -128,7 +116,10 @@ class Generate_TrainingSet_GPR_Opt(Generate_Offline_Surrogate):
 
                 
                 print(f'GPRfit {property} load succeeded: {time.time() - start:.4f}s')
-            except:
+            except Exception as e:
+                print(e)
+                traceback.print_exc()
+
                 # Fit the basis vecs with GPR
                 gaussian_fit, uncertainty_region = self.fit_to_training_set(property, training_set=residual_training_set, save_fits_to_file=True, plot_kernels=plot_kernels, plot_GPR_fits=plot_GPR_fits, save_fig_kernels=save_fig_kernels, save_fig_GPR_fits=save_fig_GPR_fits, plot_residuals_ecc_evolve=plot_residuals_ecc_evolve, save_fig_ecc_evolve=save_fig_ecc_evolve, plot_residuals_time_evolve=plot_residuals_time_evolve, save_fig_time_evolve=save_fig_time_evolve)
 
@@ -140,7 +131,9 @@ class Generate_TrainingSet_GPR_Opt(Generate_Offline_Surrogate):
                     self.time = data['time']
 
             except Exception as e:
-                print(f'line {getframeinfo(f).lineno}: {e}')
+                print(e)
+                traceback.print_exc()
+
                 residual_parameterspace_output = self.generate_property_dataset(ecc_list=self.ecc_ref_parameter_space_output, property=property, save_dataset_to_file=True)
 
             # Calculate the relative errors of GPR fits vs property dataset
