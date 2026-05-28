@@ -1,3 +1,32 @@
+# ===== Generated data =====
+
+# Top-level generated strain data
+Straindata/
+
+# phenomxpy project data
+phenomxpy/my_project/Straindata/
+phenomxpy/my_project/Notebooks/Straindata/
+
+# Python cache
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Build artifacts
+build/
+*.egg-info/
+dist/
+
+# ===== ignore bundled/third-party repos =====
+scikit-reducedmodel/
+gwsurrogate/
+phenomxpy/phenomxpy/
+
+# optional if you also don't want build artifacts
+*.egg-info/
+build/
+dist/
+
 *.npz
 
 
