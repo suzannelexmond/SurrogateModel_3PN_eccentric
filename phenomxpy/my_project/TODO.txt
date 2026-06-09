@@ -657,3 +657,19 @@ Interpretation:
 - Mismatch is always smaller than relative errors for well-aligned waveforms
 - Only shape-distorting errors contribute significantly to mismatch
 
+
+29/05/2026:
+I just initialized the new GRPFitResults variables. 
+Next step: Adjust gaussian_process_regression_t() function to return the GPRFitResults object instead of the dict with results.
+GRPFitResults now has a new funciton that saves/loades the obj, but also a new function that saves/loades the only necessary things for the online compute_polarizations
+
+What also needs to be done:
+- Check what to run GP on! Coefficients instead of raw phases and amplitudes!
+- But first check if GP even works 
+
+
+02/06/2026:
+- gp works! :)
+- zscore is normalised and works better than score. The problme with score is that the lml and rmse have very different scales. 
+If you want to caluclate a score with a lml and rmse it would be better to normalise these before comparing.
+- First calculate all lmls and rmses and afterwards calculate the scores. Not sure how to do this yet, since we also have the best_score loop. actually this can be done after easily.

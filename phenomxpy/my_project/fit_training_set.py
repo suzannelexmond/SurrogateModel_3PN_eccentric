@@ -1,6 +1,7 @@
 from tracemalloc import start
 
-from matplotlib import gridspec
+from matplotlib import axes, gridspec, path
+from matplotlib.backends.backend_pdf import PdfPages
 
 from generate_greedy_training_set import *
 
@@ -8,6 +9,7 @@ from sklearn.gaussian_process import GaussianProcessRegressor
 from sklearn.gaussian_process.kernels import RBF, Product, ConstantKernel as C
 from sklearn.gaussian_process.kernels import RBF, Matern, RationalQuadratic, WhiteKernel, ExpSineSquared, DotProduct, ConstantKernel as C
 import time
+import traceback
 import seaborn as sns
 from matplotlib.lines import Line2D
 from inspect import getframeinfo
@@ -16,16 +18,45 @@ from fileinput import filename
 from inspect import currentframe
 from sklearn.neighbors import NearestNeighbors
 from sklearn.exceptions import ConvergenceWarning
+
+import matplotlib.ticker as mticker
+from matplotlib.colors import Normalize
+import matplotlib.gridspec as gridspec
+
+
 warnings.simplefilter("ignore", ConvergenceWarning)
 
 f = currentframe()
 
+import plotly.io as pio
+# default for script-style plotting
+pio.renderers.default = "browser"
+
+import plotly.express as px
+from sklearn.decomposition import PCA
 
 @dataclass
 class GPRFitResults(Warnings):
-    # Initialization parameters
+    
+    # ------------------------------------------------------------
+    # WAVEFORM SYSTEMATICS
+    # ------------------------------------------------------------
+    
     property: str = "phase"
+    time: Any = None
 
+    f_ref: float = None
+    f_lower: float = None
+    phiRef: float = 0.0
+    inclination: float = 0.0
+    truncate_at_ISCO: bool = True
+    truncate_at_tmin: bool = True
+    luminosity_distance: Optional[float] = None
+
+    # ------------------------------------------------------------
+    # INPUT/ OUTPUT SPACES
+    # ------------------------------------------------------------
+    
     ecc_ref_space_input: Any = None
     ecc_ref_space_output: Any = None
 
@@ -41,32 +72,40 @@ class GPRFitResults(Warnings):
     chi2_space_input: Any = None
     chi2_space_output: Any = None
 
-    time: Any = None
+    parameter_grid: Any = None
 
+    # ------------------------------------------------------------
+    # TRAINING SYSTEMATICS
+    # ------------------------------------------------------------
     N_basis_vecs: Optional[int] = None
     min_greedy_error: Optional[float] = None
 
-    f_ref: float = None
-    f_lower: float = None
-    phiRef: float = 0.0
-    inclination: float = 0.0
-    truncate_at_ISCO: bool = True
-    truncate_at_tmin: bool = True
-    luminosity_distance: Optional[float] = None
-
-    # Results fields for loading after initialization
-    circ: Any = None
+    # ------------------------------------------------------------
+    # TRAINING STRUCTURE
+    # ------------------------------------------------------------
     residuals: Any = None
-    basis_indices: Any = field(default_factory=list)
-    empirical_indices: Any = field(default_factory=list)
-    residual_basis: Any = None
+    basis_indices: list = field(default_factory=list)
+    empirical_indices: list = field(default_factory=list)
     training_set: Any = None
 
-    best_lmls: Any = None
-    best_guess_kernels: Any = None
-    optimized_kernels: Any = None
+    # ------------------------------------------------------------
+    # FULL GP RESULTS (offline use)
+    # ------------------------------------------------------------
+    gp_models: list = field(default_factory=list)   # ONE GP per time node
+    kernels: list = field(default_factory=list)
+
     mean_predictions: Any = None
     confidence_95_preds: Any = None
+    best_lmls: Any = None
+    best_train_rmses: Any = None
+    best_scores: Any = None
+
+    # ------------------------------------------------------------
+    # SCALERS (CRITICAL FOR ONLINE USE)
+    # ------------------------------------------------------------
+    scaler_x: Any = None
+    scaler_y: Any = None
+
 
     def __post_init__(self):
         """Check if initial parameter spaces are valid and round them to 4 decimal places for consistency in filenames."""
@@ -139,8 +178,6 @@ class GPRFitResults(Warnings):
             blocks.append("notmin")
         if self.luminosity_distance is not None:
             blocks.append("SI")
-        if self.optimized_kernels is not None:
-            blocks.append(f"kernel={self._kernel_to_string(self.optimized_kernels)}")
 
         return blocks
 
@@ -163,11 +200,10 @@ class GPRFitResults(Warnings):
 
         return figname
 
-    def save(self, prefix="GPRFitResults", directory="Straindata/GPRFitResults"):
+    def save_gpr_obj(self, prefix="GPRFitResults", directory="Straindata/GPRFitResults"):
         """Saves the GPRFitResults object to a file."""
         if directory is not None:
             os.makedirs(directory, exist_ok=True)
-
         filepath = self.filename(prefix=prefix, ext="pkl", directory=directory)
 
         with open(filepath, "wb") as f:
@@ -175,10 +211,9 @@ class GPRFitResults(Warnings):
 
         # Figure saving confirmation
         print(self.colored_text(f'GPRFitResults saved to {filepath}', 'blue'))
-
         return filepath
 
-    def load(self, prefix="GPRFitResults", directory="Straindata/GPRFitResults"):
+    def load_gpr_obj(self, prefix="GPRFitResults", directory="Straindata/GPRFitResults"):
         """Loads the saved GPRFitResults object from a file."""
 
         filepath = self.filename(prefix=prefix, ext="pkl", directory=directory)
@@ -192,6 +227,48 @@ class GPRFitResults(Warnings):
         print(self.colored_text(f"GPRFitResults object loaded from {filepath}", 'blue'))
 
         return loaded_obj
+    
+    def save_offline_surrogate(self, prefix="Offline_GP", directory="Straindata/Offline_GP_Models"):
+        """
+        Only what is needed for ONLINE inference.
+        """
+        if directory is not None:
+            os.makedirs(directory, exist_ok=True)
+        filepath = self.filename(prefix=prefix, ext="pkl", directory=directory)
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+
+        bundle = {
+            "property": self.property,
+            "time": self.time,
+
+            # IMPORTANT: GP models OR kernels+training data
+            "gp_models": self.gp_models,
+            "kernels": self.kernels,
+            "scaler_x": self.scaler_x,
+            "scaler_y": self.scaler_y,
+
+            "parameter_grid": self.parameter_grid,
+        }
+
+        with open(filepath, "wb") as f:
+            pickle.dump(bundle, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    def load_offline_surrogate(self, 
+                               prefix="Offline_GP", 
+                               directory="Straindata/Offline_GP_Models"):
+        """
+        Load the surrogate bundle saved by save_offline_surrogate.
+        """
+        filepath = self.filename(prefix=prefix, ext="pkl", directory=directory)
+        with open(filepath, "rb") as f:
+            bundle = pickle.load(f)
+
+        self.property = bundle.get("property", None)
+        self.time = bundle.get("time", None)
+        self.gp_models = bundle.get("gp_models", None)
+        self.scaler_x = bundle.get("scaler_x", None)
+        self.scaler_y = bundle.get("scaler_y", None)
+        self.parameter_grid = bundle.get("parameter_grid", None)
 
 
 class Generate_Offline_Surrogate(Generate_TrainingSet):
@@ -353,553 +430,1904 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             
             return issues
     
-    # def _gaussian_process_regression_t(self, 
-    #                                    time_node, 
-    #                                    train_obj:TrainingSetResults, 
-    #                                    optimized_kernel=None, 
-    #                                    plot_kernels=False, 
-    #                                    save_fig_kernels=False,
-    #                                    time_coupled=False
-    #                                    ):
+    # def _gaussian_process_regression_t(
+    #     self,
+    #     time_node,
+    #     train_obj: TrainingSetResults,
+    #     optimized_kernel=None,
+    #     plot_kernels=False,
+    #     save_fig_kernels=False,
+    #     time_coupled=False
+    # ):
     #     """
-    #     fit_to_params: choose 'greedy' for fitting to greedy paramaters, or choors 'GPR_opt' for fitting to GPR optimized chosen parameters
+    #     Gaussian Process Regression for one empirical time node.
+
+    #     ------------------------------------------------------------------
+    #     WHAT THIS FUNCTION DOES
+    #     ------------------------------------------------------------------
+
+    #     We want to learn:
+
+    #         f(parameters) -> waveform quantity
+
+    #     where the waveform quantity is either:
+    #         - phase residual
+    #         - amplitude residual
+
+    #     at ONE empirical time node.
+
+    #     ------------------------------------------------------------
+    #     TWO MODES
+    #     ------------------------------------------------------------
+
+    #     1) time_coupled = False
+    #     --------------------------------
+    #     Each time node gets its own independent GP.
+
+    #     Input dimensions:
+    #         [e, l, q, chi1, chi2]
+
+    #     This is:
+    #         - simpler
+    #         - faster
+    #         - usually more stable
+    #         - easier to optimize
+
+    #     Recommended FIRST approach.
+
+
+    #     2) time_coupled = True
+    #     --------------------------------
+    #     Time is added as another GP dimension.
+
+    #     Input dimensions:
+    #         [e, l, q, chi1, chi2, t]
+
+    #     The GP then learns correlations across time.
+
+    #     Advantages:
+    #         - smoother evolution in time
+    #         - fewer discontinuities between nodes
+
+    #     Disadvantages:
+    #         - MUCH harder optimization
+    #         - higher dimensionality
+    #         - requires more training data
+    #         - more prone to over-smoothing
+
+    #     Recommended only after the uncoupled model works well.
+
+    #     ------------------------------------------------------------------
+    #     KERNEL SEARCH STRATEGY
+    #     ------------------------------------------------------------------
+
+    #     We test MANY kernels automatically.
+
+    #     We vary:
+    #         - kernel smoothness (nu)
+    #         - length scales
+    #         - isotropic vs anisotropic kernels
+    #         - noise levels
+
+    #     Then we select the BEST kernel using:
+
+    #         score = LML - alpha * train_rmse
+
+    #     because:
+
+    #         LML alone often prefers overly smooth kernels.
+
+    #     Adding RMSE penalizes kernels that fit poorly.
+
+    #     ------------------------------------------------------------------
+    #     IMPORTANT KERNEL CONCEPTS
+    #     ------------------------------------------------------------------
+
+    #     Matern kernel:
+    #         Controls smoothness of interpolation.
+
+    #     nu:
+    #         0.5  -> rough / jagged
+    #         1.5  -> moderately smooth
+    #         2.5  -> very smooth
+
+    #     length_scale:
+    #         Controls correlation distance.
+
+    #         small:
+    #             rapid variation
+
+    #         large:
+    #             smooth variation
+
+    #     isotropic:
+    #         one length scale for ALL dimensions
+
+    #     anisotropic:
+    #         separate length scale per dimension
+
+    #         VERY important in high dimensions because:
+    #             eccentricity may vary rapidly
+    #             while spin dependence may vary slowly
+
+    #     WhiteKernel:
+    #         models numerical noise.
+
+    #     ------------------------------------------------------------------
+    #     HOW TO TEST EFFICIENTLY
+    #     ------------------------------------------------------------------
+
+    #     STEP 1:
+    #         Start SIMPLE:
+
+    #             time_coupled = False
+
+    #             smoothness_params = [1.5]
+    #             ls_multipliers = [1.0]
+    #             noise_levels = [1e-6]
+
+    #     STEP 2:
+    #         Inspect:
+    #             - train_rmse
+    #             - plots
+    #             - prediction smoothness
+
+    #     STEP 3:
+    #         Add anisotropic kernels.
+
+    #         This is usually the BIGGEST improvement
+    #         for multidimensional waveform spaces.
+
+    #     STEP 4:
+    #         Add more:
+    #             smoothness_params
+    #             ls_multipliers
+
+    #     STEP 5:
+    #         ONLY THEN try:
+    #             time_coupled=True
+
+    #     ------------------------------------------------------------------
+    #     PRACTICAL ADVICE
+    #     ------------------------------------------------------------------
+
+    #     In high dimensions:
+
+    #         anisotropic kernels > isotropic kernels
+
+    #     almost always.
+
+    #     Also:
+
+    #         too many optimizer restarts
+    #         can dominate runtime.
+
+    #     Start with:
+    #         n_restarts_optimizer=5
+
+    #     before using:
+    #         20
+
+    #     ------------------------------------------------------------------
     #     """
 
-    #     if time_coupled is False:
-    #         # Assume no time-correlation
-    #         X = np.asarray(self.parameter_grid)
-    #         X_train = X[train_obj.basis_indices]
-    #     else:
-    #         # Assume time-correlation by including time as an additional input dimension. 
-    #         # This allows the GPR to learn correlations across time nodes, 
-    #         # but also increases the dimensionality of the input space and may require more careful kernel selection and hyperparameter tuning.
-    #         X_param = np.asarray(self.parameter_grid)
+        # # ============================================================
+        # # BUILD INPUT MATRICES
+        # # ============================================================
 
-    #         t = np.full((X_param.shape[0], 1), self.time[time_node])
+        # if time_coupled is False:
 
-    #         X_train = np.hstack([
-    #             X_param[train_obj.basis_indices],
-    #             t[train_obj.basis_indices]
-    #         ])
+        #     # --------------------------------------------------------
+        #     # STANDARD MODE:
+        #     # one GP per time node
+        #     # --------------------------------------------------------
+        #     X = np.asarray(self.parameter_grid)
+        #     X_train = X[train_obj.basis_indices]
 
-    #         X = np.hstack([
-    #             X_param,
-    #             t
-    #         ])
+        # else:
+
+        #     # --------------------------------------------------------
+        #     # TIME-COUPLED MODE:
+        #     # append time as extra dimension
+        #     # --------------------------------------------------------
+
+        #     X_param = np.asarray(self.parameter_grid)
+
+        #     t = np.full((X_param.shape[0], 1), self.time[time_node])
+
+        #     X_train = np.hstack([
+        #         X_param[train_obj.basis_indices],
+        #         t[train_obj.basis_indices]
+        #     ])
+
+        #     X = np.hstack([
+        #         X_param,
+        #         t
+        #     ])
+
+        # # ============================================================
+        # # TRAINING TARGETS
+        # # ============================================================
+
+        # y_train = np.squeeze(train_obj.training_set.T[time_node])
+
+        # # ============================================================
+        # # SCALE INPUTS
+        # # ============================================================
+
+        # # ------------------------------------------------------------
+        # # WHY SCALE?
+        # #
+        # # GP kernels are VERY sensitive to feature scales.
+        # #
+        # # Example:
+        # #
+        # #     eccentricity ~ 0.01
+        # #     q            ~ 10
+        # #
+        # # Without scaling:
+        # #     q dominates distance calculations.
+        # # ------------------------------------------------------------
+
+        # scaler_x = StandardScaler()
+
+        # X_train_scaled = scaler_x.fit_transform(X_train)
+
+        # X_scaled = scaler_x.transform(X)
+
+        # scaler_y = StandardScaler()
+
+        # y_train_scaled = scaler_y.fit_transform(
+        #     y_train.reshape(-1, 1)
+        # ).flatten()
+
+        # # ============================================================
+        # # ESTIMATE CHARACTERISTIC LENGTH SCALE
+        # # ============================================================
+
+        # # ------------------------------------------------------------
+        # # We estimate a reasonable initial kernel size from
+        # # nearest-neighbor distances.
+        # #
+        # # This gives the optimizer a MUCH better starting point.
+        # # ------------------------------------------------------------
+
+        # nn = NearestNeighbors(n_neighbors=2)
+
+        # nn.fit(X_train_scaled)
+
+        # distances, indices = nn.kneighbors(X_train_scaled)
+
+        # median_nn_distance = np.median(distances[:, 1])
+
+        # base_ls = median_nn_distance * 2
+
+        # print("base_ls =", base_ls)
+
+        # # ============================================================
+        # # INPUT DIMENSION
+        # # ============================================================
+
+        # dim = X_train_scaled.shape[1]
+
+        # # ============================================================
+        # # KERNEL SEARCH PARAMETERS
+        # # ============================================================
+
+        # # ------------------------------------------------------------
+        # # Multipliers applied to base_ls.
+        # #
+        # # small:
+        # #     rapid local variation
+        # #
+        # # large:
+        # #     smoother interpolation
+        # # ------------------------------------------------------------
+
+        # # ls_multipliers = [0.3, 1.0, 3.0, 10.0]
+        # # ls_multipliers = [1.0]
+
+        # # ------------------------------------------------------------
+        # # Upper optimization bounds for length scales.
+        # #
+        # # Prevents optimizer from going to absurdly smooth kernels.
+        # # ------------------------------------------------------------
+
+        # # ls_upper_bounds = [0.5, 1.0, 2.0, 5.0]
+
+        # # ------------------------------------------------------------
+        # # Matern smoothness values.
+        # #
+        # # lower:
+        # #     rougher functions
+        # #
+        # # higher:
+        # #     smoother functions
+        # # ------------------------------------------------------------
+
+        # smoothness_params = [1.0, 2.0, 2.5, 3.0, 3.5, 4.0]
+        # # smoothness_params = [1.5]
+
+        # kernels = []
+
+        # # ============================================================
+        # # 1. ISOTROPIC MATERN KERNELS
+        # # ============================================================
+
+        # # ------------------------------------------------------------
+        # # One single length scale shared across ALL dimensions.
+        # #
+        # # Simpler.
+        # # Faster.
+        # # Often insufficient in high dimensions.
+        # # ------------------------------------------------------------
+
+        # for nu in smoothness_params:
+
+        #     kernel = Matern(
+        #         length_scale=base_ls,
+        #         length_scale_bounds=(0.1 * base_ls, 10 * base_ls),
+        #         nu=nu
+        #     )
+
+        #     kernels.append({
+        #         "kernel": kernel,
+        #         "type": "isotropic",
+        #         "nu": nu,
+        #         "base_ls": base_ls
+        #     })
+
+        # # ============================================================
+        # # 2. ANISOTROPIC MATERN KERNELS
+        # # ============================================================
+
+        # # ------------------------------------------------------------
+        # # Separate length scale per dimension.
+        # #
+        # # MUCH more powerful for:
+        # #     [e, l, q, chi1, chi2]
+        # #
+        # # because every parameter may vary differently.
+        # # ------------------------------------------------------------
+
+        # for nu in smoothness_params:
+
+        #     kernel = Matern(
+        #         length_scale=np.ones(dim) * base_ls,
+        #         length_scale_bounds=(0.1 * base_ls, 10 * base_ls),
+        #         nu=nu
+        #     )
+
+        #     kernels.append({
+        #         "kernel": kernel,
+        #         "type": "anisotropic",
+        #         "nu": nu,
+        #         "base_ls": base_ls
+        #     })
+
+        # # ============================================================
+        # # 3. ADD WHITE NOISE TERMS
+        # # ============================================================
+
+        # # ------------------------------------------------------------
+        # # Models numerical noise / imperfect data.
+        # #
+        # # Prevents overfitting.
+        # # ------------------------------------------------------------
+
+        # # noise_levels = [1e-8, 1e-6, 1e-4]
+        # noise_levels = [1e-6]
+
+        # extra_kernels = []
+
+        # for entry in kernels:
+
+        #     for noise in noise_levels:
+
+        #         noisy_kernel = (
+        #             entry["kernel"]
+        #             + WhiteKernel(
+        #                 noise_level=noise,
+        #                 noise_level_bounds=(1e-10, 1e-1)
+        #             )
+        #         )
+
+        #         extra_kernels.append({
+        #             "kernel": noisy_kernel,
+        #             "type": entry["type"] + "_noise",
+        #             "nu": entry["nu"],
+        #             "base_ls": entry["base_ls"],
+        #             "noise": noise
+        #         })
+
+        # kernels.extend(extra_kernels)
+
+        # print(f"Generated {len(kernels)} kernels")
+
+        # # ------------------------------------------------------------
+        # # Warm-start from previous time node kernel
+        # # ------------------------------------------------------------
+
+        # if optimized_kernel is not None:
+
+        #     kernels.insert(
+        #         0,
+        #         {
+        #             "kernel": optimized_kernel,
+        #             "type": "warm_start",
+        #             "nu": None,
+        #             "base_ls": None
+        #         }
+        #     )
+
+        # # ============================================================
+        # # STORAGE
+        # # ============================================================
+
+        # y_predict_kernels = []
+        # y_predict_std_kernels = []
+
+        # kernel_diagnostics = []
+
+        # kernel_fit_times = []
+
+        # best_score = -np.inf
+        # best_lml = -np.inf
+        # best_train_rmse = np.inf
+
+        # # ------------------------------------------------------------
+        # # IMPORTANT:
+        # #
+        # # LML alone tends to prefer over-smoothed kernels.
+        # #
+        # # We therefore penalize high training error.
+        # #
+        # # Larger alpha:
+        # #     prioritize fit quality more
+        # #
+        # # Smaller alpha:
+        # #     prioritize smoothness / generalization more
+        # # ------------------------------------------------------------
+
+        # alpha = 1.0 / np.std(y_train_scaled)
+
         
-    #     y_train = np.squeeze(train_obj.training_set.T[time_node])
 
-    #     # ------------------------------------------------------------
-    #     # SCALE INPUTS
-    #     # ------------------------------------------------------------
+        # # ============================================================
+        # # KERNEL SEARCH
+        # # ============================================================
 
+        # for entry in kernels:
+
+        #     try:
+
+        #         start = time.time()
+
+        #         kernel_label = {
+        #             "isotropic": "Iso",
+        #             "anisotropic": "Aniso",
+        #             "isotropic_noise": "Iso+W",
+        #             "anisotropic_noise": "Aniso+W",
+        #             "warm_start": "Warm"
+        #         }[entry["type"]]
+
+        #         kernel_label += f" ν={entry['nu']}"
+
+        #         if "noise" in entry:
+        #             kernel_label += f", noise={entry['noise']:.0e}"
+
+        #         start_kernel_time = time.time()
+        #         gaussian_process = GaussianProcessRegressor(
+        #             kernel=entry["kernel"],
+        #             n_restarts_optimizer=5,
+        #             random_state=42
+        #         )
+
+        #         # ----------------------------------------------------
+        #         # TRAIN GP
+        #         # ----------------------------------------------------
+
+        #         gaussian_process.fit(
+        #             X_train_scaled,
+        #             y_train_scaled
+        #         )
+
+        #         optimized_kernel = gaussian_process.kernel_
+
+        #         end_kernel_time = time.time()
+        #         kernel_fit_time = end_kernel_time - start_kernel_time
+        #         kernel_fit_times.append(kernel_fit_time)
+
+        #         end = time.time()
+
+        #         # ----------------------------------------------------
+        #         # LOG MARGINAL LIKELIHOOD
+        #         # ----------------------------------------------------
+
+        #         lml = gaussian_process.log_marginal_likelihood_value_
+
+        #         # ----------------------------------------------------
+        #         # TRAINING ERROR
+        #         # ----------------------------------------------------
+
+        #         y_pred_train, std_train = gaussian_process.predict(
+        #             X_train_scaled,
+        #             return_std=True
+        #         )
+
+        #         train_rmse = np.sqrt(
+        #             np.mean(
+        #                 (y_pred_train - y_train_scaled) ** 2
+        #             )
+        #         )
+
+        #         # ----------------------------------------------------
+        #         # COMBINED SCORE
+        #         # ----------------------------------------------------
+
+        #         score = lml - alpha * train_rmse
+
+        #         # ----------------------------------------------------
+        #         # PREDICT FULL GRID
+        #         # ----------------------------------------------------
+
+        #         y_predict_scaled, std_prediction_scaled = (
+        #             gaussian_process.predict(
+        #                 X_scaled,
+        #                 return_std=True
+        #             )
+        #         )
+
+        #         y_predict = scaler_y.inverse_transform(
+        #             y_predict_scaled.reshape(-1, 1)
+        #         ).flatten()
+
+        #         y_predict_std = (
+        #             std_prediction_scaled
+        #             * scaler_y.scale_[0]
+        #         )
+
+        #         y_predict_kernels.append(y_predict)
+
+        #         y_predict_std_kernels.append(y_predict_std)
+
+                
+        #         kernel_diagnostics.append({
+        #             "kernel": gaussian_process.kernel_,
+        #             "score": score,
+        #             "lml": lml,
+        #             "rmse": train_rmse,
+        #             "label": kernel_label,
+        #         })
+
+        #         self._diagnose_gpr_issues(
+        #             gaussian_process,
+        #             X_train_scaled,
+        #             y_train_scaled
+        #         )
+
+        #         # ----------------------------------------------------
+        #         # KEEP BEST KERNEL
+        #         # ----------------------------------------------------
+
+        #         if score > best_score:
+
+        #             best_score = score
+
+        #             best_lml = lml
+
+        #             best_train_rmse = train_rmse
+
+        #             best_optimized_kernel = gaussian_process.kernel_
+
+        #             best_gaussian_process = gaussian_process
+
+        #             # gp prediction at training locations
+        #             best_y_train_pred = scaler_y.inverse_transform(
+        #                 y_pred_train.reshape(-1,1)
+        #             ).flatten()
+
+        #             # uncertainty at training locations
+        #             best_y_train_std = (
+        #                 std_train * scaler_y.scale_[0]
+        #             )
+
+        #             # gp prediction on entire predicted grid 
+        #             best_y_predict = y_predict
+
+        #             # uncertainty on entire predicted grid
+        #             best_y_predict_std = y_predict_std
+
+        #     except Exception as e:
+
+        #         print(
+        #             self.colored_text(
+        #                 f"GPR failed for kernel {entry}: {e}",
+        #                 "red"
+        #             )
+        #         )
+
+        #         traceback.print_exc()
+
+        #         continue
+
+        # # ============================================================
+        # # FINAL REPORT
+        # # ============================================================
+
+        # print(
+        #     self.colored_text(
+        #         f"Best kernel = {best_optimized_kernel}\n"
+        #         f"LML = {best_lml:.4f}\n"
+        #         f"RMSE = {best_train_rmse:.6e}\n"
+        #         f"Score = {best_score:.4f}",
+        #         "green"
+        #     )
+        # )
+
+        # # ============================================================
+        # # BUILD RESULT DICTIONARY
+        # # ============================================================
+
+        # result_dict = {
+
+        #     # --------------------------------------------------------
+        #     # Trained GP
+        #     # --------------------------------------------------------
+
+        #     "gp": best_gaussian_process,
+
+        #     # --------------------------------------------------------
+        #     # Optimized kernel
+        #     # --------------------------------------------------------
+
+        #     "kernel": best_optimized_kernel,
+
+        #     # --------------------------------------------------------
+        #     # Scalers
+        #     # --------------------------------------------------------
+
+        #     "scaler_x": scaler_x,
+        #     "scaler_y": scaler_y,
+
+        #     # --------------------------------------------------------
+        #     # Predictions
+        #     # --------------------------------------------------------
+
+        #     "mean_prediction": best_y_predict,
+
+        #     "confidence_95": np.array([
+        #         best_y_predict - 1.96 * best_y_predict_std,
+        #         best_y_predict + 1.96 * best_y_predict_std
+        #     ]),
+
+        #     "std_prediction": best_y_predict_std,
+
+        #     "train_prediction": best_y_train_pred,
+        #     "train_std": best_y_train_std,
+
+        #     # --------------------------------------------------------
+        #     # Diagnostics
+        #     # --------------------------------------------------------
+
+        #     "lml": best_lml,
+        #     "train_rmse": best_train_rmse,
+        #     "score": best_score,
+
+        #     # --------------------------------------------------------
+        #     # Metadata
+        #     # --------------------------------------------------------
+
+        #     "time_node": time_node,
+        #     "time_value": self.time[time_node],
+
+        #     "basis_indices": train_obj.basis_indices,
+
+        #     "parameter_dim": dim,
+
+        #     "time_coupled": time_coupled
+        # }
+
+    def _gaussian_process_regression_t(
+        self,
+        time_node,
+        train_obj: TrainingSetResults,
+        optimized_kernel=None,
+        plot_kernel_predictions=False,
+        plot_kernel_errors=False,
+        save_fig_kernels=False,
+        time_coupled=False,
+        screening=True,
+        refinement=True
+    ):
+
+        """
+        Gaussian Process Regression for one empirical time node.
+        (comments unchanged)
+        """
+
+        # ============================================================
+        # BUILD INPUT MATRICES
+        # ============================================================
+        train_obj.load_residuals()
+
+        if time_coupled is False:
+
+            X = np.asarray(train_obj.parameter_grid)
+            X_train = X[train_obj.basis_indices]
+
+        else:
+
+            X_param = np.asarray(train_obj.parameter_grid)
+
+            t = np.full((X_param.shape[0], 1), self.time[train_obj.empirical_indices[time_node]])
+
+            X_train = np.hstack([
+                X_param[train_obj.basis_indices],
+                t[train_obj.basis_indices]
+            ])
+
+            X = np.hstack([
+                X_param,
+                t
+            ])
+
+        # ============================================================
+        # TRAINING TARGETS
+        # ============================================================
+
+        y_train = np.squeeze(train_obj.training_set.T[time_node])
+
+        # ============================================================
+        # SCALE INPUTS
+        # ============================================================
+
+        scaler_x = StandardScaler()
+        X_train_scaled = scaler_x.fit_transform(X_train)
+        X_scaled = scaler_x.transform(X)
+
+        scaler_y = StandardScaler()
+        y_train_scaled = scaler_y.fit_transform(
+            y_train.reshape(-1, 1)
+        ).flatten()
+
+        # ============================================================
+        # ESTIMATE CHARACTERISTIC LENGTH SCALE
+        # ============================================================
+
+        nn = NearestNeighbors(n_neighbors=2)
+        nn.fit(X_train_scaled)
+
+        distances, _ = nn.kneighbors(X_train_scaled)
+
+        median_nn_distance = np.median(distances[:, 1])
+        base_ls = median_nn_distance * 2
+
+        print("base_ls =", base_ls)
+
+        # ============================================================
+        # INPUT DIMENSION
+        # ============================================================
+
+        dim = X_train_scaled.shape[1]
+
+        # ============================================================
+        # KERNEL SEARCH PARAMETERS
+        # ============================================================
+
+        smoothness_params = [1.0, 2.0, 2.5, 3.0, 3.5, 4.0]
+
+        kernels = []
+
+        # ============================================================
+        # 1. ISOTROPIC MATERN KERNELS
+        # ============================================================
+
+        for nu in smoothness_params:
+
+            kernel = Matern(
+                length_scale=base_ls,
+                length_scale_bounds=(0.1 * base_ls, 10 * base_ls),
+                nu=nu
+            )
+
+            kernels.append({
+                "kernel": kernel,
+                "type": "isotropic",
+                "nu": nu,
+                "base_ls": base_ls
+            })
+
+        # ============================================================
+        # 2. ANISOTROPIC MATERN KERNELS
+        # ============================================================
+
+        for nu in smoothness_params:
+
+            kernel = Matern(
+                length_scale=np.ones(dim) * base_ls,
+                length_scale_bounds=(0.1 * base_ls, 10 * base_ls),
+                nu=nu
+            )
+
+            kernels.append({
+                "kernel": kernel,
+                "type": "anisotropic",
+                "nu": nu,
+                "base_ls": base_ls
+            })
+
+        # ============================================================
+        # 3. ADD WHITE NOISE TERMS
+        # ============================================================
+
+        noise_levels = [1e-6]
+
+        extra_kernels = []
+
+        for entry in kernels:
+
+            for noise in noise_levels:
+
+                noisy_kernel = (
+                    entry["kernel"]
+                    + WhiteKernel(
+                        noise_level=noise,
+                        noise_level_bounds=(1e-10, 1e-1)
+                    )
+                )
+
+                extra_kernels.append({
+                    "kernel": noisy_kernel,
+                    "type": entry["type"] + "_noise",
+                    "nu": entry["nu"],
+                    "base_ls": entry["base_ls"],
+                    "noise": noise
+                })
+
+        kernels.extend(extra_kernels)
+
+        print(f"Generated {len(kernels)} kernels")
+
+        # ============================================================
+        # WARM START
+        # ============================================================
+
+        if optimized_kernel is not None:
+
+            kernels.insert(
+                0,
+                {
+                    "kernel": optimized_kernel,
+                    "type": "warm_start",
+                    "nu": None,
+                    "base_ls": None
+                }
+            )
+
+        # ============================================================
+        # STORAGE
+        # ============================================================
+
+        y_predict_kernels = []
+        y_predict_std_kernels = []
+        kernel_diagnostics = []
+
+        best_score = -np.inf
+        best_lml = -np.inf
+        best_train_rmse = np.inf
+
+        lml_list = []
+        rmse_list = []
+
+        # ============================================================
+        # MODE CONTROL
+        # ============================================================
+
+        if screening and not refinement:
+            mode = "screening"
+        elif refinement and not screening:
+            mode = "refinement"
+        elif screening and refinement:
+            mode = "full"
+        else:
+            raise ValueError("Enable screening or refinement")
+
+        # ============================================================
+        # KERNEL SEARCH
+        # ============================================================
+
+        for i, entry in enumerate(kernels):
+
+            success = False
+
+            try:
+
+                # ----------------------------------------------------
+                # restart policy
+                # ----------------------------------------------------
+                if mode == "screening":
+                    n_restarts = 2
+                elif mode == "refinement":
+                    n_restarts = 8
+                else:
+                    n_restarts = 5
+
+                # ----------------------------------------------------
+                # label
+                # ----------------------------------------------------
+                kernel_label = {
+                    "isotropic": "Iso",
+                    "anisotropic": "Aniso",
+                    "isotropic_noise": "Iso+W",
+                    "anisotropic_noise": "Aniso+W",
+                    "warm_start": "Warm"
+                }[entry["type"]]
+
+                kernel_label += f" ν={entry['nu']}"
+                if "noise" in entry:
+                    kernel_label += f", noise={entry['noise']:.0e}"
+
+                # ----------------------------------------------------
+                # timing
+                # ----------------------------------------------------
+                t0 = time.perf_counter()
+
+                gp = GaussianProcessRegressor(
+                    kernel=entry["kernel"],
+                    n_restarts_optimizer=n_restarts,
+                    random_state=42
+                )
+
+                gp.fit(X_train_scaled, y_train_scaled)
+
+                kernel_fit_time = time.perf_counter() - t0
+
+                # ----------------------------------------------------
+                # metrics
+                # ----------------------------------------------------
+                lml = gp.log_marginal_likelihood_value_
+
+                y_pred_train, std_train = gp.predict(
+                    X_train_scaled,
+                    return_std=True
+                )
+
+                train_rmse = np.sqrt(
+                    np.mean((y_pred_train - y_train_scaled) ** 2)
+                )
+
+                lml_list.append(lml)
+                rmse_list.append(train_rmse)
+
+                # ----------------------------------------------------
+                # screening prune
+                # ----------------------------------------------------
+                if mode == "screening" and len(lml_list) > 5:
+
+                    if lml < np.mean(lml_list) - 5 * np.std(lml_list):
+                        continue
+
+                    if train_rmse > np.mean(rmse_list) + 3 * np.std(rmse_list):
+                        continue
+
+                # ----------------------------------------------------
+                # prediction
+                # ----------------------------------------------------
+                y_pred_scaled, std_pred_scaled = gp.predict(
+                    X_scaled,
+                    return_std=True
+                )
+
+                y_pred = scaler_y.inverse_transform(
+                    y_pred_scaled.reshape(-1, 1)
+                ).flatten()
+
+                y_pred_std = std_pred_scaled * scaler_y.scale_[0]
+
+                y_predict_kernels.append(y_pred)
+                y_predict_std_kernels.append(y_pred_std)
+
+                success = True
+
+
+            except Exception as e:
+
+                print(
+                    self.colored_text(
+                        f"GPR failed for kernel {entry}: {e}",
+                        "red"
+                    )
+                )
+
+                traceback.print_exc()
+
+                continue
+
+
+            # ============================================================
+            # ONLY STORE IF SUCCESSFUL
+            # ============================================================
+
+            if success:
+
+                kernel_diagnostics.append({
+                    # time node
+                    "time_node": time_node,
+
+                    # fitted kernel
+                    "kernel": gp.kernel_,
+
+                    # raw metrics
+                    "lml": lml,
+                    "rmse": train_rmse,
+
+                    # metadata
+                    "label": kernel_label,
+                    "fit_time": kernel_fit_time,
+
+                    # store objects needed later
+                    "gp": gp,
+
+                    # training predictions
+                    "y_train_pred": y_pred_train,
+                    "std_train": std_train,
+
+                    # full-grid predictions
+                    "y_pred": y_pred,
+                    "y_pred_std": y_pred_std,
+                })
+
+
+        # ============================================================
+        # COMPUTE FINAL SCORES
+        # ============================================================
+
+        all_lmls = np.array([
+            d["lml"] for d in kernel_diagnostics
+        ])
+
+        all_rmses = np.array([
+            d["rmse"] for d in kernel_diagnostics
+        ])
+
+        mean_lml = np.mean(all_lmls)
+        std_lml = np.std(all_lmls) + 1e-12
+
+        mean_rmse = np.mean(all_rmses)
+        std_rmse = np.std(all_rmses) + 1e-12
+
+        for d in kernel_diagnostics:
+
+            # Use Normalized LML - Normalized RMSE as final score
+            lml_normalized = (d["lml"] - mean_lml
+            ) / std_lml
+
+            rmse_normalized = (
+                d["rmse"] - mean_rmse
+            ) / std_rmse
+
+            d["score"] = (
+                lml_normalized
+                - 0.5 * rmse_normalized
+            )
+
+        best_idx = np.argmax(
+            [d["score"] for d in kernel_diagnostics]
+        )
+
+        best_info = kernel_diagnostics[best_idx]
+
+        best_score = best_info["score"]
+        best_lml = best_info["lml"]
+        best_train_rmse = best_info["rmse"]
+
+        best_gaussian_process = best_info["gp"]
+        best_optimized_kernel = best_info["kernel"]
+
+        best_y_train_pred = scaler_y.inverse_transform(
+            best_info["y_train_pred"].reshape(-1, 1)
+        ).flatten()
+
+        best_y_train_std = (
+            best_info["std_train"]
+            * scaler_y.scale_[0]
+        )
+
+        best_y_predict = best_info["y_pred"]
+        best_y_predict_std = best_info["y_pred_std"]
+
+        # ============================================================
+        # FINAL REPORT
+        # ============================================================
+
+        print(
+            self.colored_text(
+                f"Best kernel = {best_optimized_kernel}\n"
+                f"LML = {best_lml:.4f}\n"
+                f"RMSE = {best_train_rmse:.6e}\n"
+                f"Score = {best_score:.4f}",
+                "green"
+            )
+        )
+
+        # ============================================================
+        # RESULT DICTIONARY (UNCHANGED STRUCTURE)
+        # ============================================================
+
+        result_dict = {
+            "gp": best_gaussian_process,
+            "kernel": best_optimized_kernel,
+            "scaler_x": scaler_x,
+            "scaler_y": scaler_y,
+            "mean_prediction": best_y_predict,
+            "confidence_95": np.array([
+                best_y_predict - 1.96 * best_y_predict_std,
+                best_y_predict + 1.96 * best_y_predict_std
+            ]),
+            "std_prediction": best_y_predict_std,
+            "train_prediction": best_y_train_pred,
+            "train_std": best_y_train_std,
+            "lml": best_lml,
+            "train_rmse": best_train_rmse,
+            "score": best_score,
+            "time_node": time_node,
+            "time_value": self.time[time_node],
+            "basis_indices": train_obj.basis_indices,
+            "parameter_dim": dim,
+            "time_coupled": time_coupled
+        }
+
+
+        # ============================================================
+        # PLOT KERNEL OPTIMIZATION RESULTS
+        # ============================================================
+
+
+        if plot_kernel_errors:
+
+            # Plot scores, rmse, lml, fit times for all kernels
+            self.plot_kernel_diagnostics(
+                kernel_diagnostics,
+                train_obj=train_obj,
+                best_score=best_score,
+                save_fig=save_fig_kernels,
+            )
+
+            # Plot error heatmaps for top k kernels
+            self.plot_best_kernel_error_heatmaps(
+                kernel_diagnostics=kernel_diagnostics,
+                train_obj=train_obj,
+                time_node=time_node,
+                n_q_slices=5,
+                top_k=3,
+            )
+
+        if plot_kernel_predictions:
+
+            # ------------------------------------------------------------
+            # Find worst kernels (lowest score → highest)
+            # ------------------------------------------------------------
+
+            worst_indices = np.argsort(
+                [d["score"] for d in kernel_diagnostics]
+            )[:5]
+
+            worst_indices = worst_indices[np.argsort(
+                [kernel_diagnostics[i]["score"] for i in worst_indices]
+            )]
+
+            # ------------------------------------------------------------
+            # TRAINING ORDERING
+            # ------------------------------------------------------------
+
+            order = np.argsort(train_obj.basis_indices)
+
+            idx_train = np.array(train_obj.basis_indices)
+            y_train_plot = y_train[order]
+
+            # ------------------------------------------------------------
+            # TRUTH ON FULL GRID
+            # ------------------------------------------------------------
+
+            truth = train_obj.residuals[:, train_obj.empirical_indices[time_node]]
+
+            # ------------------------------------------------------------
+            # DIAGNOSTICS
+            # ------------------------------------------------------------
+
+            full_rmse = np.sqrt(
+                np.mean((best_y_predict - truth) ** 2)
+            )
+
+            train_rmse_check = np.sqrt(
+                np.mean(
+                    (
+                        best_y_predict[idx_train]
+                        - truth[idx_train]
+                    ) ** 2
+                )
+            )
+
+            # ------------------------------------------------------------
+            # PLOT SETUP
+            # ------------------------------------------------------------
+
+            fig_kernel_comparison, (ax1, ax2) = plt.subplots(
+                2, 1,
+                figsize=(12, 8),
+                gridspec_kw={"height_ratios": [3, 1]},
+                sharex=True
+            )
+
+            x_axis = np.arange(len(best_y_predict))
+
+            # ------------------------------------------------------------
+            # TRUE RESIDUALS (FULL GRID)
+            # ------------------------------------------------------------
+
+            ax1.plot(
+                x_axis,
+                truth,
+                color="blue",
+                linewidth=2.5,
+                label="True residuals (full grid)"
+            )
+
+            # ------------------------------------------------------------
+            # TRAINING VALUES
+            # ------------------------------------------------------------
+
+            ax1.scatter(
+                idx_train,
+                truth[idx_train],
+                color="red",
+                s=40,
+                zorder=10,
+                label="Training points"
+            )
+
+            # ------------------------------------------------------------
+            # WORST KERNELS
+            # ------------------------------------------------------------
+            
+            for rank, idx in enumerate(worst_indices):
+
+                y_pred = y_predict_kernels[idx]
+                y_std = y_predict_std_kernels[idx]
+                info = kernel_diagnostics[idx]
+
+                ax1.plot(
+                    x_axis,
+                    y_pred,
+                    linewidth=1,
+                    alpha=0.6,
+                    label=(
+                        f"Worst {rank+1}: "
+                        f"{info['label']} "
+                        f"| score={info['score']:.2e}"
+                    )
+                )
+
+                ax1.fill_between(
+                    x_axis,
+                    y_pred - 1.96 * y_std,
+                    y_pred + 1.96 * y_std,
+                    alpha=0.08
+                )
+
+                error = y_pred - truth
+                ax2.plot(x_axis, error, label=f"Worst {rank+1}: {info['label']}")
+
+
+            # ------------------------------------------------------------
+            # BEST MODEL
+            # ------------------------------------------------------------
+
+            best_idx = int(np.argmax(
+                [d["score"] for d in kernel_diagnostics]
+            ))
+
+            best_info = kernel_diagnostics[best_idx]
+
+            ax1.plot(
+                x_axis,
+                best_y_predict,
+                color="black",
+                linewidth=2.5,
+                label=(
+                    f"Best: {best_info['label']} "
+                    f"| score={best_info['score']:.2e}"
+                )
+            )
+
+            ax1.fill_between(
+                x_axis,
+                best_y_predict - 1.96 * best_y_predict_std,
+                best_y_predict + 1.96 * best_y_predict_std,
+                color="black",
+                alpha=0.12
+            )
+
+            # ------------------------------------------------------------
+            # GP PREDICTION AT TRAINING LOCATIONS
+            # ------------------------------------------------------------
+
+            ax1.scatter(
+                idx_train,
+                best_y_predict[idx_train],  # ← Use this instead!
+                marker="x",
+                color="limegreen",
+                s=80,
+                linewidths=2,
+                zorder=20,
+                label="GP prediction @ training points"
+            )
+
+            error_best = best_y_predict - truth
+            ax2.plot(x_axis, error_best, label=f"Best: {best_info['label']}", color="limegreen", linewidth=2.5)
+
+            # ------------------------------------------------------------
+            # LABELS
+            # ------------------------------------------------------------
+
+            ax1.set_ylabel("Residual")
+            ax2.set_ylabel("Error")
+            ax2.set_xlabel("Parameter grid index")
+
+            ax1.legend(fontsize=8)
+            ax2.legend(fontsize=8)
+
+            ax1.set_title(
+                f"GPR kernel comparison\n"
+                f"node={time_node}\n"
+                f"full RMSE={full_rmse:.3e}, train RMSE={train_rmse_check:.3e}"
+            )
+
+            plt.tight_layout()
+
+            
+
+            # ------------------------------------------------------------
+            # SAVE
+            # ------------------------------------------------------------
+
+            if save_fig_kernels:
+                figname = train_obj.figname(prefix="gp_kernel_comparison",
+                                    directory="Images/Gaussian_kernels/Kernel_comparison",
+                                  include_extra=f"T{time_node}")
+                fig_kernel_comparison.savefig(figname, dpi=300)
+
+
+            # ------------------------------------------------------------
+            # ------------------------------------------------------------
+
+            fig_parity, (ax1, ax2) = plt.subplots(
+                2,
+                1,
+                figsize=(6, 8),
+                gridspec_kw={"height_ratios": [3, 1]},
+                sharex=False
+            )
+
+            # ============================================================
+            # PARITY PLOT (TOP)
+            # ============================================================
+
+            y_true = y_train
+            y_pred = result_dict["train_prediction"]
+
+            ax1.scatter(
+                y_true,
+                y_pred,
+                s=10,
+                alpha=0.6
+            )
+
+            # diagonal reference line
+            minv = min(y_true.min(), y_pred.min())
+            maxv = max(y_true.max(), y_pred.max())
+
+            ax1.plot([minv, maxv], [minv, maxv], 'k--', linewidth=1)
+
+            ax1.set_xlabel("True training values (physical)")
+            ax1.set_ylabel("GP prediction (physical)")
+            ax1.grid(True)
+
+            ax1.set_title(
+                f"GP Fit for best kernel T{time_node}: {best_info['label']}\n"
+                f"RMSE = {result_dict['train_rmse']:.3e} | lml = {best_info['lml']:.3e} | score = {best_info['score']:.3e}"
+            )
+
+            # ============================================================
+            # RESIDUAL PLOT (BOTTOM)
+            # ============================================================
+
+            residuals = y_pred - y_true
+
+            ax2.bar(
+                np.arange(len(residuals)),
+                residuals,
+                color="steelblue",
+                alpha=0.8
+            )
+
+            ax2.axhline(0, color="black", linewidth=1)
+
+            ax2.set_xlabel("Training sample index")
+            ax2.set_ylabel("Residual (pred - true)")
+            ax2.grid(True)
+
+            # optional: tighten view if needed
+            ylim = np.percentile(np.abs(residuals), 95)
+            ax2.set_ylim(-ylim, ylim)
+
+            plt.tight_layout()
+
+            # ------------------------------------------------------------
+            # SAVE
+            # ------------------------------------------------------------
+
+            if save_fig_kernels:
+                figname = train_obj.figname(prefix="gp_parity_residual",
+                                  directory="Images/Gaussian_kernels/Parity_check",
+                                  include_extra=f"T{time_node}")
+                fig_parity.savefig(figname, dpi=300)
+
+        # ============================================================
+        # RETURN
+        # ============================================================
+
+        return result_dict
+
+
+    def plot_kernel_diagnostics(
+        self,
+        kernel_diagnostics,
+        train_obj: TrainingSetResults,
+        best_score=None,
+        save_fig=False
+    ):
+        """
+        KERNEL DIAGNOSTICS PLOTTING MODES
+
+        This function can display kernel performance in two different ways:
+
+        ----------------------------------------------------------------------
+        1. RAW MODE ("raw")
+        ----------------------------------------------------------------------
+
+        In raw mode, the plot shows the actual values produced by the model:
+
+        - Log Marginal Likelihood (LML)
+        - Train RMSE (prediction error)
+        - Score (combined selection metric)
+
+        These values are shown exactly as computed by the Gaussian Process.
+
+        What this means:
+        - LML is the true model evidence from the GP
+        - RMSE is the actual prediction error on training data
+        - Score is computed directly from these raw values
+
+        Use this mode when:
+        - You want physical or numerical interpretation
+        - You are debugging model behavior
+        - You want to understand absolute performance
+
+        ----------------------------------------------------------------------
+
+        2. Z-SCORE MODE ("zscore")
+        ----------------------------------------------------------------------
+
+        In z-score mode, values are transformed into a standardized scale
+        so they can be compared fairly across different magnitudes.
+
+        A z-score means:
+            how far a value is from the average, measured in standard deviations.
+
+        For example:
+            z = 0   → exactly average performance
+            z = +2  → much better than average
+            z = -2  → much worse than average
+
+        In this mode:
+
+        - LML is converted into lml_z
+        - RMSE is converted into rmse_z
+        - Score is computed using these normalized values
+
+        This makes different metrics comparable on the same scale.
+
+        Use this mode when:
+        - You are selecting the best kernel
+        - You want fair comparison between metrics with different units
+        - You care about ranking rather than physical meaning
+
+        ----------------------------------------------------------------------
+
+        SUMMARY
+        ----------------------------------------------------------------------
+
+        - "raw" mode = actual physical / numerical values
+        - "zscore" mode = normalized values showing relative performance
+        """
+
+        labels = [k["label"] for k in kernel_diagnostics]
+
+        x = np.arange(len(labels))
+
+        # ============================================================
+        # SELECT DATA MODE
+        # ============================================================
+
+        lmls = np.array([k["lml"] for k in kernel_diagnostics])
+        rmses = np.array([k["rmse"] for k in kernel_diagnostics])
+        scores = np.array([k["score"] for k in kernel_diagnostics])
+
+        lml_label = "Log Marginal Likelihood"
+        rmse_label = "Train RMSE"
+        score_label = "Score (Norm[LML] - 0.5 * Norm[RMSE])"
+                
+        kernel_fit_times = np.array([k["fit_time"] for k in kernel_diagnostics])
+
+        n_plots = 4
+
+        fig_kernel_scores, axes = plt.subplots(
+            n_plots,
+            1,
+            figsize=(14, 4.5 * n_plots),
+            sharex=True,
+            constrained_layout=True
+        )
+
+        # ============================================================
+        # 1. LML
+        # ============================================================
+        ax = axes[0]
+        ax.plot(x, lmls, marker="o", color="tab:blue")
+        ax.set_ylabel(lml_label)
+        ax.set_title(f"Kernel diagnostics T{kernel_diagnostics[0]['time_node']}")
+
+        ax.axhline(np.mean(lmls), linestyle="--", color="gray", label="mean")
+        ax.axhline(np.max(lmls), linestyle=":", color="green", label="best")
+
+        ax.legend()
+
+        # ============================================================
+        # 2. RMSE
+        # ============================================================
+        ax = axes[1]
+        ax.plot(x, rmses, marker="o", color="tab:orange")
+        ax.set_ylabel(rmse_label)
+
+        ax.axhline(np.mean(rmses), linestyle="--", color="gray", label="mean")
+        ax.axhline(np.min(rmses), linestyle=":", color="green", label="best")
+
+        ax.legend()
+
+        # ============================================================
+        # 3. SCORE
+        # ============================================================
+        ax = axes[2]
+        ax.plot(x, scores, marker="o", color="tab:purple")
+        ax.set_ylabel(score_label)
+
+        ax.axhline(np.mean(scores), linestyle="--", color="gray", label="mean")
+        ax.axhline(np.max(scores), linestyle=":", color="green", label="best")
+
+        if best_score is not None:
+            ax.axhline(best_score, linestyle="--", color="black", label="selected best")
+
+        ax.legend()
+
+        # ============================================================
+        # 4. FIT TIME
+        # ============================================================
+        ax = axes[3]
+
+        times = kernel_fit_times
+
+        ax.plot(x, times, marker="o", color="tab:red")
+        ax.set_ylabel("Fit time (s)")
+        ax.set_xlabel("Kernel")
+
+        ax.set_yscale("log")
+
+        ax.axhline(np.median(times), linestyle="--", color="gray", label="median")
+        ax.axhline(np.min(times), linestyle=":", color="green", label="fastest")
+
+        ax.legend()
+
+        # ============================================================
+        # X LABELS
+        # ============================================================
+        axes[-1].set_xticks(x)
+        axes[-1].set_xticklabels(labels, rotation=45, ha="right")
+
+        plt.tight_layout()
+
+        if save_fig:
+                figname = train_obj.figname(
+                    prefix="kernel_diagnostics",
+                    ext="png",
+                    directory="Images/Gaussian_kernels/Diagnostics",
+                    include_greedy=True,
+                    include_extra=f"node={kernel_diagnostics[0]['time_node']}"
+                )
+                fig_kernel_scores.savefig(figname, dpi=300)
+
+    def plot_best_kernel_error_heatmaps(
+    self,
+    kernel_diagnostics,
+    time_node,
+    train_obj,
+    n_q_slices=3,
+    top_k=2
+    ):
+        """
+        Heatmaps of relative prediction error for best kernels.
+
+        Layout:
+        - rows = q-slices
+        - columns = kernels
+        - 1 colorbar per row (no overlap)
+        """
+
+        train_obj.load_residuals()
+
+        # ============================================================
+        # DATA
+        # ============================================================
+        X = np.asarray(self.parameter_grid)
+        y_true = np.asarray(train_obj.residuals[:, time_node])
+
+        ecc = X[:, 0]
+        l = X[:, 1]
+        q = X[:, 2]
+
+        eps = 1e-12
+
+        # ============================================================
+        # BEST KERNELS
+        # ============================================================
+        best_indices = np.argsort(
+            [d["score"] for d in kernel_diagnostics]
+        )[-top_k:][::-1]
+
+        best_kernels = [kernel_diagnostics[i] for i in best_indices]
+
+        # ============================================================
+        # Q SLICES
+        # ============================================================
+        q_vals = np.unique(q)
+        if n_q_slices > len(q_vals):
+            n_q_slices = len(q_vals)
+        q_indices = np.linspace(0, len(q_vals) - 1, n_q_slices).astype(int)
+        q_slices = q_vals[q_indices]
+
+        print(f"Selected q slices: {q_slices}")
+
+        # ============================================================
+        # OUTPUT FILE
+        # ============================================================
+        filepath = train_obj.filename(
+            prefix="kernel_error_heatmaps",
+            ext="pdf",
+            directory="Images/Gaussian_kernels/Heatmaps",
+            include_greedy=True,
+            include_extra=f"node={time_node}"
+        )
+
+        os.makedirs(os.path.dirname(filepath), exist_ok=True)
+
+        pdf = PdfPages(filepath)
+
+        n_kernels = len(best_kernels)
+        n_q = len(q_slices)
+
+        # ============================================================
+        # FIGURE + GRID SPEC
+        # ============================================================
+        fig = plt.figure(
+            figsize=(5 * n_kernels + 1.2, 4 * n_q)
+        )
+
+        gs = gridspec.GridSpec(
+            n_q,
+            n_kernels + 1,  # extra column for colorbar
+            width_ratios=[1] * n_kernels + [0.05],
+            wspace=0.25,
+            hspace=0.35
+        )
+
+        axes = np.empty((n_q, n_kernels), dtype=object)
+        cbar_axes = []
+
+        for qi in range(n_q):
+            for k_id in range(n_kernels):
+                axes[qi, k_id] = fig.add_subplot(gs[qi, k_id])
+
+            cbar_axes.append(fig.add_subplot(gs[qi, -1]))
+
+        # ============================================================
+        # LOOP OVER Q SLICES
+        # ============================================================
+        for qi, qv in enumerate(q_slices):
+
+            mask_q = np.isclose(q, qv)
+
+            # --------------------------------------------------------
+            # compute row normalization (shared across kernels)
+            # --------------------------------------------------------
+            all_errors = []
+
+            for k in best_kernels:
+                y_pred = k["y_pred"]
+                rel_error = (y_pred - y_true) / (np.abs(y_true) + eps)
+                all_errors.append(rel_error[mask_q])
+
+            all_errors = np.concatenate(all_errors)
+            vmin, vmax = np.nanmin(all_errors), np.nanmax(all_errors)
+            norm = Normalize(vmin=vmin, vmax=vmax)
+
+            # --------------------------------------------------------
+            # LOOP KERNELS
+            # --------------------------------------------------------
+            for k_id, k in enumerate(best_kernels):
+
+                ax = axes[qi, k_id]
+
+                y_pred = k["y_pred"]
+                rel_error = (y_pred - y_true) / (np.abs(y_true) + eps)
+
+                e_vals = ecc[mask_q]
+                l_vals = l[mask_q]
+                err_vals = rel_error[mask_q]
+
+                e_unique = np.unique(e_vals)
+                l_unique = np.unique(l_vals)
+
+                Z = np.full((len(e_unique), len(l_unique)), np.nan)
+
+                for i in range(len(e_vals)):
+                    ei = np.where(e_unique == e_vals[i])[0][0]
+                    li = np.where(l_unique == l_vals[i])[0][0]
+                    Z[ei, li] = err_vals[i]
+
+                im = ax.imshow(
+                    Z,
+                    aspect="auto",
+                    origin="lower",
+                    norm=norm,
+                    extent=[
+                        l_unique.min() if len(l_unique) > 1 else l_unique.min() - 1e-3,
+                        l_unique.max() if len(l_unique) > 1 else l_unique.max() + 1e-3,
+                        e_unique.min() if len(e_unique) > 1 else e_unique.min() - 1e-3,
+                        e_unique.max() if len(e_unique) > 1 else e_unique.max() + 1e-3
+                    ],
+                )
+
+                ax.set_title(f"k={kernel_diagnostics[k_id]['label']}, q={qv:.3g}")
+
+                ax.xaxis.set_major_formatter(mticker.FormatStrFormatter('%.2f'))
+                ax.yaxis.set_major_formatter(mticker.FormatStrFormatter('%.2f'))
+
+                if qi == n_q - 1:
+                    ax.set_xlabel("l")
+                else:
+                    ax.set_xticklabels([])
+
+                if k_id == 0:
+                    ax.set_ylabel("e")
+                else:
+                    ax.set_yticklabels([])
+
+            # ========================================================
+            # COLORBAR (PER ROW, NO OVERLAP)
+            # ========================================================
+            cbar = fig.colorbar(
+                axes[qi, 0].images[0],
+                cax=cbar_axes[qi]
+            )
+            cbar.set_label("Relative error")
+
+        # ============================================================
+        # FINALIZE
+        # ============================================================
+        fig.tight_layout()
+
+        pdf.savefig(fig, bbox_inches="tight")
+        plt.close(fig)
+        pdf.close()
+
+        print(self.colored_text(f"Saved kernel error PDF → {filepath}", "blue"))
+
+    # def _gaussian_process_regression(self, time_node, training_set, optimized_kernel=None, plot_kernels=False, save_fig_kernels=False):
+    #     # Extract X and training data
+    #     X = self.ecc_ref_space_output[:, np.newaxis]
+    #     X_train = np.array(self.best_rep_parameters).reshape(-1, 1)
+    #     y_train = np.squeeze(training_set.T[time_node])
+
+    #     # Scale X_train
     #     scaler_x = StandardScaler()
     #     X_train_scaled = scaler_x.fit_transform(X_train)
+
+    #     # Scale X (for predictions)
     #     X_scaled = scaler_x.transform(X)
 
+    #     # Scale y_train
     #     scaler_y = StandardScaler()
-    #     y_train_scaled = scaler_y.fit_transform(
-    #         y_train.reshape(-1, 1)
-    #     ).flatten()
+    #     y_train_scaled = scaler_y.fit_transform(y_train.reshape(-1, 1)).flatten()
 
-    #     # ------------------------------------------------------------
-    #     # ESTIMATE CHARACTERISTIC LENGTH SCALE
-    #     # ------------------------------------------------------------
+    #     kernels = [
+    #         Matern(length_scale=0.1, length_scale_bounds=(1e-1, 1), nu=1.5)  # <= 0.3 eccentricity
+    #     ]
 
-    #     nn = NearestNeighbors(n_neighbors=2)
-    #     nn.fit(X_train_scaled)
-
-    #     distances, indices = nn.kneighbors(X_train_scaled)
-
-    #     median_nn_distance = np.median(distances[:, 1])
-
-    #     base_ls = max(0.1, median_nn_distance * 2)
-
-    #     print("base_ls =", base_ls)
-
-    #     # ------------------------------------------------------------
-    #     # INPUT DIMENSION
-    #     # ------------------------------------------------------------
-
-    #     dim = X_train_scaled.shape[1]
-
-    #     # ------------------------------------------------------------
-    #     # KERNEL SEARCH PARAMETERS
-    #     # ------------------------------------------------------------
-
-    #     # ls_multipliers = [0.3, 1.0, 3.0, 10.0]
-    #     # ls_upper_bounds = [0.5, 1.0, 2.0, 5.0]
-
-    #     # smoothness_params = [0.5, 1.5, 2.5]
-
-    #     ls_multipliers = [1.0]
-    #     smoothness_params = [1.5]
-
-    #     kernels = []
-
-    #     # ============================================================
-    #     # 1. ISOTROPIC MATERN KERNELS
-    #     # ============================================================
-
-    #     for nu in smoothness_params:
-
-    #         for ls_mult in ls_multipliers:
-
-    #             for ls_ub in ls_upper_bounds:
-
-    #                 ls = base_ls * ls_mult
-
-    #                 if ls <= ls_ub:
-
-    #                     kernel = Matern(
-    #                         length_scale=ls,
-    #                         length_scale_bounds=(1e-2, ls_ub),
-    #                         nu=nu
-    #                     )
-
-    #                     kernels.append({
-    #                         "kernel": kernel,
-    #                         "type": "isotropic",
-    #                         "nu": nu,
-    #                         "ls_ub": ls_ub
-    #                     })
-
-    #     # ============================================================
-    #     # 2. ANISOTROPIC MATERN KERNELS
-    #     # ============================================================
-
-    #     for nu in smoothness_params:
-
-    #         for ls_mult in ls_multipliers:
-
-    #             for ls_ub in ls_upper_bounds:
-
-    #                 ls = base_ls * ls_mult
-
-    #                 if ls <= ls_ub:
-
-    #                     kernel = Matern(
-    #                         length_scale=np.ones(dim) * ls,
-    #                         length_scale_bounds=(1e-2, ls_ub),
-    #                         nu=nu
-    #                     )
-
-    #                     kernels.append({
-    #                         "kernel": kernel,
-    #                         "type": "anisotropic",
-    #                         "nu": nu,
-    #                         "ls_ub": ls_ub
-    #                     })
-
-    #     # ============================================================
-    #     # ADD WHITE NOISE KERNELS
-    #     # ============================================================
-
-    #     # noise_levels = [1e-8, 1e-6, 1e-4]
-    #     noise_levels = [1e-6]
-
-    #     extra_kernels = []
-
-    #     for entry in kernels:
-
-    #         for noise in noise_levels:
-
-    #             noisy_kernel = (
-    #                 entry["kernel"]
-    #                 + WhiteKernel(
-    #                     noise_level=noise,
-    #                     noise_level_bounds=(1e-10, 1e-1)
-    #                 )
-    #             )
-
-    #             extra_kernels.append({
-    #                 "kernel": noisy_kernel,
-    #                 "type": entry["type"] + "_noise",
-    #                 "nu": entry["nu"],
-    #                 "ls_ub": entry["ls_ub"],
-    #                 "noise": noise
-    #             })
-
-    #     kernels.extend(extra_kernels)
-
-    #     print(f"Generated {len(kernels)} kernels")
-
-
-    #     y_predict_kernels = []
-    #     y_predict_std_kernels = []
-    #     lml_kernels = []
-    #     scores_kernels = []
-        
-    #     best_score = -np.inf
-    #     best_lml = -np.inf
-    #     best_train_rmse = np.inf
-
-    #     alpha = 10.0
+    #     mean_prediction_per_kernel = []
+    #     std_predictions_per_kernel = []
+    #     lml_per_kernel = []
 
     #     for kernel in kernels:
-    #         try:
-    #             start = time.time()
-    #             # if optimized_kernel is None:
-    #             #     gaussian_process = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=10, random_state=42)
-    #             # else:
-    #             #     gaussian_process = GaussianProcessRegressor(kernel=optimized_kernel, optimizer=None)
-    #             # print(self.colored_text(f'Trying kernel: {kernel[0]} with ls_bounds=[0.1, {kernel[1]}]', 'blue'))
-    #             gaussian_process = GaussianProcessRegressor(kernel=kernel[0], n_restarts_optimizer=20, random_state=42)
-                
-    #             # Fit the GP model on scaled data
-    #             gaussian_process.fit(X_train_scaled, y_train_scaled)
-    #             optimized_kernel = gaussian_process.kernel_
+    #         start = time.time()
+    #         if optimized_kernel is None:
+    #             gaussian_process = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=20)
+    #         else:
+    #             gaussian_process = GaussianProcessRegressor(kernel=optimized_kernel, optimizer=None)
 
-    #             end = time.time()
+    #         # Fit the GP model on scaled data
+    #         gaussian_process.fit(X_train_scaled, y_train_scaled)
+    #         optimized_kernel = gaussian_process.kernel_
 
-    #             # Log-Marginal Likelihood
-    #             lml = gaussian_process.log_marginal_likelihood_value_
+    #         end = time.time()
 
-    #             # Calculate training score (RMSE on training data)
-    #             y_pred_train, std_train = gaussian_process.predict(X_train_scaled, return_std=True)
-    #             train_rmse = np.sqrt(
-    #                 np.mean((y_pred_train - y_train_scaled)**2)
-    #             )
+    #         # Log-Marginal Likelihood
+    #         lml = gaussian_process.log_marginal_likelihood_value_
+    #         lml_per_kernel.append(lml)
 
-    #             score = lml - alpha * train_rmse
+    #         # Print the optimized kernel and hyperparameters
+    #         print(f"kernel = {kernel}; Optimized kernel: {optimized_kernel} | time = {end - start:.2f}s | LML = {lml:.4f}")
 
-    #             # Print the optimized kernel and hyperparameters
-    #             # print(f"kernel = {kernel[0]}, ls_bounds=[0.1, {kernel[1]}]; Optimized kernel: {optimized_kernel} | time = {end - start:.2f}s | LML = {lml:.4f}, training_score = {train_rmse}")
+    #         # Make predictions on scaled X
+    #         mean_prediction_scaled, std_prediction_scaled = gaussian_process.predict(X_scaled, return_std=True)
+    #         mean_prediction = scaler_y.inverse_transform(mean_prediction_scaled.reshape(-1, 1)).flatten()
+    #         std_prediction = std_prediction_scaled * scaler_y.scale_[0]
 
-    #             # Make predictions on scaled X
-    #             y_predict_scaled, std_prediction_scaled = gaussian_process.predict(X_scaled, return_std=True)
-    #             y_predict = scaler_y.inverse_transform(y_predict_scaled.reshape(-1, 1)).flatten()
-    #             y_predict_std = std_prediction_scaled * scaler_y.scale_[0]
-
-    #             y_predict_kernels.append(y_predict)
-    #             y_predict_std_kernels.append(y_predict_std)
-
-    #             self._diagnose_gpr_issues(gaussian_process, X_train_scaled, y_train_scaled)
-
-    #             if score > best_score:
-    #                 best_score = score
-
-    #                 best_lml = lml
-    #                 best_train_rmse = train_rmse
-
-    #                 best_guess_kernel = kernel
-    #                 best_optimized_kernel = optimized_kernel
-
-    #                 best_y_predict = y_predict
-    #                 best_y_predict_std = y_predict_std
-
-    #         except Exception as e:
-    #             print(self.colored_text(f'GPR failed for kernel {kernel}: {e}', 'red'))
-    #             traceback.print_exc()
-    #             continue
-
-    #     print(
-    #         self.colored_text(
-    #             f"Best kernel = {best_optimized_kernel} | "
-    #             f"LML = {best_lml:.4f} | "
-    #             f"RMSE = {best_train_rmse:.6e} | "
-    #             f"Score = {best_score:.4f}",
-    #             "green"
-    #         )
-    #     )
-    #     lml_kernels.append(best_lml)
-    #     scores_kernels.append(best_score)
-
-
+    #         mean_prediction_per_kernel.append(mean_prediction)
+    #         std_predictions_per_kernel.append(std_prediction)
+        
     #     if plot_kernels is True:
     #         GPR_fit = plt.figure()
 
-    #         for i in range(len(y_predict_kernels)):
+    #         for i in range(len(mean_prediction_per_kernel)):
     #             plt.scatter(X_train, y_train, color='red', label="Observations", s=10)
-    #             plt.plot(X, y_predict_kernels[i], label='Mean prediction', linewidth=0.8)
+    #             plt.plot(X, mean_prediction_per_kernel[i], label='Mean prediction', linewidth=0.8)
     #             plt.fill_between(
     #                 X.ravel(),
-    #             (y_predict_kernels[i] - 1.96 * y_predict_std_kernels[i]), 
-    #             (y_predict_kernels[i] + 1.96 * y_predict_std_kernels[i]),
+    #             (mean_prediction_per_kernel[i] - 1.96 * std_predictions_per_kernel[i]), 
+    #             (mean_prediction_per_kernel[i] + 1.96 * std_predictions_per_kernel[i]),
     #                 alpha=0.5,
     #                 label=r"95% confidence interval",
     #             )
     #         plt.legend(loc = 'upper left')
     #         plt.xlabel("$e$")
-    #         if property == 'amplitude':
+    #         if train_obj.property == 'amplitude':
     #             plt.ylabel("$f_A(e)$")
-    #         elif property == 'phase':
+    #         elif train_obj.property == 'phase':
     #             plt.ylabel("$f_{\phi}(e)$")
-    #         plt.title(f"GPR {property} at T_{time_node}, best optimized kernel: {best_optimized_kernel[0]} with ls_bounds=[0.1, {best_optimized_kernel[1]}]")
+    #         # plt.title(f"GPR {train_obj.property} at T_{time_node}")
     #         # plt.show()
 
     #         if save_fig_kernels is True:
-    #             figname = f'Images/Gaussian_kernels/Gaussian_kernels_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}_Ni={len(self.ecc_ref_space)}]_No={len(self.ecc_ref_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_basis_vecs_phase}_Nga={self.N_basis_vecs_amp}.png'
+    #             figname = f'Gaussian_kernels_{train_obj.property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}_Ni={len(self.ecc_ref_space)}]_No={len(self.ecc_ref_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_greedy_vecs_phase}_Nga={self.N_greedy_vecs_amp}.png'
                 
     #             # Ensure the directory exists, creating it if necessary and save
     #             os.makedirs('Images/Gaussian_kernels', exist_ok=True)
-    #             GPR_fit.savefig(figname)
+    #             GPR_fit.savefig('Images/Gaussian_kernels/' + figname)
 
-    #             print(self.colored_text(f'Figure is saved in {figname}', 'blue'))
+    #             print('Figure is saved in Images/Gaussian_kernels/' + figname)
 
-    #     # return gpr_obj
-    #     return best_y_predict, [(best_y_predict - 1.96 * best_y_predict_std), (best_y_predict + 1.96 * best_y_predict_std)], best_optimized_kernel, best_lml
-
-    def _gaussian_process_regression_test(self, time_node, train_obj:TrainingSetResults, optimized_kernel=None, plot_kernels=False, save_fig_kernels=False):
-        """
-        fit_to_params: choose 'greedy' for fitting to greedy paramaters, or choors 'GPR_opt' for fitting to GPR optimized chosen parameters
-        """
-
-        # Extract X and training data
-        X = self.ecc_ref_space_output[:, np.newaxis]
-        X_train = np.array(self.ecc_ref_space_input[train_obj.basis_indices]).reshape(-1, 1)
-        y_train = np.squeeze(train_obj.training_set.T[time_node])
-
-        # Scale X_train
-        scaler_x = StandardScaler()
-        X_train_scaled = scaler_x.fit_transform(X_train)
-
-        # Scale X (for predictions)
-        X_scaled = scaler_x.transform(X)
-
-        # Scale y_train
-        scaler_y = StandardScaler()
-        y_train_scaled = scaler_y.fit_transform(y_train.reshape(-1, 1)).flatten()
-
-        # Define kernels to try
-
-        # Median distance between nearest neighbors 
-        nn = NearestNeighbors(n_neighbors=2)
-        nn.fit(X_train_scaled)
-        distances, indices = nn.kneighbors(X_train_scaled)
-        median_nn_distance = np.median(distances[:, 1])  # distance to nearest neighbor
-        base_ls = max(0.1, median_nn_distance * 2)  # Scale up from nearest neighbor distance
-        print('base_ls = ', base_ls)
-
-        # Length scale multipliers and upper bounds
-        ls_multipliers = [0.3, 1.0, 3.0, 10.0] # length scale multipliers
-        ls_upper_bounds = [0.5, 1.0, 2.0, 5.0] # length scale upper bounds
-        smoothness_params = [1.0, 1.5, 2.0, 2.5]  # Matern nu values
-
-        ls_multipliers = [1.0]
-        ls_upper_bounds = [1.0]
-        smoothness_params = [1.0]
-
-        # Different kernel configurations
-        kernels = []
-
-        
-
-        # Matern based kernels without noise
-        for nu in smoothness_params:
-            for ls_mult in ls_multipliers:
-                for ls_ub in ls_upper_bounds:
-                    if base_ls * ls_mult <= ls_ub:
-                        kernel = Matern(length_scale=base_ls * ls_mult, length_scale_bounds=(0.1, ls_ub), nu=nu)
-                        kernels.append([kernel, ls_ub])
-        
-        # # Matern based kernels with noise terms
-        # noise_levels = [1e-4, 1e-3, 1e-2, 1e-1]
-        # for nu in smoothness_params:
-        #     for ls_mult in ls_multipliers:
-        #         for ls_ub in ls_upper_bounds:
-        #             for noise in noise_levels:
-        #                 kernel = Matern(length_scale=base_ls * ls_mult, length_scale_bounds=(1, ls_ub), nu=nu) + WhiteKernel(noise_level=noise, noise_level_bounds=(1e-6, 1))
-        #                 kernels.append(kernel)
-
-        # # RBF based kernels
-        # for ls_mult in ls_multipliers:
-        #     for ls_ub in ls_upper_bounds:
-        #         kernel = RBF(length_scale=base_ls * ls_mult, length_scale_bounds=(1, ls_ub))
-        #         kernels.append(kernel)
-
-        # # Rational quadratic based kernels
-        # alphas = [0.1, 1.0, 10.0]
-        # for alpha in alphas:
-        #     for ls_mult in ls_multipliers:
-        #         for ls_ub in ls_upper_bounds:
-        #             kernel = RationalQuadratic(length_scale=base_ls * ls_mult, alpha=alpha, length_scale_bounds=(1e-2, ls_ub), alpha_bounds=(1e-2, 100))
-        #             kernels.append(kernel)
-
-        # kernels = [
-        #     Matern(length_scale=0.1, length_scale_bounds=(1e-1, 1), nu=1.5)  # <= 0.3 eccentricity,
-
-        # ]
-
-        y_predict_kernels = []
-        y_predict_std_kernels = []
-        lml_kernels = []
-        
-        best_lml = -np.inf # log marginal likelihood
-
-        for kernel in kernels:
-            try:
-                start = time.time()
-                # if optimized_kernel is None:
-                #     gaussian_process = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=10, random_state=42)
-                # else:
-                #     gaussian_process = GaussianProcessRegressor(kernel=optimized_kernel, optimizer=None)
-                # print(self.colored_text(f'Trying kernel: {kernel[0]} with ls_bounds=[0.1, {kernel[1]}]', 'blue'))
-                gaussian_process = GaussianProcessRegressor(kernel=kernel[0], n_restarts_optimizer=20, random_state=42)
-                
-                # Fit the GP model on scaled data
-                gaussian_process.fit(X_train_scaled, y_train_scaled)
-                optimized_kernel = gaussian_process.kernel_
-
-                end = time.time()
-
-                # Log-Marginal Likelihood
-                lml = gaussian_process.log_marginal_likelihood_value_
-
-                # Calculate training score (RMSE on training data)
-                y_pred_train, std_train = gaussian_process.predict(X_train_scaled, return_std=True)
-                train_rmse = np.sqrt(np.mean((y_pred_train - y_train_scaled)**2))
-                
-                # Print the optimized kernel and hyperparameters
-                # print(f"kernel = {kernel[0]}, ls_bounds=[0.1, {kernel[1]}]; Optimized kernel: {optimized_kernel} | time = {end - start:.2f}s | LML = {lml:.4f}, training_score = {train_rmse}")
-
-                # Make predictions on scaled X
-                y_predict_scaled, std_prediction_scaled = gaussian_process.predict(X_scaled, return_std=True)
-                y_predict = scaler_y.inverse_transform(y_predict_scaled.reshape(-1, 1)).flatten()
-                y_predict_std = std_prediction_scaled * scaler_y.scale_[0]
-
-                y_predict_kernels.append(y_predict)
-                y_predict_std_kernels.append(y_predict_std)
-
-                self._diagnose_gpr_issues(gaussian_process, X_train_scaled, y_train_scaled)
-
-
-                if lml > best_lml:
-                    best_lml = lml
-                    best_guess_kernel = kernel
-                    best_optimized_kernel = optimized_kernel
-                    best_y_predict = y_predict
-                    best_y_predict_std = y_predict_std
-
-            except Exception as e:
-                print(self.colored_text(f'GPR failed for kernel {kernel}: {e}', 'red'))
-                traceback.print_exc()
-                continue
-
-        print(self.colored_text(f"Best guess kernel = {best_guess_kernel}; Optimized kernel: {best_optimized_kernel} | time = {end - start:.2f}s | LML = {best_lml:.4f} | X_train_scaled = {X_train_scaled[:10]} | Y_train_scaled = {y_train_scaled[:10]}", 'green'))
-        lml_kernels.append(best_lml)
-
-
-        if plot_kernels is True:
-            GPR_fit = plt.figure()
-
-            for i in range(len(y_predict_kernels)):
-                plt.scatter(X_train, y_train, color='red', label="Observations", s=10)
-                plt.plot(X, y_predict_kernels[i], label='Mean prediction', linewidth=0.8)
-                plt.fill_between(
-                    X.ravel(),
-                (y_predict_kernels[i] - 1.96 * y_predict_std_kernels[i]), 
-                (y_predict_kernels[i] + 1.96 * y_predict_std_kernels[i]),
-                    alpha=0.5,
-                    label=r"95% confidence interval",
-                )
-            plt.legend(loc = 'upper left')
-            plt.xlabel("$e$")
-            if property == 'amplitude':
-                plt.ylabel("$f_A(e)$")
-            elif property == 'phase':
-                plt.ylabel("$f_{\phi}(e)$")
-            plt.title(f"GPR {property} at T_{time_node}, best optimized kernel: {best_optimized_kernel[0]} with ls_bounds=[0.1, {best_optimized_kernel[1]}]")
-            # plt.show()
-
-            if save_fig_kernels is True:
-                figname = f'Images/Gaussian_kernels/Gaussian_kernels_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}_Ni={len(self.ecc_ref_space)}]_No={len(self.ecc_ref_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_basis_vecs_phase}_Nga={self.N_basis_vecs_amp}.png'
-                
-                # Ensure the directory exists, creating it if necessary and save
-                os.makedirs('Images/Gaussian_kernels', exist_ok=True)
-                GPR_fit.savefig(figname)
-
-                print(self.colored_text(f'Figure is saved in {figname}', 'blue'))
-
-        # return gpr_obj
-        return best_y_predict, [(best_y_predict - 1.96 * best_y_predict_std), (best_y_predict + 1.96 * best_y_predict_std)], best_optimized_kernel, best_lml
-
-
-    def _gaussian_process_regression(self, time_node, training_set, optimized_kernel=None, plot_kernels=False, save_fig_kernels=False):
-        # Extract X and training data
-        X = self.ecc_ref_space_output[:, np.newaxis]
-        X_train = np.array(self.best_rep_parameters).reshape(-1, 1)
-        y_train = np.squeeze(training_set.T[time_node])
-
-        # Scale X_train
-        scaler_x = StandardScaler()
-        X_train_scaled = scaler_x.fit_transform(X_train)
-
-        # Scale X (for predictions)
-        X_scaled = scaler_x.transform(X)
-
-        # Scale y_train
-        scaler_y = StandardScaler()
-        y_train_scaled = scaler_y.fit_transform(y_train.reshape(-1, 1)).flatten()
-
-        kernels = [
-            Matern(length_scale=0.1, length_scale_bounds=(1e-1, 1), nu=1.5)  # <= 0.3 eccentricity
-        ]
-
-        mean_prediction_per_kernel = []
-        std_predictions_per_kernel = []
-        lml_per_kernel = []
-
-        for kernel in kernels:
-            start = time.time()
-            if optimized_kernel is None:
-                gaussian_process = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=20)
-            else:
-                gaussian_process = GaussianProcessRegressor(kernel=optimized_kernel, optimizer=None)
-
-            # Fit the GP model on scaled data
-            gaussian_process.fit(X_train_scaled, y_train_scaled)
-            optimized_kernel = gaussian_process.kernel_
-
-            end = time.time()
-
-            # Log-Marginal Likelihood
-            lml = gaussian_process.log_marginal_likelihood_value_
-            lml_per_kernel.append(lml)
-
-            # Print the optimized kernel and hyperparameters
-            print(f"kernel = {kernel}; Optimized kernel: {optimized_kernel} | time = {end - start:.2f}s | LML = {lml:.4f}")
-
-            # Make predictions on scaled X
-            mean_prediction_scaled, std_prediction_scaled = gaussian_process.predict(X_scaled, return_std=True)
-            mean_prediction = scaler_y.inverse_transform(mean_prediction_scaled.reshape(-1, 1)).flatten()
-            std_prediction = std_prediction_scaled * scaler_y.scale_[0]
-
-            mean_prediction_per_kernel.append(mean_prediction)
-            std_predictions_per_kernel.append(std_prediction)
-        
-        if plot_kernels is True:
-            GPR_fit = plt.figure()
-
-            for i in range(len(mean_prediction_per_kernel)):
-                plt.scatter(X_train, y_train, color='red', label="Observations", s=10)
-                plt.plot(X, mean_prediction_per_kernel[i], label='Mean prediction', linewidth=0.8)
-                plt.fill_between(
-                    X.ravel(),
-                (mean_prediction_per_kernel[i] - 1.96 * std_predictions_per_kernel[i]), 
-                (mean_prediction_per_kernel[i] + 1.96 * std_predictions_per_kernel[i]),
-                    alpha=0.5,
-                    label=r"95% confidence interval",
-                )
-            plt.legend(loc = 'upper left')
-            plt.xlabel("$e$")
-            if property == 'amplitude':
-                plt.ylabel("$f_A(e)$")
-            elif property == 'phase':
-                plt.ylabel("$f_{\phi}(e)$")
-            # plt.title(f"GPR {property} at T_{time_node}")
-            # plt.show()
-
-            if save_fig_kernels is True:
-                figname = f'Gaussian_kernels_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}_Ni={len(self.ecc_ref_space)}]_No={len(self.ecc_ref_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_greedy_vecs_phase}_Nga={self.N_greedy_vecs_amp}.png'
-                
-                # Ensure the directory exists, creating it if necessary and save
-                os.makedirs('Images/Gaussian_kernels', exist_ok=True)
-                GPR_fit.savefig('Images/Gaussian_kernels/' + figname)
-
-                print('Figure is saved in Images/Gaussian_kernels/' + figname)
-
-        return mean_prediction, [(mean_prediction - 1.96 * std_prediction), (mean_prediction + 1.96 * std_prediction)], optimized_kernel, lml_per_kernel
+    #     return mean_prediction, [(mean_prediction - 1.96 * std_prediction), (mean_prediction + 1.96 * std_prediction)], optimized_kernel, lml_per_kernel
 
     def _get_gpr_obj(self, property):
         """Helper method to get or create the GPRFitResults object for the specified property."""
@@ -921,10 +2349,9 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
     def fit_to_training_set(self, 
                             property, 
                             min_greedy_error=None, N_basis_vecs=None, 
-                            training_set=None, 
-                            X_train=None, 
+                            time_coupled=False, 
                             save_fits_to_file=True, 
-                            plot_kernels=False, save_fig_kernels=False,
+                            plot_kernel_errors=False, plot_kernel_predictions=False, save_fig_kernels=False,
                             plot_GPR_fits=False, save_fig_GPR_fits=False, 
                             plot_residuals_ecc_evolve=False, save_fig_ecc_evolve=False, 
                             plot_residuals_time_evolve=False, save_fig_time_evolve=False, 
@@ -948,7 +2375,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             if no_file_load is True:
                 raise FileNotFoundError
           
-            gpr_obj = gpr_obj.load()
+            gpr_obj = gpr_obj.load_gpr_obj()
             train_obj = train_obj.load()
 
         except Exception as e:
@@ -956,37 +2383,86 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             traceback.print_exc()
 
             if train_obj.training_set is None:
-                print('check 0')
                 try:
                     train_obj = train_obj.load()
-                    print('check 1')
                 except Exception as e:
                     print(e)
-                    print('check 2')
                     traceback.print_exc()
                     # Generate the training set of greedy parameters at empirical nodes
                     train_obj = self.get_training_set_greedy(property=property, min_greedy_error=min_greedy_error, N_greedy_vecs=N_basis_vecs)
             
             print(f"Training set for {property} has {len(train_obj.basis_indices)} basis vectors and {len(train_obj.empirical_indices)} empirical nodes.")
-            print(train_obj.training_set)
 
             # Create empty arrays to save fitvalues
-            gpr_obj.mean_predictions = np.zeros((train_obj.training_set.shape[1], len(self.ecc_ref_space_output)))
-            gpr_obj.confidence_95_preds = np.zeros((train_obj.training_set.shape[1], 2, len(self.ecc_ref_space_output))) # 95% confidence interval
-            gpr_obj.best_lmls = np.zeros(train_obj.training_set.shape[1])
+            N_nodes = len(train_obj.empirical_indices)
 
+            gpr_obj.gp_models = []
+            gpr_obj.kernels = []
+
+            gpr_obj.scaler_x = []
+            gpr_obj.scaler_y = []
+
+            gpr_obj.best_lmls = np.zeros(N_nodes)
+            gpr_obj.best_train_rmses = np.zeros(N_nodes)
+            gpr_obj.best_scores = np.zeros(N_nodes)
+            
             print(f'Interpolate {property}...')
 
             start2 = time.time()
             optimized_kernel = None
 
-            for node_i in range(len(train_obj.empirical_indices)):
-                
-                best_y_predict, confidence_95, optimized_kernel, best_lml = self._gaussian_process_regression_test(node_i, train_obj, optimized_kernel, X_train, plot_kernels)
+            for node_i in range(N_nodes):
 
-                gpr_obj.mean_predictions[node_i] = best_y_predict # Best prediction 
-                gpr_obj.confidence_95_preds[node_i] = confidence_95 # 95% confidence level
-                gpr_obj.best_lmls[node_i] = best_lml # Log-Marginal likelihood
+                result = self._gaussian_process_regression_t(
+                    time_node=node_i,
+                    train_obj=train_obj,
+                    optimized_kernel=optimized_kernel,
+                    plot_kernel_errors=plot_kernel_errors,
+                    plot_kernel_predictions=plot_kernel_predictions,
+                    save_fig_kernels=save_fig_kernels,
+                    time_coupled=time_coupled
+                )
+
+                # --------------------------------------------
+                # Store GP information
+                # --------------------------------------------
+
+                gpr_obj.gp_models.append(
+                    result["gp"]
+                )
+
+                gpr_obj.kernels.append(
+                    result["kernel"]
+                )
+
+                gpr_obj.scaler_x.append(
+                    result["scaler_x"]
+                )
+
+                gpr_obj.scaler_y.append(
+                    result["scaler_y"]
+                )
+
+                # --------------------------------------------
+                # Diagnostics
+                # --------------------------------------------
+                # Log-Marginal likelihood
+                gpr_obj.best_lmls[node_i] = (
+                    result["lml"]
+                )
+
+                gpr_obj.best_train_rmses[node_i] = (
+                    result["train_rmse"]
+                )
+
+                gpr_obj.best_scores[node_i] = (
+                    result["score"]
+                )
+
+                # --------------------------------------------
+                # Warm-start next empirical node
+                # --------------------------------------------
+                optimized_kernel = result["kernel"]
 
             end2 = time.time()
             print(f'time full GPR = {end2 - start2}')
@@ -999,7 +2475,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         # If save_fits_to_file is True, save the GPR fits to a file
         if save_fits_to_file:
             # Save the GPR fits to a file
-            gpr_obj.save()
+            gpr_obj.save_gpr_obj()
         
         # If plot_residuals_ecc_evolve or plot_residuals_time_evolve is True, plot the residuals
         if (plot_residuals_ecc_evolve is True) or (plot_residuals_time_evolve is True):
@@ -1083,7 +2559,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
 
         if gpr_obj.mean_predictions is None:
             try:
-                gpr_obj = gpr_obj.load()
+                gpr_obj = gpr_obj.load_gpr_obj()
             except Exception as e:
                 print(e, '\n Make sure to run fit_to_training_set() before plotting')
                 traceback.print_exc()
@@ -1267,34 +2743,46 @@ duration = 4 # seconds
 time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
 
 gt = Generate_Offline_Surrogate(time_array=time_array, 
-                                ecc_ref_parameterspace=np.linspace(0.001, 0.1, num=3),
-                                mean_ano_parameterspace=np.linspace(0, 2*np.pi, num=3),
+                                ecc_ref_parameterspace=np.linspace(0.001, 0.1, num=80),
+                                mean_ano_parameterspace=[0],
                                 mass_ratio_parameterspace=[1],
                                 chi1_parameterspace=[0],
                                 chi2_parameterspace=[0],
-                                M_output_wfs_per_dimension=500, 
+                                M_output_wfs_per_dimension=150, 
                                 min_greedy_error_amp=1e-8,
                                 min_greedy_error_phase=1e-6,
                                 minimum_spacing_greedy=0.003, 
                                 training_set_selection='greedy')
 
-train_obj_p = gt._get_training_obj('phase')
-gt.generate_property_dataset(train_obj=train_obj_p, 
-                            #  plot_residuals_eccentric_evolve=True,
-                            #  plot_residuals_time_evolve=True,
-                             )
-gt.get_training_set_greedy(property='phase', 
-                           min_greedy_error=1e-8, 
-                           plot_greedy_error=True,
-                           plot_training_set=True,
-                           plot_emp_nodes_on_basis=True)
+"""
+CHECK MY NOTES ON WHAST TO DO NEXT! TODO.txt file!
+"""
+# train_obj_p = gt._get_training_obj('phase')
 
+# gt.generate_property_dataset(train_obj=train_obj_p, 
+#                             #  plot_residuals_eccentric_evolve=True,
+#                             #  plot_residuals_time_evolve=True,
+#                              )
+# gt.get_training_set_greedy(property='phase', 
+#                            min_greedy_error=1e-8, 
+#                         #    plot_greedy_error=True,
+#                         #    plot_training_set=True,
+#                         #    plot_emp_nodes_on_basis=True
+#                         )
+
+# plt.show()
+gt.fit_to_training_set('amplitude', 
+                       min_greedy_error=1e-8, 
+                       save_fits_to_file=False, 
+                       plot_kernel_errors=True,
+                       plot_kernel_predictions=True,
+                       save_fig_kernels=True,
+                       time_coupled=True,
+                    #    plot_GPR_fits=True, save_fig_GPR_fits=True, 
+                    #    plot_residuals_ecc_evolve=True, save_fig_ecc_evolve=True, 
+                    #    plot_residuals_time_evolve=True, save_fig_time_evolve=True,
+                    )
 plt.show()
-gt.fit_to_training_set('amplitude', min_greedy_error=1e-8, save_fits_to_file=True, 
-                           plot_GPR_fits=True, save_fig_GPR_fits=True, 
-                           plot_residuals_ecc_evolve=True, save_fig_ecc_evolve=True, 
-                           plot_residuals_time_evolve=True, save_fig_time_evolve=True,
-                           )
 #     # gt.fit_to_training_set('amplitude', min_greedy_error=1e-6, save_fits_to_file=True, plot_GPR_fits=True, save_fig_GPR_fits=True, plot_residuals_ecc_evolve=True, save_fig_ecc_evolve=True, plot_residuals_time_evolve=True, save_fig_time_evolve=True)
 
 # plt.show()

@@ -87,8 +87,8 @@ class TrainingSetResults(Warnings):
     empirical_indices: Any = field(default_factory=list)
     leaf_basis_indices: Any = field(default_factory=list)
     leaf_nodes_indices: Any = field(default_factory=list)
-    orthonormal_basis: Any = field(default_factory=list)
-    greedy_errors: Any = field(default_factory=list)
+    orthonormal_basis: Any = None
+    greedy_errors: Any = None
 
 
     training_set: Any = None
@@ -116,7 +116,7 @@ class TrainingSetResults(Warnings):
     def _scalar_block(name, value):
         return f"{name}={value:g}"
 
-    def name_blocks(self, include_greedy=True, exclude_property=False):
+    def name_blocks(self, include_greedy=True, exclude_property=False, include_extra=False):
         if exclude_property is False:
             blocks = [self.property]
         else:
@@ -146,6 +146,12 @@ class TrainingSetResults(Warnings):
             if self.min_greedy_error is not None:
                 blocks.append(f"gerr={self.min_greedy_error}")
 
+        if include_extra:
+            if type(include_extra) is str:
+                blocks.append(include_extra)
+            else:
+                blocks.append(str(include_extra))
+                
         if not self.truncate_at_ISCO:
             blocks.append("noISCO")
         if not self.truncate_at_tmin:
@@ -162,9 +168,10 @@ class TrainingSetResults(Warnings):
                  ext="npz", 
                  directory=None, 
                  include_greedy=True, 
-                 exclude_property=False
+                 exclude_property=False,
+                 include_extra=False
                  ):
-        name = f"{prefix}_{'_'.join(self.name_blocks(include_greedy=include_greedy, exclude_property=exclude_property))}.{ext}"
+        name = f"{prefix}_{'_'.join(self.name_blocks(include_greedy=include_greedy, exclude_property=exclude_property, include_extra=include_extra))}.{ext}"
         if directory is not None:
             return f"{directory.rstrip('/')}/{name}"
         return name
@@ -174,7 +181,8 @@ class TrainingSetResults(Warnings):
                 ext="png", 
                 directory=None,
                 include_greedy=True,
-                exclude_property=True
+                exclude_property=True,
+                include_extra=False,
                 ):
         # Ensure the directory exists, creating it if necessary and save
         if directory is not None:
@@ -184,7 +192,8 @@ class TrainingSetResults(Warnings):
                                 ext=ext, 
                                 directory=directory,
                                 include_greedy=include_greedy,
-                                exclude_property=exclude_property
+                                exclude_property=exclude_property,
+                                include_extra=include_extra
                                 )
         print(self.colored_text(f"Figure is saved in {figname}", 'blue'))
 
@@ -1191,12 +1200,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         time = np.asarray(train_obj.time)
         params = np.asarray(train_obj.parameter_grid)
 
-        ecc_space = train_obj.ecc_ref_space
-        l_space = train_obj.mean_ano_ref_space
-        q_space = train_obj.mass_ratio_space
-        chi1_space = train_obj.chi1_space
-        chi2_space = train_obj.chi2_space
-
         n_t = len(time)
 
         if train_obj.property == "phase":
@@ -1907,7 +1910,8 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                 physical_points = self.time
                 )
 
-
+            train_obj.orthonormal_basis = []
+            train_obj.greedy_errors = []
             for leaf in reduced_basis_object.tree.leaves:
                 # flat list of all indices
                 train_obj.basis_indices.extend(leaf.indices)
@@ -2059,6 +2063,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         free_memory=False
     ):
         train_obj.load_greedy_errors()
+        print(f"Loaded greedy errors with {len(train_obj.greedy_errors)} entries.")
 
         stacked_proj_errors = np.asarray(train_obj.greedy_errors).ravel()
 
@@ -2537,7 +2542,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
     def _plot_emp_nodes_on_residuals(self, 
                                      train_obj:TrainingSetResults, 
                                      save_fig, 
-                                     N_greedy_vecs_to_plot=20,
+                                     N_greedy_vecs_to_plot=5,
                                      show_legend=True):
         """
         Helper function to plot and optionally save the training set of residuals.
@@ -2564,7 +2569,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         fig, ax = plt.subplots()
 
         for idx in plot_residuals_idx:
-            ax.plot(self.time, train_obj.residuals[idx], label=f'e, l, q, x1, x2 = [{train_obj.parameter_grid[idx]}]', linewidth=0.6)
+            ax.plot(self.time, train_obj.residuals[idx], label=f'e = [{train_obj.parameter_grid[idx][0]}]', linewidth=0.6)
             ax.scatter(self.time[train_obj.empirical_indices], train_obj.residuals[idx][train_obj.empirical_indices])
 
         ax.set_xlabel('t [M]')
@@ -3571,7 +3576,8 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                             save_residuals=True, 
                             save_polarizations=True,
                             save_train_obj=True,
-                            free_memory=True
+                            free_memory=True,
+                            show_legend_ts=True
                             ):
         """
         Generate a training set for the surrogate model by calculating residuals, selecting greedy parameters, and determining empirical nodes.
@@ -3606,8 +3612,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         try:
             train_obj = train_obj.load()
             self.time = train_obj.time
-
-            print('greedy errors:', train_obj.greedy_errors)
 
             # Plotting after loading
             if plot_residuals_eccentric or plot_residuals_time:
@@ -3689,7 +3693,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
 
         # Optionally plot the training set
         if plot_training_set:
-            self._plot_emp_nodes_on_residuals(train_obj, save_fig_training_set, show_legend=False)
+            self._plot_emp_nodes_on_residuals(train_obj, save_fig_training_set, show_legend=show_legend_ts)
 
         # Clean memory of objects that are no longer needed
         if free_memory:
