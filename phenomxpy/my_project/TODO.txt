@@ -672,4 +672,4 @@ What also needs to be done:
 - gp works! :)
 - zscore is normalised and works better than score. The problme with score is that the lml and rmse have very different scales. 
 If you want to caluclate a score with a lml and rmse it would be better to normalise these before comparing.
-- First calculate all lmls and rmses and afterwards calculate the scores. Not sure how to do this yet, since we also have the best_score loop. actually this can be done after easily.
+- First calculate all lmls and rmses and afterwards calculate the scores. 

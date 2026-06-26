@@ -20,7 +20,7 @@ from sklearn.neighbors import NearestNeighbors
 from sklearn.exceptions import ConvergenceWarning
 
 import matplotlib.ticker as mticker
-from matplotlib.colors import Normalize
+from matplotlib.colors import Normalize, LogNorm
 import matplotlib.gridspec as gridspec
 
 
@@ -93,18 +93,20 @@ class GPRFitResults(Warnings):
     # ------------------------------------------------------------
     gp_models: list = field(default_factory=list)   # ONE GP per time node
     kernels: list = field(default_factory=list)
+    labels: list = field(default_factory=list)
 
-    mean_predictions: Any = None
-    confidence_95_preds: Any = None
+    # mean_predictions: Any = None
+    # confidence_95_preds: Any = None
     best_lmls: Any = None
     best_train_rmses: Any = None
     best_scores: Any = None
+    fit_times: Any = None
 
     # ------------------------------------------------------------
     # SCALERS (CRITICAL FOR ONLINE USE)
     # ------------------------------------------------------------
-    scaler_x: Any = None
-    scaler_y: Any = None
+    scaler_x: list = field(default_factory=list)
+    scaler_y: list = field(default_factory=list)
 
 
     def __post_init__(self):
@@ -185,6 +187,7 @@ class GPRFitResults(Warnings):
         """Constructs a filename based on the properties of the GPRFitResults object."""
         name = f"{prefix}_{'_'.join(self.name_blocks())}.{ext}"
         if directory is not None:
+            os.makedirs(directory, exist_ok=True)
             return f"{directory.rstrip('/')}/{name}"
         return name
     
@@ -279,13 +282,12 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                  mass_ratio_parameterspace=np.linspace(1, 20, num=50),
                  chi1_parameterspace=np.linspace(-0.995, 0.995, num=50),
                  chi2_parameterspace=np.linspace(-0.995, 0.995, num=50),
-                 M_output_wfs_per_dimension=500, 
+                 sampling_step_output=0.01, 
                  N_basis_vecs_amp=None, 
                  N_basis_vecs_phase=None, 
                  min_greedy_error_amp=None, 
                  min_greedy_error_phase=None, 
                  training_set_selection='GPR_opt', 
-                 minimum_spacing_greedy=0.008, 
                  f_lower=10, 
                  f_ref=20, 
                  phiRef=0., 
@@ -307,21 +309,50 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         self.chi1_space_input = self.allowed_chispin_warning(chi1_parameterspace)
         self.chi2_space_input = self.allowed_chispin_warning(chi2_parameterspace)
 
-        self.ecc_ref_parameterspace_range = min(ecc_ref_parameterspace), max(ecc_ref_parameterspace)
-        self.ecc_ref_space_output = self.allowed_eccentricity_warning(np.linspace(*self.ecc_ref_parameterspace_range, M_output_wfs_per_dimension).round(4))
+        def output_space(
+                input_space, 
+                allowed_warning_func, 
+                sampling_step_output=sampling_step_output
+                ):
+            min_val, max_val = min(input_space), max(input_space)
+            if min_val == max_val:
+                return np.array([min_val])  # Single value case
+            else:
+                n = int((max_val - min_val) / sampling_step_output) + 1
+                return allowed_warning_func(
+                    np.linspace(min_val, max_val, num=n).round(4)
+                )
+            
+        # output parameter space which is used for comparison to truth values in surrogate evaluation. 
+        self.ecc_ref_space_output = output_space(
+            ecc_ref_parameterspace, 
+            self.allowed_eccentricity_warning, 
+            sampling_step_output
+            )
+        
+        self.mean_ano_ref_space_output = output_space(
+            mean_ano_parameterspace, 
+            self.allowed_mean_anomaly_warning, 
+            sampling_step_output
+            )
 
-        self.mean_ano_ref_parameterspace_range = min(mean_ano_parameterspace), max(mean_ano_parameterspace)
-        self.mean_ano_ref_space_output = self.allowed_mean_anomaly_warning(np.linspace(*self.mean_ano_ref_parameterspace_range, M_output_wfs_per_dimension).round(4))
+        self.mass_ratio_space_output = output_space(
+            mass_ratio_parameterspace, 
+            self.allowed_mass_ratio_warning, 
+            sampling_step_output
+            )
 
-        self.mass_ratio_parameterspace_range = min(mass_ratio_parameterspace), max(mass_ratio_parameterspace)
-        self.mass_ratio_space_output = self.allowed_mass_ratio_warning(np.linspace(*self.mass_ratio_parameterspace_range, M_output_wfs_per_dimension).round(4))
+        self.chi1_space_output = output_space(
+            chi1_parameterspace, 
+            self.allowed_chispin_warning, 
+            sampling_step_output
+            )
 
-        self.chi1_parameterspace_range = min(chi1_parameterspace), max(chi1_parameterspace)
-        self.chi1_space_output = self.allowed_chispin_warning(np.linspace(*self.chi1_parameterspace_range, M_output_wfs_per_dimension).round(4))
-
-        self.chi2_parameterspace_range = min(chi2_parameterspace), max(chi2_parameterspace)
-        self.chi2_space_output = self.allowed_chispin_warning(np.linspace(*self.chi2_parameterspace_range, M_output_wfs_per_dimension).round(4))
-
+        self.chi2_space_output = output_space(
+            chi2_parameterspace, 
+            self.allowed_chispin_warning, 
+            sampling_step_output
+            )
 
         self.training_set_selection = training_set_selection
 
@@ -346,7 +377,6 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                  N_basis_vecs_phase=N_basis_vecs_phase, 
                  min_greedy_error_amp=min_greedy_error_amp, 
                  min_greedy_error_phase=min_greedy_error_phase, 
-                 minimum_spacing_greedy=minimum_spacing_greedy, 
                  f_ref=f_ref, 
                  f_lower=f_lower, 
                  phiRef=phiRef, 
@@ -429,311 +459,13 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                 issues.append(f"Severe ill-conditioning (cond={cond_num:.2e})")
             
             return issues
-    
-    # def _gaussian_process_regression_t(
-    #     self,
-    #     time_node,
-    #     train_obj: TrainingSetResults,
-    #     optimized_kernel=None,
-    #     plot_kernels=False,
-    #     save_fig_kernels=False,
-    #     time_coupled=False
-    # ):
-    #     """
-    #     Gaussian Process Regression for one empirical time node.
 
-    #     ------------------------------------------------------------------
-    #     WHAT THIS FUNCTION DOES
-    #     ------------------------------------------------------------------
 
-    #     We want to learn:
-
-    #         f(parameters) -> waveform quantity
-
-    #     where the waveform quantity is either:
-    #         - phase residual
-    #         - amplitude residual
-
-    #     at ONE empirical time node.
-
-    #     ------------------------------------------------------------
-    #     TWO MODES
-    #     ------------------------------------------------------------
-
-    #     1) time_coupled = False
-    #     --------------------------------
-    #     Each time node gets its own independent GP.
-
-    #     Input dimensions:
-    #         [e, l, q, chi1, chi2]
-
-    #     This is:
-    #         - simpler
-    #         - faster
-    #         - usually more stable
-    #         - easier to optimize
-
-    #     Recommended FIRST approach.
-
-
-    #     2) time_coupled = True
-    #     --------------------------------
-    #     Time is added as another GP dimension.
-
-    #     Input dimensions:
-    #         [e, l, q, chi1, chi2, t]
-
-    #     The GP then learns correlations across time.
-
-    #     Advantages:
-    #         - smoother evolution in time
-    #         - fewer discontinuities between nodes
-
-    #     Disadvantages:
-    #         - MUCH harder optimization
-    #         - higher dimensionality
-    #         - requires more training data
-    #         - more prone to over-smoothing
-
-    #     Recommended only after the uncoupled model works well.
-
-    #     ------------------------------------------------------------------
-    #     KERNEL SEARCH STRATEGY
-    #     ------------------------------------------------------------------
-
-    #     We test MANY kernels automatically.
-
-    #     We vary:
-    #         - kernel smoothness (nu)
-    #         - length scales
-    #         - isotropic vs anisotropic kernels
-    #         - noise levels
-
-    #     Then we select the BEST kernel using:
-
-    #         score = LML - alpha * train_rmse
-
-    #     because:
-
-    #         LML alone often prefers overly smooth kernels.
-
-    #     Adding RMSE penalizes kernels that fit poorly.
-
-    #     ------------------------------------------------------------------
-    #     IMPORTANT KERNEL CONCEPTS
-    #     ------------------------------------------------------------------
-
-    #     Matern kernel:
-    #         Controls smoothness of interpolation.
-
-    #     nu:
-    #         0.5  -> rough / jagged
-    #         1.5  -> moderately smooth
-    #         2.5  -> very smooth
-
-    #     length_scale:
-    #         Controls correlation distance.
-
-    #         small:
-    #             rapid variation
-
-    #         large:
-    #             smooth variation
-
-    #     isotropic:
-    #         one length scale for ALL dimensions
-
-    #     anisotropic:
-    #         separate length scale per dimension
-
-    #         VERY important in high dimensions because:
-    #             eccentricity may vary rapidly
-    #             while spin dependence may vary slowly
-
-    #     WhiteKernel:
-    #         models numerical noise.
-
-    #     ------------------------------------------------------------------
-    #     HOW TO TEST EFFICIENTLY
-    #     ------------------------------------------------------------------
-
-    #     STEP 1:
-    #         Start SIMPLE:
-
-    #             time_coupled = False
-
-    #             smoothness_params = [1.5]
-    #             ls_multipliers = [1.0]
-    #             noise_levels = [1e-6]
-
-    #     STEP 2:
-    #         Inspect:
-    #             - train_rmse
-    #             - plots
-    #             - prediction smoothness
-
-    #     STEP 3:
-    #         Add anisotropic kernels.
-
-    #         This is usually the BIGGEST improvement
-    #         for multidimensional waveform spaces.
-
-    #     STEP 4:
-    #         Add more:
-    #             smoothness_params
-    #             ls_multipliers
-
-    #     STEP 5:
-    #         ONLY THEN try:
-    #             time_coupled=True
-
-    #     ------------------------------------------------------------------
-    #     PRACTICAL ADVICE
-    #     ------------------------------------------------------------------
-
-    #     In high dimensions:
-
-    #         anisotropic kernels > isotropic kernels
-
-    #     almost always.
-
-    #     Also:
-
-    #         too many optimizer restarts
-    #         can dominate runtime.
-
-    #     Start with:
-    #         n_restarts_optimizer=5
-
-    #     before using:
-    #         20
-
-    #     ------------------------------------------------------------------
-    #     """
-
-        # # ============================================================
-        # # BUILD INPUT MATRICES
-        # # ============================================================
-
-        # if time_coupled is False:
-
-        #     # --------------------------------------------------------
-        #     # STANDARD MODE:
-        #     # one GP per time node
-        #     # --------------------------------------------------------
-        #     X = np.asarray(self.parameter_grid)
-        #     X_train = X[train_obj.basis_indices]
-
-        # else:
-
-        #     # --------------------------------------------------------
-        #     # TIME-COUPLED MODE:
-        #     # append time as extra dimension
-        #     # --------------------------------------------------------
-
-        #     X_param = np.asarray(self.parameter_grid)
-
-        #     t = np.full((X_param.shape[0], 1), self.time[time_node])
-
-        #     X_train = np.hstack([
-        #         X_param[train_obj.basis_indices],
-        #         t[train_obj.basis_indices]
-        #     ])
-
-        #     X = np.hstack([
-        #         X_param,
-        #         t
-        #     ])
-
-        # # ============================================================
-        # # TRAINING TARGETS
-        # # ============================================================
-
-        # y_train = np.squeeze(train_obj.training_set.T[time_node])
-
-        # # ============================================================
-        # # SCALE INPUTS
-        # # ============================================================
-
-        # # ------------------------------------------------------------
-        # # WHY SCALE?
-        # #
-        # # GP kernels are VERY sensitive to feature scales.
-        # #
-        # # Example:
-        # #
-        # #     eccentricity ~ 0.01
-        # #     q            ~ 10
-        # #
-        # # Without scaling:
-        # #     q dominates distance calculations.
-        # # ------------------------------------------------------------
-
-        # scaler_x = StandardScaler()
-
-        # X_train_scaled = scaler_x.fit_transform(X_train)
-
-        # X_scaled = scaler_x.transform(X)
-
-        # scaler_y = StandardScaler()
-
-        # y_train_scaled = scaler_y.fit_transform(
-        #     y_train.reshape(-1, 1)
-        # ).flatten()
-
-        # # ============================================================
-        # # ESTIMATE CHARACTERISTIC LENGTH SCALE
-        # # ============================================================
-
-        # # ------------------------------------------------------------
-        # # We estimate a reasonable initial kernel size from
-        # # nearest-neighbor distances.
-        # #
-        # # This gives the optimizer a MUCH better starting point.
-        # # ------------------------------------------------------------
-
-        # nn = NearestNeighbors(n_neighbors=2)
-
-        # nn.fit(X_train_scaled)
-
-        # distances, indices = nn.kneighbors(X_train_scaled)
-
-        # median_nn_distance = np.median(distances[:, 1])
-
-        # base_ls = median_nn_distance * 2
-
-        # print("base_ls =", base_ls)
-
-        # # ============================================================
-        # # INPUT DIMENSION
-        # # ============================================================
-
-        # dim = X_train_scaled.shape[1]
+    def build_kernels(self, base_ls, dim):
 
         # # ============================================================
         # # KERNEL SEARCH PARAMETERS
         # # ============================================================
-
-        # # ------------------------------------------------------------
-        # # Multipliers applied to base_ls.
-        # #
-        # # small:
-        # #     rapid local variation
-        # #
-        # # large:
-        # #     smoother interpolation
-        # # ------------------------------------------------------------
-
-        # # ls_multipliers = [0.3, 1.0, 3.0, 10.0]
-        # # ls_multipliers = [1.0]
-
-        # # ------------------------------------------------------------
-        # # Upper optimization bounds for length scales.
-        # #
-        # # Prevents optimizer from going to absurdly smooth kernels.
-        # # ------------------------------------------------------------
-
-        # # ls_upper_bounds = [0.5, 1.0, 2.0, 5.0]
 
         # # ------------------------------------------------------------
         # # Matern smoothness values.
@@ -745,10 +477,6 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         # #     smoother functions
         # # ------------------------------------------------------------
 
-        # smoothness_params = [1.0, 2.0, 2.5, 3.0, 3.5, 4.0]
-        # # smoothness_params = [1.5]
-
-        # kernels = []
 
         # # ============================================================
         # # 1. ISOTROPIC MATERN KERNELS
@@ -761,21 +489,22 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         # # Faster.
         # # Often insufficient in high dimensions.
         # # ------------------------------------------------------------
+        
+        smoothness_params = [1.0, 2.0, 2.5, 3.0, 3.5, 4.0]
+        kernels = []
 
-        # for nu in smoothness_params:
-
-        #     kernel = Matern(
-        #         length_scale=base_ls,
-        #         length_scale_bounds=(0.1 * base_ls, 10 * base_ls),
-        #         nu=nu
-        #     )
-
-        #     kernels.append({
-        #         "kernel": kernel,
-        #         "type": "isotropic",
-        #         "nu": nu,
-        #         "base_ls": base_ls
-        #     })
+        # isotropic
+        for nu in smoothness_params:
+            kernels.append({
+                "kernel": Matern(
+                    length_scale=base_ls,
+                    length_scale_bounds=(0.1 * base_ls, 10 * base_ls),
+                    nu=nu
+                ),
+                "type": "isotropic",
+                "nu": nu,
+                "base_ls": base_ls
+            })
 
         # # ============================================================
         # # 2. ANISOTROPIC MATERN KERNELS
@@ -805,6 +534,19 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         #         "base_ls": base_ls
         #     })
 
+        # anisotropic
+        for nu in smoothness_params:
+            kernels.append({
+                "kernel": Matern(
+                    length_scale=np.ones(dim) * base_ls,
+                    length_scale_bounds=(0.1 * base_ls, 10 * base_ls),
+                    nu=nu
+                ),
+                "type": "anisotropic",
+                "nu": nu,
+                "base_ls": base_ls
+            })
+
         # # ============================================================
         # # 3. ADD WHITE NOISE TERMS
         # # ============================================================
@@ -815,318 +557,28 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         # # Prevents overfitting.
         # # ------------------------------------------------------------
 
-        # # noise_levels = [1e-8, 1e-6, 1e-4]
-        # noise_levels = [1e-6]
-
-        # extra_kernels = []
-
-        # for entry in kernels:
-
-        #     for noise in noise_levels:
-
-        #         noisy_kernel = (
-        #             entry["kernel"]
-        #             + WhiteKernel(
-        #                 noise_level=noise,
-        #                 noise_level_bounds=(1e-10, 1e-1)
-        #             )
-        #         )
-
-        #         extra_kernels.append({
-        #             "kernel": noisy_kernel,
-        #             "type": entry["type"] + "_noise",
-        #             "nu": entry["nu"],
-        #             "base_ls": entry["base_ls"],
-        #             "noise": noise
-        #         })
-
-        # kernels.extend(extra_kernels)
-
-        # print(f"Generated {len(kernels)} kernels")
-
-        # # ------------------------------------------------------------
-        # # Warm-start from previous time node kernel
-        # # ------------------------------------------------------------
-
-        # if optimized_kernel is not None:
-
-        #     kernels.insert(
-        #         0,
-        #         {
-        #             "kernel": optimized_kernel,
-        #             "type": "warm_start",
-        #             "nu": None,
-        #             "base_ls": None
-        #         }
-        #     )
-
-        # # ============================================================
-        # # STORAGE
-        # # ============================================================
-
-        # y_predict_kernels = []
-        # y_predict_std_kernels = []
-
-        # kernel_diagnostics = []
-
-        # kernel_fit_times = []
-
-        # best_score = -np.inf
-        # best_lml = -np.inf
-        # best_train_rmse = np.inf
-
-        # # ------------------------------------------------------------
-        # # IMPORTANT:
-        # #
-        # # LML alone tends to prefer over-smoothed kernels.
-        # #
-        # # We therefore penalize high training error.
-        # #
-        # # Larger alpha:
-        # #     prioritize fit quality more
-        # #
-        # # Smaller alpha:
-        # #     prioritize smoothness / generalization more
-        # # ------------------------------------------------------------
-
-        # alpha = 1.0 / np.std(y_train_scaled)
-
-        
-
-        # # ============================================================
-        # # KERNEL SEARCH
-        # # ============================================================
-
-        # for entry in kernels:
-
-        #     try:
-
-        #         start = time.time()
-
-        #         kernel_label = {
-        #             "isotropic": "Iso",
-        #             "anisotropic": "Aniso",
-        #             "isotropic_noise": "Iso+W",
-        #             "anisotropic_noise": "Aniso+W",
-        #             "warm_start": "Warm"
-        #         }[entry["type"]]
-
-        #         kernel_label += f" ν={entry['nu']}"
-
-        #         if "noise" in entry:
-        #             kernel_label += f", noise={entry['noise']:.0e}"
-
-        #         start_kernel_time = time.time()
-        #         gaussian_process = GaussianProcessRegressor(
-        #             kernel=entry["kernel"],
-        #             n_restarts_optimizer=5,
-        #             random_state=42
-        #         )
-
-        #         # ----------------------------------------------------
-        #         # TRAIN GP
-        #         # ----------------------------------------------------
-
-        #         gaussian_process.fit(
-        #             X_train_scaled,
-        #             y_train_scaled
-        #         )
-
-        #         optimized_kernel = gaussian_process.kernel_
-
-        #         end_kernel_time = time.time()
-        #         kernel_fit_time = end_kernel_time - start_kernel_time
-        #         kernel_fit_times.append(kernel_fit_time)
-
-        #         end = time.time()
-
-        #         # ----------------------------------------------------
-        #         # LOG MARGINAL LIKELIHOOD
-        #         # ----------------------------------------------------
-
-        #         lml = gaussian_process.log_marginal_likelihood_value_
-
-        #         # ----------------------------------------------------
-        #         # TRAINING ERROR
-        #         # ----------------------------------------------------
-
-        #         y_pred_train, std_train = gaussian_process.predict(
-        #             X_train_scaled,
-        #             return_std=True
-        #         )
-
-        #         train_rmse = np.sqrt(
-        #             np.mean(
-        #                 (y_pred_train - y_train_scaled) ** 2
-        #             )
-        #         )
-
-        #         # ----------------------------------------------------
-        #         # COMBINED SCORE
-        #         # ----------------------------------------------------
-
-        #         score = lml - alpha * train_rmse
-
-        #         # ----------------------------------------------------
-        #         # PREDICT FULL GRID
-        #         # ----------------------------------------------------
-
-        #         y_predict_scaled, std_prediction_scaled = (
-        #             gaussian_process.predict(
-        #                 X_scaled,
-        #                 return_std=True
-        #             )
-        #         )
-
-        #         y_predict = scaler_y.inverse_transform(
-        #             y_predict_scaled.reshape(-1, 1)
-        #         ).flatten()
-
-        #         y_predict_std = (
-        #             std_prediction_scaled
-        #             * scaler_y.scale_[0]
-        #         )
-
-        #         y_predict_kernels.append(y_predict)
-
-        #         y_predict_std_kernels.append(y_predict_std)
-
-                
-        #         kernel_diagnostics.append({
-        #             "kernel": gaussian_process.kernel_,
-        #             "score": score,
-        #             "lml": lml,
-        #             "rmse": train_rmse,
-        #             "label": kernel_label,
-        #         })
-
-        #         self._diagnose_gpr_issues(
-        #             gaussian_process,
-        #             X_train_scaled,
-        #             y_train_scaled
-        #         )
-
-        #         # ----------------------------------------------------
-        #         # KEEP BEST KERNEL
-        #         # ----------------------------------------------------
-
-        #         if score > best_score:
-
-        #             best_score = score
-
-        #             best_lml = lml
-
-        #             best_train_rmse = train_rmse
-
-        #             best_optimized_kernel = gaussian_process.kernel_
-
-        #             best_gaussian_process = gaussian_process
-
-        #             # gp prediction at training locations
-        #             best_y_train_pred = scaler_y.inverse_transform(
-        #                 y_pred_train.reshape(-1,1)
-        #             ).flatten()
-
-        #             # uncertainty at training locations
-        #             best_y_train_std = (
-        #                 std_train * scaler_y.scale_[0]
-        #             )
-
-        #             # gp prediction on entire predicted grid 
-        #             best_y_predict = y_predict
-
-        #             # uncertainty on entire predicted grid
-        #             best_y_predict_std = y_predict_std
-
-        #     except Exception as e:
-
-        #         print(
-        #             self.colored_text(
-        #                 f"GPR failed for kernel {entry}: {e}",
-        #                 "red"
-        #             )
-        #         )
-
-        #         traceback.print_exc()
-
-        #         continue
-
-        # # ============================================================
-        # # FINAL REPORT
-        # # ============================================================
-
-        # print(
-        #     self.colored_text(
-        #         f"Best kernel = {best_optimized_kernel}\n"
-        #         f"LML = {best_lml:.4f}\n"
-        #         f"RMSE = {best_train_rmse:.6e}\n"
-        #         f"Score = {best_score:.4f}",
-        #         "green"
-        #     )
-        # )
-
-        # # ============================================================
-        # # BUILD RESULT DICTIONARY
-        # # ============================================================
-
-        # result_dict = {
-
-        #     # --------------------------------------------------------
-        #     # Trained GP
-        #     # --------------------------------------------------------
-
-        #     "gp": best_gaussian_process,
-
-        #     # --------------------------------------------------------
-        #     # Optimized kernel
-        #     # --------------------------------------------------------
-
-        #     "kernel": best_optimized_kernel,
-
-        #     # --------------------------------------------------------
-        #     # Scalers
-        #     # --------------------------------------------------------
-
-        #     "scaler_x": scaler_x,
-        #     "scaler_y": scaler_y,
-
-        #     # --------------------------------------------------------
-        #     # Predictions
-        #     # --------------------------------------------------------
-
-        #     "mean_prediction": best_y_predict,
-
-        #     "confidence_95": np.array([
-        #         best_y_predict - 1.96 * best_y_predict_std,
-        #         best_y_predict + 1.96 * best_y_predict_std
-        #     ]),
-
-        #     "std_prediction": best_y_predict_std,
-
-        #     "train_prediction": best_y_train_pred,
-        #     "train_std": best_y_train_std,
-
-        #     # --------------------------------------------------------
-        #     # Diagnostics
-        #     # --------------------------------------------------------
-
-        #     "lml": best_lml,
-        #     "train_rmse": best_train_rmse,
-        #     "score": best_score,
-
-        #     # --------------------------------------------------------
-        #     # Metadata
-        #     # --------------------------------------------------------
-
-        #     "time_node": time_node,
-        #     "time_value": self.time[time_node],
-
-        #     "basis_indices": train_obj.basis_indices,
-
-        #     "parameter_dim": dim,
-
-        #     "time_coupled": time_coupled
-        # }
+        # noise augmentation
+        noise_levels = [1e-6]
+        extra = []
+
+        for entry in kernels:
+            for noise in noise_levels:
+                extra.append({
+                    "kernel": entry["kernel"] + WhiteKernel(
+                        noise_level=noise,
+                        noise_level_bounds=(1e-10, 1e-1)
+                    ),
+                    "type": entry["type"] + "_noise",
+                    "nu": entry["nu"],
+                    "base_ls": entry["base_ls"],
+                    "noise": noise
+                })
+
+        kernels.extend(extra)
+
+        print(f"Generated {len(kernels)} kernels")
+
+        return kernels
 
     def _gaussian_process_regression_t(
         self,
@@ -1143,49 +595,251 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
 
         """
         Gaussian Process Regression for one empirical time node.
-        (comments unchanged)
+
+        ------------------------------------------------------------------
+        WHAT THIS FUNCTION DOES
+        ------------------------------------------------------------------
+
+        We want to learn:
+
+            f(parameters) -> waveform quantity
+
+        where the waveform quantity is either:
+            - phase residual
+            - amplitude residual
+
+        at ONE empirical time node.
+
+        ------------------------------------------------------------
+        TWO MODES
+        ------------------------------------------------------------
+
+        1) time_coupled = False
+        --------------------------------
+        Each time node gets its own independent GP.
+
+        Input dimensions:
+            [e, l, q, chi1, chi2]
+
+        This is:
+            - simpler
+            - faster
+            - usually more stable
+            - easier to optimize
+
+        Recommended FIRST approach.
+
+
+        2) time_coupled = True
+        --------------------------------
+        Time is added as another GP dimension.
+
+        Input dimensions:
+            [e, l, q, chi1, chi2, t]
+
+        The GP then learns correlations across time.
+
+        Advantages:
+            - smoother evolution in time
+            - fewer discontinuities between nodes
+
+        Disadvantages:
+            - MUCH harder optimization
+            - higher dimensionality
+            - requires more training data
+            - more prone to over-smoothing
+
+        Recommended only after the uncoupled model works well.
+
+        ------------------------------------------------------------------
+        KERNEL SEARCH STRATEGY
+        ------------------------------------------------------------------
+
+        We test MANY kernels automatically.
+
+        We vary:
+            - kernel smoothness (nu)
+            - length scales
+            - isotropic vs anisotropic kernels
+            - noise levels
+
+        Then we select the BEST kernel using:
+
+            score = LML - alpha * train_rmse
+
+        because:
+
+            LML alone often prefers overly smooth kernels.
+
+        Adding RMSE penalizes kernels that fit poorly.
+
+        ------------------------------------------------------------------
+        IMPORTANT KERNEL CONCEPTS
+        ------------------------------------------------------------------
+
+        Matern kernel:
+            Controls smoothness of interpolation.
+
+        nu:
+            0.5  -> rough / jagged
+            1.5  -> moderately smooth
+            2.5  -> very smooth
+
+        length_scale:
+            Controls correlation distance.
+
+            small:
+                rapid variation
+
+            large:
+                smooth variation
+
+        isotropic:
+            one length scale for ALL dimensions
+
+        anisotropic:
+            separate length scale per dimension
+
+            VERY important in high dimensions because:
+                eccentricity may vary rapidly
+                while spin dependence may vary slowly
+
+        WhiteKernel:
+            models numerical noise.
+
+        ------------------------------------------------------------------
+        HOW TO TEST EFFICIENTLY
+        ------------------------------------------------------------------
+
+        STEP 1:
+            Start SIMPLE:
+
+                time_coupled = False
+
+                smoothness_params = [1.5]
+                ls_multipliers = [1.0]
+                noise_levels = [1e-6]
+
+        STEP 2:
+            Inspect:
+                - train_rmse
+                - plots
+                - prediction smoothness
+
+        STEP 3:
+            Add anisotropic kernels.
+
+            This is usually the BIGGEST improvement
+            for multidimensional waveform spaces.
+
+        STEP 4:
+            Add more:
+                smoothness_params
+                ls_multipliers
+
+        STEP 5:
+            ONLY THEN try:
+                time_coupled=True
+
+        ------------------------------------------------------------------
+        PRACTICAL ADVICE
+        ------------------------------------------------------------------
+
+        In high dimensions:
+
+            anisotropic kernels > isotropic kernels
+
+        almost always.
+
+        Also:
+
+            too many optimizer restarts
+            can dominate runtime.
+
+        Start with:
+            n_restarts_optimizer=5
+
+        before using:
+            20
+
+        ------------------------------------------------------------------
         """
+
 
         # ============================================================
         # BUILD INPUT MATRICES
         # ============================================================
-        train_obj.load_residuals()
+
+        # X = np.array(
+        #         list(itertools.product(
+        #             gpr_obj.ecc_ref_space_output,
+        #             gpr_obj.mean_ano_ref_space_output,
+        #             gpr_obj.mass_ratio_space_output,
+        #             gpr_obj.chi1_space_output,
+        #             gpr_obj.chi2_space_output
+        #         )),
+        #         dtype=float
+        #     )
+        
+        # parameter space used for building the greedy training set 
+
+        X_training_space = train_obj.parameter_grid
 
         if time_coupled is False:
-
-            X = np.asarray(train_obj.parameter_grid)
-            X_train = X[train_obj.basis_indices]
+            
+            # Training set input variables for this time node (subset of full grid)
+            X_train = np.asarray(train_obj.parameter_grid)[train_obj.basis_indices]
 
         else:
+            
+            # append time as extra dimension for time-coupled regression predictions
+            t_train = np.full((train_obj.parameter_grid.shape[0], 1), self.time[train_obj.empirical_indices[time_node]])
 
-            X_param = np.asarray(train_obj.parameter_grid)
-
-            t = np.full((X_param.shape[0], 1), self.time[train_obj.empirical_indices[time_node]])
-
+            # training set input variables for this time node (subset of full grid)
             X_train = np.hstack([
-                X_param[train_obj.basis_indices],
-                t[train_obj.basis_indices]
+                np.asarray(train_obj.parameter_grid)[train_obj.basis_indices],
+                t_train[train_obj.basis_indices]
             ])
 
-            X = np.hstack([
-                X_param,
-                t
+            # append time as extra dimension for time-coupled regression predictions
+            t_training_space = np.full((X_training_space.shape[0], 1), self.time[train_obj.empirical_indices[time_node]])
+            
+            # full input matrix for time-coupled regression predictions (all grid points)
+            X_training_space = np.hstack([
+                X_training_space,
+                t_training_space
             ])
+
+
 
         # ============================================================
         # TRAINING TARGETS
         # ============================================================
-
+        # training set residuals of amplitude/phase at this time node (subset of full grid)
         y_train = np.squeeze(train_obj.training_set.T[time_node])
 
         # ============================================================
         # SCALE INPUTS
         # ============================================================
 
+        # ------------------------------------------------------------
+        # WHY SCALE?
+        #
+        # GP kernels are VERY sensitive to feature scales.
+        #
+        # Example:
+        #
+        #     eccentricity ~ 0.01
+        #     q            ~ 10
+        #
+        # Without scaling:
+        #     q dominates distance calculations.
+        # ------------------------------------------------------------
         scaler_x = StandardScaler()
         X_train_scaled = scaler_x.fit_transform(X_train)
-        X_scaled = scaler_x.transform(X)
 
+        X_training_space_scaled = scaler_x.transform(X_training_space)
+        
         scaler_y = StandardScaler()
         y_train_scaled = scaler_y.fit_transform(
             y_train.reshape(-1, 1)
@@ -1212,86 +866,10 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         dim = X_train_scaled.shape[1]
 
         # ============================================================
-        # KERNEL SEARCH PARAMETERS
+        # KERNELS WITH WARM START
         # ============================================================
 
-        smoothness_params = [1.0, 2.0, 2.5, 3.0, 3.5, 4.0]
-
-        kernels = []
-
-        # ============================================================
-        # 1. ISOTROPIC MATERN KERNELS
-        # ============================================================
-
-        for nu in smoothness_params:
-
-            kernel = Matern(
-                length_scale=base_ls,
-                length_scale_bounds=(0.1 * base_ls, 10 * base_ls),
-                nu=nu
-            )
-
-            kernels.append({
-                "kernel": kernel,
-                "type": "isotropic",
-                "nu": nu,
-                "base_ls": base_ls
-            })
-
-        # ============================================================
-        # 2. ANISOTROPIC MATERN KERNELS
-        # ============================================================
-
-        for nu in smoothness_params:
-
-            kernel = Matern(
-                length_scale=np.ones(dim) * base_ls,
-                length_scale_bounds=(0.1 * base_ls, 10 * base_ls),
-                nu=nu
-            )
-
-            kernels.append({
-                "kernel": kernel,
-                "type": "anisotropic",
-                "nu": nu,
-                "base_ls": base_ls
-            })
-
-        # ============================================================
-        # 3. ADD WHITE NOISE TERMS
-        # ============================================================
-
-        noise_levels = [1e-6]
-
-        extra_kernels = []
-
-        for entry in kernels:
-
-            for noise in noise_levels:
-
-                noisy_kernel = (
-                    entry["kernel"]
-                    + WhiteKernel(
-                        noise_level=noise,
-                        noise_level_bounds=(1e-10, 1e-1)
-                    )
-                )
-
-                extra_kernels.append({
-                    "kernel": noisy_kernel,
-                    "type": entry["type"] + "_noise",
-                    "nu": entry["nu"],
-                    "base_ls": entry["base_ls"],
-                    "noise": noise
-                })
-
-        kernels.extend(extra_kernels)
-
-        print(f"Generated {len(kernels)} kernels")
-
-        # ============================================================
-        # WARM START
-        # ============================================================
+        kernels = self.build_kernels(base_ls=base_ls, dim=dim)
 
         if optimized_kernel is not None:
 
@@ -1415,18 +993,18 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                 # prediction
                 # ----------------------------------------------------
                 y_pred_scaled, std_pred_scaled = gp.predict(
-                    X_scaled,
+                    X_training_space_scaled,
                     return_std=True
                 )
 
-                y_pred = scaler_y.inverse_transform(
+                y_pred_training_space = scaler_y.inverse_transform(
                     y_pred_scaled.reshape(-1, 1)
                 ).flatten()
 
-                y_pred_std = std_pred_scaled * scaler_y.scale_[0]
+                y_pred_training_space_std = std_pred_scaled * scaler_y.scale_[0]
 
-                y_predict_kernels.append(y_pred)
-                y_predict_std_kernels.append(y_pred_std)
+                y_predict_kernels.append(y_pred_training_space)
+                y_predict_std_kernels.append(y_pred_training_space_std)
 
                 success = True
 
@@ -1474,8 +1052,8 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                     "std_train": std_train,
 
                     # full-grid predictions
-                    "y_pred": y_pred,
-                    "y_pred_std": y_pred_std,
+                    "y_pred": y_pred_training_space,
+                    "y_pred_std": y_pred_training_space_std,
                 })
 
 
@@ -1515,6 +1093,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         best_idx = np.argmax(
             [d["score"] for d in kernel_diagnostics]
         )
+        
 
         best_info = kernel_diagnostics[best_idx]
 
@@ -1554,18 +1133,19 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         # ============================================================
         # RESULT DICTIONARY (UNCHANGED STRUCTURE)
         # ============================================================
-
         result_dict = {
             "gp": best_gaussian_process,
             "kernel": best_optimized_kernel,
+            "label": best_info["label"],
             "scaler_x": scaler_x,
             "scaler_y": scaler_y,
-            "mean_prediction": best_y_predict,
+            "mean_interp_prediction": best_y_predict,
             "confidence_95": np.array([
                 best_y_predict - 1.96 * best_y_predict_std,
                 best_y_predict + 1.96 * best_y_predict_std
             ]),
             "std_prediction": best_y_predict_std,
+            "y_train": y_train,
             "train_prediction": best_y_train_pred,
             "train_std": best_y_train_std,
             "lml": best_lml,
@@ -1575,7 +1155,8 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             "time_value": self.time[time_node],
             "basis_indices": train_obj.basis_indices,
             "parameter_dim": dim,
-            "time_coupled": time_coupled
+            "time_coupled": time_coupled,
+            "fit_time": kernel_diagnostics[best_idx]['fit_time']
         }
 
 
@@ -1587,7 +1168,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         if plot_kernel_errors:
 
             # Plot scores, rmse, lml, fit times for all kernels
-            self.plot_kernel_diagnostics(
+            self._plot_kernel_diagnostics(
                 kernel_diagnostics,
                 train_obj=train_obj,
                 best_score=best_score,
@@ -1595,8 +1176,11 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             )
 
             # Plot error heatmaps for top k kernels
-            self.plot_best_kernel_error_heatmaps(
+            self._plot_validation_heatmaps_kernels(
+                time_coupled=time_coupled,
                 kernel_diagnostics=kernel_diagnostics,
+                scaler_x=scaler_x,
+                scaler_y=scaler_y,
                 train_obj=train_obj,
                 time_node=time_node,
                 n_q_slices=5,
@@ -1604,275 +1188,19 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             )
 
         if plot_kernel_predictions:
-
-            # ------------------------------------------------------------
-            # Find worst kernels (lowest score → highest)
-            # ------------------------------------------------------------
-
-            worst_indices = np.argsort(
-                [d["score"] for d in kernel_diagnostics]
-            )[:5]
-
-            worst_indices = worst_indices[np.argsort(
-                [kernel_diagnostics[i]["score"] for i in worst_indices]
-            )]
-
-            # ------------------------------------------------------------
-            # TRAINING ORDERING
-            # ------------------------------------------------------------
-
-            order = np.argsort(train_obj.basis_indices)
-
-            idx_train = np.array(train_obj.basis_indices)
-            y_train_plot = y_train[order]
-
-            # ------------------------------------------------------------
-            # TRUTH ON FULL GRID
-            # ------------------------------------------------------------
-
-            truth = train_obj.residuals[:, train_obj.empirical_indices[time_node]]
-
-            # ------------------------------------------------------------
-            # DIAGNOSTICS
-            # ------------------------------------------------------------
-
-            full_rmse = np.sqrt(
-                np.mean((best_y_predict - truth) ** 2)
+            self._plot_kernel_predictions(
+                kernel_diagnostics=kernel_diagnostics,
+                train_obj=train_obj,
+                scaler_y=scaler_y,
+                y_train=y_train,
+                save_kernel_predictions=save_fig_kernels,
             )
 
-            train_rmse_check = np.sqrt(
-                np.mean(
-                    (
-                        best_y_predict[idx_train]
-                        - truth[idx_train]
-                    ) ** 2
+            self._plot_parity(
+                best_result_dict=result_dict,
+                train_obj=train_obj,
+                save_fig=save_fig_kernels
                 )
-            )
-
-            # ------------------------------------------------------------
-            # PLOT SETUP
-            # ------------------------------------------------------------
-
-            fig_kernel_comparison, (ax1, ax2) = plt.subplots(
-                2, 1,
-                figsize=(12, 8),
-                gridspec_kw={"height_ratios": [3, 1]},
-                sharex=True
-            )
-
-            x_axis = np.arange(len(best_y_predict))
-
-            # ------------------------------------------------------------
-            # TRUE RESIDUALS (FULL GRID)
-            # ------------------------------------------------------------
-
-            ax1.plot(
-                x_axis,
-                truth,
-                color="blue",
-                linewidth=2.5,
-                label="True residuals (full grid)"
-            )
-
-            # ------------------------------------------------------------
-            # TRAINING VALUES
-            # ------------------------------------------------------------
-
-            ax1.scatter(
-                idx_train,
-                truth[idx_train],
-                color="red",
-                s=40,
-                zorder=10,
-                label="Training points"
-            )
-
-            # ------------------------------------------------------------
-            # WORST KERNELS
-            # ------------------------------------------------------------
-            
-            for rank, idx in enumerate(worst_indices):
-
-                y_pred = y_predict_kernels[idx]
-                y_std = y_predict_std_kernels[idx]
-                info = kernel_diagnostics[idx]
-
-                ax1.plot(
-                    x_axis,
-                    y_pred,
-                    linewidth=1,
-                    alpha=0.6,
-                    label=(
-                        f"Worst {rank+1}: "
-                        f"{info['label']} "
-                        f"| score={info['score']:.2e}"
-                    )
-                )
-
-                ax1.fill_between(
-                    x_axis,
-                    y_pred - 1.96 * y_std,
-                    y_pred + 1.96 * y_std,
-                    alpha=0.08
-                )
-
-                error = y_pred - truth
-                ax2.plot(x_axis, error, label=f"Worst {rank+1}: {info['label']}")
-
-
-            # ------------------------------------------------------------
-            # BEST MODEL
-            # ------------------------------------------------------------
-
-            best_idx = int(np.argmax(
-                [d["score"] for d in kernel_diagnostics]
-            ))
-
-            best_info = kernel_diagnostics[best_idx]
-
-            ax1.plot(
-                x_axis,
-                best_y_predict,
-                color="black",
-                linewidth=2.5,
-                label=(
-                    f"Best: {best_info['label']} "
-                    f"| score={best_info['score']:.2e}"
-                )
-            )
-
-            ax1.fill_between(
-                x_axis,
-                best_y_predict - 1.96 * best_y_predict_std,
-                best_y_predict + 1.96 * best_y_predict_std,
-                color="black",
-                alpha=0.12
-            )
-
-            # ------------------------------------------------------------
-            # GP PREDICTION AT TRAINING LOCATIONS
-            # ------------------------------------------------------------
-
-            ax1.scatter(
-                idx_train,
-                best_y_predict[idx_train],  # ← Use this instead!
-                marker="x",
-                color="limegreen",
-                s=80,
-                linewidths=2,
-                zorder=20,
-                label="GP prediction @ training points"
-            )
-
-            error_best = best_y_predict - truth
-            ax2.plot(x_axis, error_best, label=f"Best: {best_info['label']}", color="limegreen", linewidth=2.5)
-
-            # ------------------------------------------------------------
-            # LABELS
-            # ------------------------------------------------------------
-
-            ax1.set_ylabel("Residual")
-            ax2.set_ylabel("Error")
-            ax2.set_xlabel("Parameter grid index")
-
-            ax1.legend(fontsize=8)
-            ax2.legend(fontsize=8)
-
-            ax1.set_title(
-                f"GPR kernel comparison\n"
-                f"node={time_node}\n"
-                f"full RMSE={full_rmse:.3e}, train RMSE={train_rmse_check:.3e}"
-            )
-
-            plt.tight_layout()
-
-            
-
-            # ------------------------------------------------------------
-            # SAVE
-            # ------------------------------------------------------------
-
-            if save_fig_kernels:
-                figname = train_obj.figname(prefix="gp_kernel_comparison",
-                                    directory="Images/Gaussian_kernels/Kernel_comparison",
-                                  include_extra=f"T{time_node}")
-                fig_kernel_comparison.savefig(figname, dpi=300)
-
-
-            # ------------------------------------------------------------
-            # ------------------------------------------------------------
-
-            fig_parity, (ax1, ax2) = plt.subplots(
-                2,
-                1,
-                figsize=(6, 8),
-                gridspec_kw={"height_ratios": [3, 1]},
-                sharex=False
-            )
-
-            # ============================================================
-            # PARITY PLOT (TOP)
-            # ============================================================
-
-            y_true = y_train
-            y_pred = result_dict["train_prediction"]
-
-            ax1.scatter(
-                y_true,
-                y_pred,
-                s=10,
-                alpha=0.6
-            )
-
-            # diagonal reference line
-            minv = min(y_true.min(), y_pred.min())
-            maxv = max(y_true.max(), y_pred.max())
-
-            ax1.plot([minv, maxv], [minv, maxv], 'k--', linewidth=1)
-
-            ax1.set_xlabel("True training values (physical)")
-            ax1.set_ylabel("GP prediction (physical)")
-            ax1.grid(True)
-
-            ax1.set_title(
-                f"GP Fit for best kernel T{time_node}: {best_info['label']}\n"
-                f"RMSE = {result_dict['train_rmse']:.3e} | lml = {best_info['lml']:.3e} | score = {best_info['score']:.3e}"
-            )
-
-            # ============================================================
-            # RESIDUAL PLOT (BOTTOM)
-            # ============================================================
-
-            residuals = y_pred - y_true
-
-            ax2.bar(
-                np.arange(len(residuals)),
-                residuals,
-                color="steelblue",
-                alpha=0.8
-            )
-
-            ax2.axhline(0, color="black", linewidth=1)
-
-            ax2.set_xlabel("Training sample index")
-            ax2.set_ylabel("Residual (pred - true)")
-            ax2.grid(True)
-
-            # optional: tighten view if needed
-            ylim = np.percentile(np.abs(residuals), 95)
-            ax2.set_ylim(-ylim, ylim)
-
-            plt.tight_layout()
-
-            # ------------------------------------------------------------
-            # SAVE
-            # ------------------------------------------------------------
-
-            if save_fig_kernels:
-                figname = train_obj.figname(prefix="gp_parity_residual",
-                                  directory="Images/Gaussian_kernels/Parity_check",
-                                  include_extra=f"T{time_node}")
-                fig_parity.savefig(figname, dpi=300)
 
         # ============================================================
         # RETURN
@@ -1881,7 +1209,203 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         return result_dict
 
 
-    def plot_kernel_diagnostics(
+    def _plot_kernel_predictions(self,
+        kernel_diagnostics,
+        train_obj,
+        scaler_y,
+        y_train,
+        n_worst=5,
+        save_kernel_predictions=False,
+    ):
+        """
+        Plots kernel comparison for GP models and computes best/worst kernels.
+
+        Parameters
+        ----------
+        kernel_diagnostics : list[dict]
+            Output container with kernel results.
+        y_predict_kernels : list[np.ndarray]
+            Full-grid predictions for each kernel.
+        y_predict_std_kernels : list[np.ndarray]
+            Full-grid std predictions for each kernel.
+        train_obj : object
+            Must implement:
+                - load_residuals()
+                - residuals
+                - empirical_indices
+                - basis_indices
+        scaler_y : sklearn-like scaler
+            Used for inverse transform / scaling.
+        y_train : np.ndarray
+            Training targets in original scale.
+        time_node : int / str
+            Identifier for the current time node.
+        n_worst : int
+            Number of worst kernels to display.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
+        best_info : dict
+        """
+
+        # ============================================================
+        # LOAD TRUE VALUES
+        # ============================================================
+        train_obj.load_residuals()
+        time_node = kernel_diagnostics[0]["time_node"]
+        y_true_training_space = train_obj.residuals[:, train_obj.empirical_indices[time_node]]
+
+        # ============================================================
+        # COMPUTE BEST / WORST INDICES
+        # ============================================================
+        scores = np.array([d["score"] for d in kernel_diagnostics])
+
+        best_idx = int(np.argmax(scores))
+
+        worst_indices = np.argsort(scores)[:n_worst]
+        worst_indices = worst_indices[np.argsort(scores[worst_indices])]
+
+        best_info = kernel_diagnostics[best_idx]
+
+        # ============================================================
+        # BEST MODEL PREPARATION
+        # ============================================================
+        best_y_predict = kernel_diagnostics[best_idx]["y_pred"]
+        best_y_predict_std = kernel_diagnostics[best_idx]["y_pred_std"]
+
+        best_y_train_pred = scaler_y.inverse_transform(
+            best_info["y_train_pred"].reshape(-1, 1)
+        ).flatten()
+
+
+        # ============================================================
+        # DIAGNOSTICS
+        # ============================================================
+        full_rmse = np.sqrt(np.mean((best_y_predict - y_true_training_space) ** 2))
+
+        train_rmse_check = np.sqrt(
+            np.mean(
+                (best_y_train_pred - y_true_training_space[train_obj.basis_indices]) ** 2
+            )
+        )
+
+        # ============================================================
+        # PLOT SETUP
+        # ============================================================
+        fig_kernel_predictions, (ax1, ax2) = plt.subplots(
+            2, 1,
+            figsize=(12, 8),
+            gridspec_kw={"height_ratios": [3, 1]},
+            sharex=True
+        )
+
+        x_axis = np.arange(len(best_y_predict))
+
+        # ============================================================
+        # TRUE VALUES
+        # ============================================================
+        ax1.plot(
+            x_axis,
+            y_true_training_space,
+            color="blue",
+            linewidth=2.5,
+            label="True residuals"
+        )
+
+        # ============================================================
+        # TRAINING POINTS
+        # ============================================================
+        ax1.scatter(
+            x_axis[train_obj.basis_indices],
+            y_train,
+            color="red",
+            s=40,
+            zorder=10,
+            label="Training points"
+        )
+
+        # ============================================================
+        # WORST MODELS
+        # ============================================================
+        for rank, idx in enumerate(worst_indices):
+            y_pred = kernel_diagnostics[idx]["y_pred"]
+            y_std = kernel_diagnostics[idx]["y_pred_std"]
+            info = kernel_diagnostics[idx]
+
+            ax1.plot(
+                x_axis,
+                y_pred,
+                linewidth=1,
+                alpha=0.6,
+                label=f"Worst {rank+1}: {info['label']} | score={info['score']:.2e}"
+            )
+
+            ax1.fill_between(
+                x_axis,
+                y_pred - 1.96 * y_std,
+                y_pred + 1.96 * y_std,
+                alpha=0.08
+            )
+
+            error = y_pred - y_true_training_space
+            ax2.plot(x_axis, error, label=f"Worst {rank+1}: {info['label']}")
+
+        # ============================================================
+        # BEST MODEL
+        # ============================================================
+        ax1.plot(
+            x_axis,
+            best_y_predict,
+            color="black",
+            linewidth=2.5,
+            label=f"Best: {best_info['label']} | score={best_info['score']:.2e}"
+        )
+
+        ax1.fill_between(
+            x_axis,
+            best_y_predict - 1.96 * best_y_predict_std,
+            best_y_predict + 1.96 * best_y_predict_std,
+            color="black",
+            alpha=0.12
+        )
+
+        error_best = best_y_predict - y_true_training_space
+        ax2.plot(
+            x_axis,
+            error_best,
+            color="limegreen",
+            linewidth=2.5,
+            label="Best model error"
+        )
+
+        # ============================================================
+        # FINAL LABELS
+        # ============================================================
+        ax1.set_ylabel("Residual")
+        ax2.set_ylabel(r"$y_{pred}$ - $y_{true}$")
+        ax2.set_xlabel("Parameter grid index")
+
+        ax1.set_title(
+            f"GPR kernel comparison\n"
+            f"node={time_node}\n"
+            f"RMSE={full_rmse:.3e}, train RMSE={train_rmse_check:.3e}"
+        )
+
+        ax1.legend(fontsize=8)
+        ax2.legend(fontsize=8)
+
+        plt.tight_layout()
+
+        if save_kernel_predictions:
+            figname = train_obj.figname(prefix="gp_kernel_comparison",
+                                directory="Images/Gaussian_kernels/Kernel_comparison",
+                                include_extra=f"T{time_node}")
+            fig_kernel_predictions.savefig(figname, dpi=300)
+
+        return fig_kernel_predictions, best_info
+
+    def _plot_kernel_diagnostics(
         self,
         kernel_diagnostics,
         train_obj: TrainingSetResults,
@@ -2057,14 +1581,17 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                 )
                 fig_kernel_scores.savefig(figname, dpi=300)
 
-    def plot_best_kernel_error_heatmaps(
-    self,
-    kernel_diagnostics,
-    time_node,
-    train_obj,
-    n_q_slices=3,
-    top_k=2
-    ):
+    def _plot_validation_heatmaps_kernels(
+                                        self,
+                                        time_coupled,
+                                        kernel_diagnostics,
+                                        scaler_x,
+                                        scaler_y,
+                                        time_node,
+                                        train_obj:TrainingSetResults,
+                                        n_q_slices=3,
+                                        top_k=2
+                                        ):
         """
         Heatmaps of relative prediction error for best kernels.
 
@@ -2074,17 +1601,54 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         - 1 colorbar per row (no overlap)
         """
 
-        train_obj.load_residuals()
-
         # ============================================================
-        # DATA
+        # VALIDATION DATA
         # ============================================================
-        X = np.asarray(self.parameter_grid)
-        y_true = np.asarray(train_obj.residuals[:, time_node])
+        # Validation parameter space
+        train_obj_truth_space = TrainingSetResults(
+            **self.result_kwargs_training(
+                property = train_obj.property,
+                ecc_ref_space=self.ecc_ref_space_output,
+                mean_ano_ref_space=self.mean_ano_ref_space_output,
+                mass_ratio_space=self.mass_ratio_space_output,)
+        )
+        X_val = train_obj_truth_space.parameter_grid
 
-        ecc = X[:, 0]
-        l = X[:, 1]
-        q = X[:, 2]
+        # append time as extra dimension for time-coupled regression predictions
+        t = np.full((X_val.shape[0], 1), self.time[train_obj.empirical_indices[time_node]])
+            
+        
+        if time_coupled:
+            # full input matrix for time-coupled regression predictions (all grid points)
+            X_val = np.hstack([
+                X_val,
+                t
+            ])
+
+            
+        X_scaled = scaler_x.transform(X_val)
+        
+        
+        # ------------------------------------------------------------
+        # TRUTH ON FULL REQUESTED GRID
+        # ------------------------------------------------------------
+
+        try:
+            train_obj_truth_space.load_residuals()
+        except Exception as e:
+            print(f"Error loading residuals for full space: {e}")
+            self._calculate_residuals(
+                train_obj=train_obj_truth_space,
+                truncate_at_ISCO=train_obj.truncate_at_ISCO,
+                truncate_at_tmin=train_obj.truncate_at_tmin,
+            )
+
+        truth_residuals = train_obj_truth_space.residuals
+        y_true = truth_residuals[:, train_obj.empirical_indices[time_node]]
+
+        ecc = X_val[:, 0]
+        l = X_val[:, 1]
+        q = X_val[:, 2]
 
         eps = 1e-12
 
@@ -2095,8 +1659,12 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             [d["score"] for d in kernel_diagnostics]
         )[-top_k:][::-1]
 
-        best_kernels = [kernel_diagnostics[i] for i in best_indices]
+        
 
+        best_kernels = [kernel_diagnostics[i] for i in best_indices]
+        # print(f'in func T{time_node}', best_indices[:5])
+        for k in best_kernels:
+            print(k["label"])
         # ============================================================
         # Q SLICES
         # ============================================================
@@ -2163,13 +1731,30 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             all_errors = []
 
             for k in best_kernels:
-                y_pred = k["y_pred"]
-                rel_error = (y_pred - y_true) / (np.abs(y_true) + eps)
-                all_errors.append(rel_error[mask_q])
+                gp = k["gp"]
+                y_pred_scaled, _ = gp.predict(
+                            X_scaled,
+                            return_std=True
+                        )
 
-            all_errors = np.concatenate(all_errors)
-            vmin, vmax = np.nanmin(all_errors), np.nanmax(all_errors)
+                y_pred = scaler_y.inverse_transform(
+                            y_pred_scaled.reshape(-1, 1)
+                        ).flatten()
+                
+                rel_error = np.abs(y_pred - y_true) / (np.abs(y_true) + eps)
+                all_errors.append(rel_error)
+
+                # print(f'T{time_node} ; {k["label"]}: {rel_error[:5]}, {y_true[:5]}')
+
+            # Normalization for heatmap colorbar
+            all_vals_for_norm = np.concatenate(all_errors)
+
+            vmin = np.nanmin(all_vals_for_norm)
+            vmax = np.nanmax(all_vals_for_norm)
+
             norm = Normalize(vmin=vmin, vmax=vmax)
+
+            all_errors = np.array(all_errors)
 
             # --------------------------------------------------------
             # LOOP KERNELS
@@ -2178,12 +1763,12 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
 
                 ax = axes[qi, k_id]
 
-                y_pred = k["y_pred"]
-                rel_error = (y_pred - y_true) / (np.abs(y_true) + eps)
-
+                rel_error = all_errors[k_id]
+                err_vals = rel_error[mask_q]
+                
                 e_vals = ecc[mask_q]
                 l_vals = l[mask_q]
-                err_vals = rel_error[mask_q]
+                
 
                 e_unique = np.unique(e_vals)
                 l_unique = np.unique(l_vals)
@@ -2208,7 +1793,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                     ],
                 )
 
-                ax.set_title(f"k={kernel_diagnostics[k_id]['label']}, q={qv:.3g}")
+                ax.set_title(f"k={k['label']}, q={qv:.3g}")
 
                 ax.xaxis.set_major_formatter(mticker.FormatStrFormatter('%.2f'))
                 ax.yaxis.set_major_formatter(mticker.FormatStrFormatter('%.2f'))
@@ -2230,7 +1815,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                 axes[qi, 0].images[0],
                 cax=cbar_axes[qi]
             )
-            cbar.set_label("Relative error")
+            cbar.set_label(r"$|y_{pred} - y_{true}|$")
 
         # ============================================================
         # FINALIZE
@@ -2242,6 +1827,85 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         pdf.close()
 
         print(self.colored_text(f"Saved kernel error PDF → {filepath}", "blue"))
+
+
+    def _plot_parity(self,
+                    best_result_dict,
+                    train_obj:TrainingSetResults,
+                    save_fig=False,
+                    ):
+        
+        fig_parity, (ax1, ax2) = plt.subplots(
+            2,
+            1,
+            figsize=(6, 8),
+            gridspec_kw={"height_ratios": [3, 1]},
+            sharex=False
+        )
+
+        # ============================================================
+        # PARITY PLOT (TOP)
+        # ============================================================
+
+        y_true = best_result_dict["y_train"]
+        y_pred = best_result_dict["train_prediction"]
+
+        ax1.scatter(
+            y_true,
+            y_pred,
+            s=10,
+            alpha=0.6
+        )
+
+        # diagonal reference line
+        minv = min(y_true.min(), y_pred.min())
+        maxv = max(y_true.max(), y_pred.max())
+
+        ax1.plot([minv, maxv], [minv, maxv], 'k--', linewidth=1)
+
+        ax1.set_xlabel("True training values (physical)")
+        ax1.set_ylabel("GP prediction (physical)")
+        ax1.grid(True)
+
+        ax1.set_title(
+            f"GP Fit for best kernel T{best_result_dict['time_node']}: {best_result_dict['label']}\n"
+            f"RMSE = {best_result_dict['train_rmse']:.3e} | lml = {best_result_dict['lml']:.3e} | score = {best_result_dict['score']:.3e}"
+        )
+
+        # ============================================================
+        # RESIDUAL PLOT (BOTTOM)
+        # ============================================================
+
+        residuals = y_pred - y_true
+
+        ax2.bar(
+            np.arange(len(residuals)),
+            residuals,
+            color="steelblue",
+            alpha=0.8
+        )
+
+        ax2.axhline(0, color="black", linewidth=1)
+
+        ax2.set_xlabel("Training sample index")
+        ax2.set_ylabel(r"$y_{pred} - y_{true}$")
+        ax2.grid(True)
+
+        # optional: tighten view if needed
+        ylim = np.percentile(np.abs(residuals), 95)
+        ax2.set_ylim(-ylim, ylim)
+
+        plt.tight_layout()
+
+        # ------------------------------------------------------------
+        # SAVE
+        # ------------------------------------------------------------
+
+        if save_fig:
+            figname = train_obj.figname(prefix="gp_parity_residual",
+                            directory="Images/Gaussian_kernels/Parity_check",
+                            include_extra=f"T{best_result_dict['time_node']}")
+            fig_parity.savefig(figname, dpi=300)
 
     # def _gaussian_process_regression(self, time_node, training_set, optimized_kernel=None, plot_kernels=False, save_fig_kernels=False):
     #     # Extract X and training data
@@ -2352,9 +2016,11 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                             time_coupled=False, 
                             save_fits_to_file=True, 
                             plot_kernel_errors=False, plot_kernel_predictions=False, save_fig_kernels=False,
-                            plot_GPR_fits=False, save_fig_GPR_fits=False, 
+                            plot_GPR_fits=False, save_fig_GPR_fits=False,
+                            n_worst_pred=5, save_fig_pred=False, 
                             plot_residuals_ecc_evolve=False, save_fig_ecc_evolve=False, 
                             plot_residuals_time_evolve=False, save_fig_time_evolve=False, 
+                            plot_validation_heatmaps=False, n_q_slices_heatmapplot=3, save_fig_heatmaps=False,
                             no_file_load=False
                             ):
 
@@ -2367,7 +2033,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             N_basis_vecs = self.resolve_property(N_basis_vecs, gpr_obj.N_basis_vecs)
             min_greedy_error = self.resolve_property(min_greedy_error, gpr_obj.min_greedy_error)
 
-            if N_basis_vecs is None or min_greedy_error is None:
+            if N_basis_vecs is None and min_greedy_error is None:
                 print('Choose either settings for the amount of basis_vecs OR the minimum greedy error.')
                 sys.exit(1)
 
@@ -2389,7 +2055,10 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                     print(e)
                     traceback.print_exc()
                     # Generate the training set of greedy parameters at empirical nodes
-                    train_obj = self.get_training_set_greedy(property=property, min_greedy_error=min_greedy_error, N_greedy_vecs=N_basis_vecs)
+                    train_obj = self.get_training_set_greedy(
+                        property=property, 
+                        min_greedy_error=min_greedy_error, 
+                        N_greedy_vecs=N_basis_vecs)
             
             print(f"Training set for {property} has {len(train_obj.basis_indices)} basis vectors and {len(train_obj.empirical_indices)} empirical nodes.")
 
@@ -2399,12 +2068,10 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             gpr_obj.gp_models = []
             gpr_obj.kernels = []
 
-            gpr_obj.scaler_x = []
-            gpr_obj.scaler_y = []
-
             gpr_obj.best_lmls = np.zeros(N_nodes)
             gpr_obj.best_train_rmses = np.zeros(N_nodes)
             gpr_obj.best_scores = np.zeros(N_nodes)
+            gpr_obj.fit_times = np.zeros(N_nodes)
             
             print(f'Interpolate {property}...')
 
@@ -2413,7 +2080,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
 
             for node_i in range(N_nodes):
 
-                result = self._gaussian_process_regression_t(
+                best_result = self._gaussian_process_regression_t(
                     time_node=node_i,
                     train_obj=train_obj,
                     optimized_kernel=optimized_kernel,
@@ -2428,19 +2095,23 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                 # --------------------------------------------
 
                 gpr_obj.gp_models.append(
-                    result["gp"]
+                    best_result["gp"]
                 )
 
                 gpr_obj.kernels.append(
-                    result["kernel"]
+                    best_result["kernel"]
+                )
+
+                gpr_obj.labels.append(
+                    best_result["label"]
                 )
 
                 gpr_obj.scaler_x.append(
-                    result["scaler_x"]
+                    best_result["scaler_x"]
                 )
-
+                
                 gpr_obj.scaler_y.append(
-                    result["scaler_y"]
+                    best_result["scaler_y"]
                 )
 
                 # --------------------------------------------
@@ -2448,39 +2119,72 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                 # --------------------------------------------
                 # Log-Marginal likelihood
                 gpr_obj.best_lmls[node_i] = (
-                    result["lml"]
+                    best_result["lml"]
                 )
 
                 gpr_obj.best_train_rmses[node_i] = (
-                    result["train_rmse"]
+                    best_result["train_rmse"]
                 )
 
                 gpr_obj.best_scores[node_i] = (
-                    result["score"]
+                    best_result["score"]
+                )
+
+                gpr_obj.fit_times[node_i] = (
+                    best_result["fit_time"]
                 )
 
                 # --------------------------------------------
                 # Warm-start next empirical node
                 # --------------------------------------------
-                optimized_kernel = result["kernel"]
+                optimized_kernel = best_result["kernel"]
 
             end2 = time.time()
             print(f'time full GPR = {end2 - start2}')
 
+            # If save_fits_to_file is True, save the GPR fits to a file
+            if save_fits_to_file:
+                # Save the GPR fits to a file
+                gpr_obj.save_gpr_obj()
 
         # If plot_fits is True, plot the GPR fits
         if plot_GPR_fits:
-            self._plot_GPR_fits(train_obj=train_obj, gpr_obj=gpr_obj, gaussian_fit=None, training_set=None, lml_fits=None, save_fig_fits=save_fig_GPR_fits)
+            # self._plot_GPR_fits(
+            #     train_obj=train_obj, 
+            #     gpr_obj=gpr_obj, 
+            #     gaussian_fit=None, 
+            #     training_set=None, 
+            #     lml_fits=None, 
+            #     save_fig_fits=save_fig_GPR_fits
+            #     )
 
-        # If save_fits_to_file is True, save the GPR fits to a file
-        if save_fits_to_file:
-            # Save the GPR fits to a file
-            gpr_obj.save_gpr_obj()
+            self._plot_fit_predictions(
+                gpr_obj=gpr_obj,
+                train_obj=train_obj,
+                n_worst=n_worst_pred,
+                save_kernel_predictions=save_fig_pred
+            )
+
+        if plot_validation_heatmaps:
+            self._plot_validation_heatmaps(
+                time_coupled=time_coupled,
+                gpr_obj=gpr_obj,
+                train_obj=train_obj,
+                n_q_slices=n_q_slices_heatmapplot,
+                save_fig=save_fig_heatmaps,
+                )
+        
         
         # If plot_residuals_ecc_evolve or plot_residuals_time_evolve is True, plot the residuals
         if (plot_residuals_ecc_evolve is True) or (plot_residuals_time_evolve is True):
             # Plot residuals
-            self._plot_residuals(train_obj=train_obj, plot_eccentric_evolv=plot_residuals_ecc_evolve, save_fig_eccentric_evolve=save_fig_ecc_evolve, plot_time_evolve=plot_residuals_time_evolve, save_fig_time_evolve=save_fig_time_evolve)
+            self._plot_residuals(
+                train_obj=train_obj, 
+                plot_eccentric_evolv=plot_residuals_ecc_evolve, 
+                save_fig_eccentric_evolve=save_fig_ecc_evolve, 
+                plot_time_evolve=plot_residuals_time_evolve, 
+                save_fig_time_evolve=save_fig_time_evolve
+                )
 
         return gpr_obj
     
@@ -2518,7 +2222,16 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                 save_fits_to_file_iter = save_fits_to_file
 
             # Fit the basis vecs with GPR and save fits file at last iteration
-            gpr_obj = self.fit_to_training_set(property, N_basis_vecs=len(train_obj.basis_indices), training_set=train_obj.residual_basis, no_file_load=True, save_fits_to_file=save_fits_to_file_iter, plot_kernels=plot_kernels, plot_GPR_fits=plot_GPR_fits, save_fig_kernels=save_fig_kernels, save_fig_GPR_fits=save_fig_GPR_fits, plot_residuals_ecc_evolve=plot_residuals_ecc_evolve, save_fig_ecc_evolve=save_fig_ecc_evolve, plot_residuals_time_evolve=plot_residuals_time_evolve, save_fig_time_evolve=save_fig_time_evolve)
+            gpr_obj = self.fit_to_training_set(
+                property, 
+                N_basis_vecs=len(train_obj.basis_indices), 
+                training_set=train_obj.residual_basis, 
+                no_file_load=True, 
+                save_fits_to_file=save_fits_to_file_iter, 
+                save_fig_kernels=save_fig_kernels, plot_kernels=plot_kernels, 
+                plot_GPR_fits=plot_GPR_fits, save_fig_GPR_fits=save_fig_GPR_fits, 
+                plot_residuals_ecc_evolve=plot_residuals_ecc_evolve, save_fig_ecc_evolve=save_fig_ecc_evolve, 
+                plot_residuals_time_evolve=plot_residuals_time_evolve, save_fig_time_evolve=save_fig_time_evolve)
 
             # Load in property residuals of full parameter space dataset
             try:
@@ -2555,7 +2268,11 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         return gpr_obj
 
 
-    def _plot_GPR_fits(self, train_obj:TrainingSetResults, gpr_obj:GPRFitResults, gaussian_fit=None, training_set=None, lml_fits=None, save_fig_fits=False):
+    def _plot_GPR_fits(self, 
+                       train_obj:TrainingSetResults, 
+                       gpr_obj:GPRFitResults, 
+                       save_fig_fits=False
+                       ):
 
         if gpr_obj.mean_predictions is None:
             try:
@@ -2684,7 +2401,833 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             figname = gpr_obj.figname(prefix="GPR_fits", ext="png", directory="Images/Gaussian_fits")
             fig_residual_training_fit.savefig(figname)
 
-    
+    def _plot_validation_heatmaps(
+        self,
+        time_coupled,
+        gpr_obj:GPRFitResults,
+        train_obj:TrainingSetResults,
+        n_q_slices=3,
+        save_fig=False,
+    ):
+        """
+        Heatmaps of relative prediction error for kernels.
+
+        Layout:
+        - rows = kernels (gp models)
+        - columns = q-slices
+        - 1 colorbar per row
+        """
+
+        # ============================================================
+        # VALIDATION GRID
+        # ============================================================
+        train_obj_truth_space = TrainingSetResults(
+            **self.result_kwargs_training(
+                property=gpr_obj.property,
+                ecc_ref_space=self.ecc_ref_space_output,
+                mean_ano_ref_space=self.mean_ano_ref_space_output,
+                mass_ratio_space=self.mass_ratio_space_output,
+            )
+        )
+
+        X_val = train_obj_truth_space.parameter_grid
+
+        
+        # ============================================================
+        # LOAD TRUTH
+        # ============================================================
+
+        try:
+            train_obj_truth_space.load_residuals()
+        except Exception:
+            self._calculate_residuals(
+                train_obj=train_obj_truth_space,
+                truncate_at_ISCO=gpr_obj.truncate_at_ISCO,
+                truncate_at_tmin=gpr_obj.truncate_at_tmin,
+            )
+
+        ecc = X_val[:, 0]
+        l = X_val[:, 1]
+        q = X_val[:, 2]
+
+        eps = 1e-12
+
+        # ============================================================
+        # Q SLICES
+        # ============================================================
+        q_vals = np.unique(q)
+        n_q_slices = min(n_q_slices, len(q_vals))
+        q_slices = np.linspace(0, len(q_vals) - 1, n_q_slices).astype(int)
+        q_slices = q_vals[q_slices]
+
+        print(f"Selected q slices: {q_slices}")
+
+        # ============================================================
+        # PRECOMPUTE ALL ERRORS (IMPORTANT FIX)
+        # ============================================================
+        n_fits = len(gpr_obj.gp_models)
+        truth_residuals = train_obj_truth_space.residuals
+
+        all_errors = np.zeros((n_fits, truth_residuals.shape[0]))
+        all_errors_global = []
+
+        for i, gp in enumerate(gpr_obj.gp_models):
+
+            if time_coupled:
+
+                # ========================================================
+                # TIME IS A FEATURE → must evaluate multiple times
+                # ========================================================
+
+                rel_errors_time = []
+
+                for time_node in range(n_fits):
+
+                    t = np.full(
+                        (X_val.shape[0], 1),
+                        self.time[train_obj.empirical_indices[time_node]],
+                    )
+
+                    X_val_time = np.hstack([X_val, t])
+
+                    X_scaled = gpr_obj.scaler_x[i].transform(X_val_time)
+
+                    y_true = truth_residuals[:, train_obj.empirical_indices[time_node]]
+
+                    y_pred_scaled, _ = gp.predict(X_scaled, return_std=True)
+
+                    y_pred = gpr_obj.scaler_y[i].inverse_transform(
+                        y_pred_scaled.reshape(-1, 1)
+                    ).flatten()
+
+                    rel_error = np.abs(y_pred - y_true) / (np.abs(y_true) + eps)
+
+                    rel_errors_time.append(rel_error)
+
+                # collapse time dimension (or store full tensor if needed)
+                rel_error = np.mean(rel_errors_time, axis=0)
+
+            else:
+
+                # ========================================================
+                # TIME IS MODEL INDEX → original logic
+                # ========================================================
+
+                X_scaled = gpr_obj.scaler_x[i].transform(X_val)
+
+                y_true = truth_residuals[:, train_obj.empirical_indices[i]]
+
+                y_pred_scaled, _ = gp.predict(X_scaled, return_std=True)
+
+                y_pred = gpr_obj.scaler_y[i].inverse_transform(
+                    y_pred_scaled.reshape(-1, 1)
+                ).flatten()
+
+                rel_error = np.abs(y_pred - y_true) / (np.abs(y_true) + eps)
+                print(f'T{i} ; {gpr_obj.labels[i]}: {rel_error[:5]}, {y_true[:5]}')
+
+            all_errors[i] = rel_error
+            all_errors_global.append(rel_error)
+            # print(3, all_errors, '\n', all_errors_global)
+
+        norm = LogNorm(
+            vmin=np.nanmin(all_errors_global),
+            vmax=np.nanmax(all_errors_global),
+        )
+
+        # ============================================================
+        # GRID
+        # ============================================================
+        fig = plt.figure(
+            figsize=(5 * n_q_slices + 1.2, 4 * n_fits)
+        )
+
+        gs = gridspec.GridSpec(
+            n_fits,
+            n_q_slices + 1,
+            width_ratios=[1] * n_q_slices + [0.05],
+            wspace=0.25,
+            hspace=0.35,
+        )
+
+        axes = np.empty((n_fits, n_q_slices), dtype=object)
+        cbar_axes = []
+
+        for i in range(n_fits):
+            for j in range(n_q_slices):
+                axes[i, j] = fig.add_subplot(gs[i, j])
+
+            cbar_axes.append(fig.add_subplot(gs[i, -1]))
+
+        # ============================================================
+        # PLOTTING
+        # ============================================================
+        for qi, qv in enumerate(q_slices):
+
+            mask_q = np.isclose(q, qv)
+
+            for gp_id in range(n_fits):
+
+                ax = axes[gp_id, qi]
+
+                rel_error = all_errors[gp_id]
+                # print(f'in err ; T{gp_id}', gpr_obj.labels[gp_id])
+                err_vals = rel_error[mask_q]
+
+                e_vals = ecc[mask_q]
+                l_vals = l[mask_q]
+
+                e_unique = np.unique(e_vals)
+                l_unique = np.unique(l_vals)
+
+                Z = np.full((len(e_unique), len(l_unique)), np.nan)
+
+                for k in range(len(e_vals)):
+                    ei = np.where(e_unique == e_vals[k])[0][0]
+                    li = np.where(l_unique == l_vals[k])[0][0]
+                    Z[ei, li] = err_vals[k]
+
+                im = ax.imshow(
+                    Z,
+                    aspect="auto",
+                    origin="lower",
+                    norm=norm,
+                    extent=[
+                        l_unique.min() if len(l_unique) > 1 else l_unique.min() - 1e-3,
+                        l_unique.max() if len(l_unique) > 1 else l_unique.max() + 1e-3,
+                        e_unique.min() if len(e_unique) > 1 else e_unique.min() - 1e-3,
+                        e_unique.max() if len(e_unique) > 1 else e_unique.max() + 1e-3
+                    ],
+                )
+                ax.set_title(f"T{gp_id}: k={gpr_obj.labels[gp_id]}, q={qv:.3g}")
+
+                import matplotlib.ticker as mticker
+
+                ax.xaxis.set_major_locator(mticker.MaxNLocator(4))
+                ax.xaxis.set_major_formatter(mticker.ScalarFormatter(useMathText=True))
+                ax.ticklabel_format(style='sci', axis='x', scilimits=(-3, 3))
+
+                if qi == n_q_slices - 1:
+                    ax.set_xlabel("l")
+                else:
+                    ax.set_xlabel("")
+
+                if gp_id == 0:
+                    ax.set_ylabel("e")
+                else:
+                    ax.set_yticklabels([])
+
+        # ============================================================
+        # COLORBARS (FIXED: ONE PER ROW)
+        # ============================================================
+        for i in range(n_fits):
+
+            cbar = fig.colorbar(
+                axes[i, 0].images[0],
+                cax=cbar_axes[i],
+            )
+            cbar.set_label("Relative error")
+
+        # ============================================================
+        # FINALIZE
+        # ============================================================
+        fig.tight_layout()
+
+        if save_fig:
+            filepath = gpr_obj.filename(
+                    prefix="kernel_error_heatmaps",
+                    ext="pdf",
+                    directory="Images/Fit_Diagnostics/Heatmaps",
+                )
+            pdf = PdfPages(filepath)
+
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
+            pdf.close()
+
+            print(self.colored_text(f"Saved kernel error PDF → {filepath}", "blue"))
+
+    def _plot_fit_predictions(self,
+        gpr_obj:GPRFitResults,
+        train_obj:TrainingSetResults,
+        n_worst=5,
+        save_kernel_predictions=False,
+        ):
+        """
+        Plots kernel comparison for GP models and computes best/worst kernels.
+
+        Parameters
+        ----------
+        kernel_diagnostics : list[dict]
+            Output container with kernel results.
+        y_predict_kernels : list[np.ndarray]
+            Full-grid predictions for each kernel.
+        y_predict_std_kernels : list[np.ndarray]
+            Full-grid std predictions for each kernel.
+        train_obj : object
+            Must implement:
+                - load_residuals()
+                - residuals
+                - empirical_indices
+                - basis_indices
+        scaler_y : sklearn-like scaler
+            Used for inverse transform / scaling.
+        y_train : np.ndarray
+            Training targets in original scale.
+        time_node : int / str
+            Identifier for the current time node.
+        n_worst : int
+            Number of worst kernels to display.
+
+        Returns
+        -------
+        fig : matplotlib.figure.Figure
+        best_info : dict
+        """
+
+                # ============================================================
+        # VALIDATION GRID
+        # ============================================================
+        train_obj_truth_space = TrainingSetResults(
+            **self.result_kwargs_training(
+                property=gpr_obj.property,
+                ecc_ref_space=self.ecc_ref_space_output,
+                mean_ano_ref_space=self.mean_ano_ref_space_output,
+                mass_ratio_space=self.mass_ratio_space_output,
+            )
+        )
+
+        X_val = train_obj_truth_space.parameter_grid
+
+        
+        # ============================================================
+        # LOAD TRUTH
+        # ============================================================
+
+        try:
+            train_obj_truth_space.load_residuals()
+        except Exception:
+            self._calculate_residuals(
+                train_obj=train_obj_truth_space,
+                truncate_at_ISCO=gpr_obj.truncate_at_ISCO,
+                truncate_at_tmin=gpr_obj.truncate_at_tmin,
+            )
+
+        # ============================================================
+        # PLOT SETUP
+        # ============================================================
+        fig_kernel_predictions, (ax1, ax2) = plt.subplots(
+            2, 1,
+            figsize=(12, 8),
+            gridspec_kw={"height_ratios": [3, 1]},
+            sharex=True
+        )
+
+        eps = 1e-12
+
+        worst_gp_indices = np.argsort(gpr_obj.best_scores)[-n_worst:][::-1]
+
+        for time_node in worst_gp_indices:
+            truth_residuals = train_obj_truth_space.residuals
+            y_true = truth_residuals[:, train_obj.empirical_indices[time_node]]
+
+            gp = gpr_obj.gp_models[time_node]
+            X_scaled = gpr_obj.scaler_x[time_node].transform(X_val)
+
+            y_pred_scaled, _ = gp.predict(
+                        X_scaled,
+                        return_std=True
+                    )
+
+            y_pred = gpr_obj.scaler_y[time_node].inverse_transform(
+                        y_pred_scaled.reshape(-1, 1)
+                    ).flatten()
+            
+            # ============================================================
+            # COMPUTE RELATIVE ERROR
+            # ============================================================
+        
+
+            x_axis = np.arange(len(y_pred))
+
+            # ============================================================
+            # TRUE VALUES
+            # ============================================================
+            ax1.plot(
+                x_axis,
+                y_true,
+                color="blue",
+                linewidth=2.5,
+                linestyle='dashed',
+                label="Truth"
+            )
+
+            # ============================================================
+            # TRAINING POINTS
+            # ============================================================
+            y_train = np.squeeze(train_obj.training_set.T[time_node])
+
+            ax1.scatter(
+                x_axis[train_obj.basis_indices],
+                y_train,
+                color="red",
+                s=40,
+                zorder=10,
+                label="Training points"
+            )
+
+
+            ax1.plot(
+                x_axis,
+                y_pred,
+                linewidth=1,
+                alpha=0.6,
+                
+                label=f"Prediction"
+            )
+            
+            rel_error = np.abs(y_pred - y_true) / (np.abs(y_true) + eps)
+
+            ax2.plot(
+                x_axis,
+                rel_error,
+                linewidth=2.5,
+                label="Relative error"
+            )
+
+        # ============================================================
+        # FINAL LABELS
+        # ============================================================
+        ax1.set_ylabel("Residual")
+        ax2.set_ylabel(r"$y_{pred}$ - $y_{true}$")
+        ax2.set_xlabel("Parameter grid index")
+
+        ax1.set_title(
+            f"Worst {n_worst} predictions and their true residuals"
+        )
+
+        ax1.legend(fontsize=8)
+        ax2.legend(fontsize=8)
+
+        plt.tight_layout()
+
+        if save_kernel_predictions:
+            figname = train_obj.figname(prefix="best_gp",
+                                directory="Images/Fit_Diagnostics/Predictions",
+            )
+            fig_kernel_predictions.savefig(figname, dpi=300)
+
+
+
+    # def _plot_validation_heatmaps(self,
+    #                             time_coupled,
+    #                             gpr_obj:GPRFitResults,
+    #                             n_q_slices=3,
+    #                             ):
+    #     """
+    #     Heatmaps of relative prediction error for best kernels.
+
+    #     Layout:
+    #     - rows = q-slices
+    #     - columns = kernels
+    #     - 1 colorbar per row (no overlap)
+    #     """
+
+    #     # ============================================================
+    #     # VALIDATION DATA
+    #     # ============================================================
+    #     # Validation parameter space
+    #     train_obj_truth_space = TrainingSetResults(
+    #         **self.result_kwargs_training(
+    #             property = gpr_obj.property,
+    #             ecc_ref_space=self.ecc_ref_space_output,
+    #             mean_ano_ref_space=self.mean_ano_ref_space_output,
+    #             mass_ratio_space=self.mass_ratio_space_output,)
+    #     )
+    #     X_val = train_obj_truth_space.parameter_grid
+
+    #     for time_node in range(len(train_obj.empirical_indices)):
+    #         # append time as extra dimension for time-coupled regression predictions
+    #         t = np.full((X_val.shape[0], 1), self.time[train_obj.empirical_indices[time_node]])
+            
+        
+    #     if time_coupled:
+    #         # full input matrix for time-coupled regression predictions (all grid points)
+    #         X_val = np.hstack([
+    #             X_val,
+    #             t
+    #         ])
+        
+        
+    #     # ------------------------------------------------------------
+    #     # TRUTH ON FULL REQUESTED GRID
+    #     # ------------------------------------------------------------
+
+    #     try:
+    #         train_obj_truth_space.load_residuals()
+    #     except Exception as e:
+    #         print(f"Error loading residuals for full space: {e}")
+    #         self._calculate_residuals(
+    #             train_obj=train_obj_truth_space,
+    #             truncate_at_ISCO=gpr_obj.truncate_at_ISCO,
+    #             truncate_at_tmin=gpr_obj.truncate_at_tmin,
+    #         )
+
+    #     ecc = X_val[:, 0]
+    #     l = X_val[:, 1]
+    #     q = X_val[:, 2]
+
+    #     eps = 1e-12
+
+    #     # ============================================================
+    #     # BEST KERNELS
+    #     # ============================================================
+    #     best_indices = np.argsort(
+    #         gpr_obj.best_scores
+    #     )
+
+    #     # best_kernels = [kernel_diagnostics[i] for i in best_indices]
+
+    #     # ============================================================
+    #     # Q SLICES
+    #     # ============================================================
+    #     q_vals = np.unique(q)
+    #     if n_q_slices > len(q_vals):
+    #         n_q_slices = len(q_vals)
+    #     q_indices = np.linspace(0, len(q_vals) - 1, n_q_slices).astype(int)
+    #     q_slices = q_vals[q_indices]
+
+    #     print(f"Selected q slices: {q_slices}")
+
+    #     # ============================================================
+    #     # OUTPUT FILE
+    #     # ============================================================
+    #     filepath = gpr_obj.filename(
+    #         prefix="kernel_error_heatmaps",
+    #         ext="pdf",
+    #         directory="Images/Fit_Diagnostics/Heatmaps",
+    #         include_greedy=True,
+    #     )
+
+    #     os.makedirs(os.path.dirname(filepath), exist_ok=True)
+
+    #     pdf = PdfPages(filepath)
+
+    #     n_fits = len(gpr_obj.gp_models)
+    #     n_q = len(q_slices)
+
+    #     # ============================================================
+    #     # FIGURE + GRID SPEC
+    #     # ============================================================
+    #     fig = plt.figure(
+    #         figsize=(5 * n_q + 1.2, 4 * n_q)
+    #     )
+
+    #     gs = gridspec.GridSpec(
+    #         n_fits,
+    #         n_q + 1,  # extra column for colorbar
+    #         width_ratios=[1] * n_q + [0.05],
+    #         wspace=0.25,
+    #         hspace=0.35
+    #     )
+
+    #     axes = np.empty((n_fits, n_q), dtype=object)
+    #     cbar_axes = []
+
+    #     for qi in range(n_q):
+    #         for gp_id in range(n_fits):
+    #             axes[gp_id, qi] = fig.add_subplot(gs[gp_id, qi])
+
+    #         cbar_axes.append(fig.add_subplot(gs[gp_id, -1]))
+
+    #     # ============================================================
+    #     # LOOP OVER Q SLICES
+    #     # ============================================================
+    #     all_errors_global = []
+
+    #     for qi, qv in enumerate(q_slices):
+
+    #         mask_q = np.isclose(q, qv)
+
+    #         # --------------------------------------------------------
+    #         # compute row normalization (shared across kernels)
+    #         # --------------------------------------------------------
+    #         all_errors = []
+
+    #         truth_residuals = train_obj_truth_space.residuals
+    #         for i, gp in enumerate(gpr_obj.gp_models):
+    #             X_scaled = gpr_obj.scaler_x[i].transform(X_val)
+        
+    #             y_true = truth_residuals[:, train_obj.empirical_indices[i]]
+
+    #             y_pred_scaled, _ = gp.predict(
+    #                         X_scaled,
+    #                         return_std=True
+    #                     )
+
+    #             y_pred = gpr_obj.scaler_y[i].inverse_transform(
+    #                         y_pred_scaled.reshape(-1, 1)
+    #                     ).flatten()
+                
+    #             rel_error = (y_pred - y_true) / (np.abs(y_true) + eps)
+    #             all_errors.append(rel_error)
+    #             all_errors_global.append(rel_error)
+
+    #         all_errors_global = np.concatenate(all_errors_global)
+
+    #         norm = Normalize(
+    #             vmin=np.nanmin(all_errors_global),
+    #             vmax=np.nanmax(all_errors_global)
+    #         )
+
+    #         # --------------------------------------------------------
+    #         # LOOP KERNELS
+    #         # --------------------------------------------------------
+    #         for gp_id in range(n_fits):
+
+    #             ax = axes[gp_id, qi]
+
+    #             rel_error = all_errors[gp_id]
+    #             err_vals = rel_error[mask_q]
+                
+    #             e_vals = ecc[mask_q]
+    #             l_vals = l[mask_q]
+                
+
+    #             e_unique = np.unique(e_vals)
+    #             l_unique = np.unique(l_vals)
+
+    #             Z = np.full((len(e_unique), len(l_unique)), np.nan)
+
+    #             for i in range(len(e_vals)):
+    #                 ei = np.where(e_unique == e_vals[i])[0][0]
+    #                 li = np.where(l_unique == l_vals[i])[0][0]
+    #                 Z[ei, li] = err_vals[i]
+
+    #             im = ax.imshow(
+    #                 Z,
+    #                 aspect="auto",
+    #                 origin="lower",
+    #                 norm=norm,
+    #                 extent=[
+    #                     l_unique.min() if len(l_unique) > 1 else l_unique.min() - 1e-3,
+    #                     l_unique.max() if len(l_unique) > 1 else l_unique.max() + 1e-3,
+    #                     e_unique.min() if len(e_unique) > 1 else e_unique.min() - 1e-3,
+    #                     e_unique.max() if len(e_unique) > 1 else e_unique.max() + 1e-3
+    #                 ],
+    #             )
+
+    #             ax.set_title(f"k={gpr_obj.labels[gp_id]}, q={qv:.3g}")
+
+    #             ax.xaxis.set_major_formatter(mticker.FormatStrFormatter('%.2f'))
+    #             ax.yaxis.set_major_formatter(mticker.FormatStrFormatter('%.2f'))
+
+    #             if qi == n_q - 1:
+    #                 ax.set_xlabel("l")
+    #             else:
+    #                 ax.set_xticklabels([])
+
+    #             if gp_id == 0:
+    #                 ax.set_ylabel("e")
+    #             else:
+    #                 ax.set_yticklabels([])
+
+    #         # ========================================================
+    #         # COLORBAR (PER ROW, NO OVERLAP)
+    #         # ========================================================
+    #         cbar = fig.colorbar(
+    #             axes[qi, 0].images[0],
+    #             cax=cbar_axes[qi]
+    #         )
+    #         cbar.set_label("Relative error")
+
+    #     # ============================================================
+    #     # FINALIZE
+    #     # ============================================================
+    #     fig.tight_layout()
+
+    #     pdf.savefig(fig, bbox_inches="tight")
+    #     plt.close(fig)
+    #     pdf.close()
+
+    #     print(self.colored_text(f"Saved kernel error PDF → {filepath}", "blue"))
+
+
+    def _plot_best_fit_diagnostics(
+        self,
+        gpr_obj:GPRFitResults,
+        best_score=None,
+        save_fig=False
+    ):
+        """
+        KERNEL DIAGNOSTICS PLOTTING MODES FOR BEST FIT KERNELS
+
+        This function can display kernel performance in two different ways:
+
+        ----------------------------------------------------------------------
+        1. RAW MODE ("raw")
+        ----------------------------------------------------------------------
+
+        In raw mode, the plot shows the actual values produced by the model:
+
+        - Log Marginal Likelihood (LML)
+        - Train RMSE (prediction error)
+        - Score (combined selection metric)
+
+        These values are shown exactly as computed by the Gaussian Process.
+
+        What this means:
+        - LML is the true model evidence from the GP
+        - RMSE is the actual prediction error on training data
+        - Score is computed directly from these raw values
+
+        Use this mode when:
+        - You want physical or numerical interpretation
+        - You are debugging model behavior
+        - You want to understand absolute performance
+
+        ----------------------------------------------------------------------
+
+        2. Z-SCORE MODE ("zscore")
+        ----------------------------------------------------------------------
+
+        In z-score mode, values are transformed into a standardized scale
+        so they can be compared fairly across different magnitudes.
+
+        A z-score means:
+            how far a value is from the average, measured in standard deviations.
+
+        For example:
+            z = 0   → exactly average performance
+            z = +2  → much better than average
+            z = -2  → much worse than average
+
+        In this mode:
+
+        - LML is converted into lml_z
+        - RMSE is converted into rmse_z
+        - Score is computed using these normalized values
+
+        This makes different metrics comparable on the same scale.
+
+        Use this mode when:
+        - You are selecting the best kernel
+        - You want fair comparison between metrics with different units
+        - You care about ranking rather than physical meaning
+
+        ----------------------------------------------------------------------
+
+        SUMMARY
+        ----------------------------------------------------------------------
+
+        - "raw" mode = actual physical / numerical values
+        - "zscore" mode = normalized values showing relative performance
+        """
+        n = len(gpr_obj.labels)
+        labels = []
+        for i, l in enumerate(gpr_obj.labels):
+            labels.append(f"{l} (T{i})")
+
+        x = np.arange(len(labels))
+
+        # ============================================================
+        # SELECT DATA MODE
+        # ============================================================
+
+        lmls = gpr_obj.best_lmls
+        rmses = gpr_obj.best_train_rmses
+        scores = gpr_obj.best_scores
+
+        lml_label = "Log Marginal Likelihood"
+        rmse_label = "Train RMSE"
+        score_label = "Score (Norm[LML] - 0.5 * Norm[RMSE])"
+                
+        kernel_fit_times = gpr_obj.fit_times
+        n_plots = 4
+
+        fig_kernel_scores, axes = plt.subplots(
+            n_plots,
+            1,
+            figsize=(14, 4.5 * n_plots),
+            sharex=True,
+            constrained_layout=True
+        )
+
+        # ============================================================
+        # 1. LML
+        # ============================================================
+        ax = axes[0]
+        ax.plot(x, lmls, marker="o", color="tab:blue")
+        ax.set_ylabel(lml_label)
+        ax.set_title(f"Kernel diagnostics for all nodes")
+
+        ax.axhline(np.mean(lmls), linestyle="--", color="gray", label="mean")
+        ax.axhline(np.max(lmls), linestyle=":", color="green", label="best")
+
+        ax.legend()
+
+        # ============================================================
+        # 2. RMSE
+        # ============================================================
+        ax = axes[1]
+        ax.plot(x, rmses, marker="o", color="tab:orange")
+        ax.set_ylabel(rmse_label)
+
+        ax.axhline(np.mean(rmses), linestyle="--", color="gray", label="mean")
+        ax.axhline(np.min(rmses), linestyle=":", color="green", label="best")
+
+        ax.legend()
+
+        # ============================================================
+        # 3. SCORE
+        # ============================================================
+        ax = axes[2]
+        ax.plot(x, scores, marker="o", color="tab:purple")
+        ax.set_ylabel(score_label)
+
+        ax.axhline(np.mean(scores), linestyle="--", color="gray", label="mean")
+        ax.axhline(np.max(scores), linestyle=":", color="green", label="best")
+
+        if best_score is not None:
+            ax.axhline(best_score, linestyle="--", color="black", label="selected best")
+
+        ax.legend()
+
+        # ============================================================
+        # 4. FIT TIME
+        # ============================================================
+        ax = axes[3]
+
+        times = kernel_fit_times
+
+        ax.plot(x, times, marker="o", color="tab:red")
+        ax.set_ylabel("Fit time (s)")
+        ax.set_xlabel("Kernel")
+
+        ax.set_yscale("log")
+
+        ax.axhline(np.median(times), linestyle="--", color="gray", label="median")
+        ax.axhline(np.min(times), linestyle=":", color="green", label="fastest")
+
+        ax.legend()
+
+        # ============================================================
+        # X LABELS
+        # ============================================================
+        axes[-1].set_xticks(x)
+        axes[-1].set_xticklabels(labels, rotation=45, ha="right")
+
+        plt.tight_layout()
+
+        if save_fig:
+                figname = gpr_obj.figname(
+                    prefix="fit_diagnostics",
+                    ext="png",
+                    directory="Images/Fit_Diagnostics/Errors",
+                    include_greedy=True,
+                )
+                fig_kernel_scores.savefig(figname, dpi=300)
+
 
     def compute_B_matrix(self, train_obj:TrainingSetResults, save_matrix_to_file=True):
         """
@@ -2743,47 +3286,86 @@ duration = 4 # seconds
 time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
 
 gt = Generate_Offline_Surrogate(time_array=time_array, 
-                                ecc_ref_parameterspace=np.linspace(0.001, 0.1, num=80),
+                                ecc_ref_parameterspace=np.linspace(0.001, 0.3, num=80),
                                 mean_ano_parameterspace=[0],
                                 mass_ratio_parameterspace=[1],
                                 chi1_parameterspace=[0],
                                 chi2_parameterspace=[0],
-                                M_output_wfs_per_dimension=150, 
-                                min_greedy_error_amp=1e-8,
+                                sampling_step_output=0.001,
+                                min_greedy_error_amp=1e-6,
                                 min_greedy_error_phase=1e-6,
-                                minimum_spacing_greedy=0.003, 
+                                # N_basis_vecs_amp=60,
+                                # N_basis_vecs_phase=60,
                                 training_set_selection='greedy')
 
-"""
-CHECK MY NOTES ON WHAST TO DO NEXT! TODO.txt file!
-"""
 # train_obj_p = gt._get_training_obj('phase')
 
 # gt.generate_property_dataset(train_obj=train_obj_p, 
 #                             #  plot_residuals_eccentric_evolve=True,
 #                             #  plot_residuals_time_evolve=True,
 #                              )
-# gt.get_training_set_greedy(property='phase', 
-#                            min_greedy_error=1e-8, 
-#                         #    plot_greedy_error=True,
-#                         #    plot_training_set=True,
-#                         #    plot_emp_nodes_on_basis=True
-#                         )
+
+# train_amp = gt.get_training_set_greedy(
+#     property='amplitude', 
+#     max_tree_depth=0,
+#     save_greedy_errors=False,
+#     save_orthonormal_basis=False,
+#     save_train_obj=False,
+#     # plot_training_set=True, 
+#     # plot_residuals_time=True,
+#     plot_greedy_error=True,
+#     # save_fig_training_set=True,
+#     # plot_emp_nodes_on_basis=True,
+#     # save_fig_emp_nodes_on_basis=True,
+#     plot_basis_indices=True,
+#     show_legend_ts=True
+#     )
+
+# train_phase = gt.get_training_set_greedy(
+#     property='phase', 
+#     max_tree_depth=0,
+#     save_greedy_errors=False,
+#     save_orthonormal_basis=False,
+#     save_train_obj=False,
+#     # plot_training_set=True, 
+#     # plot_residuals_time=True,
+#     plot_greedy_error=True,
+#     # save_fig_training_set=True,
+#     # plot_emp_nodes_on_basis=True,
+#     # save_fig_emp_nodes_on_basis=True,
+#     plot_basis_indices=True,
+#     show_legend_ts=True
+#     )
 
 # plt.show()
 gt.fit_to_training_set('amplitude', 
-                       min_greedy_error=1e-8, 
+                    #    min_greedy_error=1e-8, 
                        save_fits_to_file=False, 
-                       plot_kernel_errors=True,
-                       plot_kernel_predictions=True,
+                    #    plot_kernel_errors=True,
+                    #    plot_kernel_predictions=True,
                        save_fig_kernels=True,
-                       time_coupled=True,
-                    #    plot_GPR_fits=True, save_fig_GPR_fits=True, 
+                       time_coupled=False,
+                    #    plot_validation_heatmaps=True,
+                    #    save_fig_heatmaps=True    
+                       plot_GPR_fits=True, save_fig_pred=True, 
                     #    plot_residuals_ecc_evolve=True, save_fig_ecc_evolve=True, 
                     #    plot_residuals_time_evolve=True, save_fig_time_evolve=True,
                     )
-plt.show()
-#     # gt.fit_to_training_set('amplitude', min_greedy_error=1e-6, save_fits_to_file=True, plot_GPR_fits=True, save_fig_GPR_fits=True, plot_residuals_ecc_evolve=True, save_fig_ecc_evolve=True, plot_residuals_time_evolve=True, save_fig_time_evolve=True)
+
+# gt.fit_to_training_set('phase', 
+#                     #    min_greedy_error=1e-8, 
+#                        save_fits_to_file=False, 
+#                        plot_kernel_errors=True,
+#                        plot_kernel_predictions=True,
+#                        save_fig_kernels=True,
+#                        time_coupled=True,
+#                     #    plot_GPR_fits=True, save_fig_GPR_fits=True, 
+#                     #    plot_residuals_ecc_evolve=True, save_fig_ecc_evolve=True, 
+#                     #    plot_residuals_time_evolve=True, save_fig_time_evolve=True,
+#                     )
+plt.close()
+
+    # gt.fit_to_training_set('amplitude', min_greedy_error=1e-6, save_fits_to_file=True, plot_GPR_fits=True, save_fig_GPR_fits=True, plot_residuals_ecc_evolve=True, save_fig_ecc_evolve=True, plot_residuals_time_evolve=True, save_fig_time_evolve=True)
 
 # plt.show()
 # # gt.fit_to_training_set('amplitude', N_basis_vecs=21, save_fits_to_file=True)

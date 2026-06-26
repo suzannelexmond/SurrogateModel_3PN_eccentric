@@ -318,7 +318,11 @@ class TrainingSetResults(Warnings):
             raise ValueError("Residuals not computed.")
         
         os.makedirs(directory, exist_ok=True)
-        filepath = self.filename(prefix=prefix, ext="h5", directory=directory)
+        filepath = self.filename(prefix=prefix, 
+                                 ext="h5", 
+                                 directory=directory,
+                                 include_greedy=False,
+                                 )
         
         if not os.path.exists(filepath):
             with h5py.File(filepath, "w") as f:
@@ -340,7 +344,11 @@ class TrainingSetResults(Warnings):
                     prefix="residuals",
                     directory="Straindata/Residuals"):
         if self.residuals is None:
-            filepath = self.filename(prefix=prefix, ext="h5", directory=directory)
+            filepath = self.filename(prefix=prefix, 
+                                     ext="h5", 
+                                     directory=directory,
+                                     include_greedy=False,
+                                     )
 
             with h5py.File(filepath, "r") as f:
                 # [:] load as numpy array
@@ -530,7 +538,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                  N_basis_vecs_phase=None, 
                  min_greedy_error_amp=None, 
                  min_greedy_error_phase=None, 
-                 minimum_spacing_greedy=0.005, 
                  f_ref=20, 
                  f_lower=10, 
                  phiRef=0., 
@@ -562,7 +569,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         min_greedy_error_amp [float] : Minimum greedy error for amplitude residuals. If None, no minimum error threshold is applied.
         min_greedy_error_phase [float] : Minimum greedy error for phase residuals. If None, no minimum error threshold is applied.
         
-        minimum_spacing_greedy [float] : Minimum spacing in eccentricity for greedy selection. Defaults to 0.005.
         """
         # Check if property is valid and adjust settings accordingly
         self.ecc_ref_space = self.allowed_eccentricity_warning(ecc_ref_parameterspace)
@@ -581,8 +587,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
             )),
             dtype=float
         )
-
-        self.minimum_spacing_greedy = minimum_spacing_greedy
 
         self.min_greedy_error_amp = min_greedy_error_amp
         self.min_greedy_error_phase = min_greedy_error_phase
@@ -844,18 +848,26 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                             chi1=chi1,
                             chi2=chi2)
             
-            residual = self.calculate_residual(
-                                            hp, 
-                                            hc, 
-                                            mean_ano_ref=l,
-                                            ecc_ref=ecc, 
-                                            mass_ratio=q, 
-                                            chi1=chi1, 
-                                            chi2=chi2, 
-                                            property=train_obj.property
-                                            )
-            
-            return residual
+            if not np.any(ecc):   # in case of no eccentric values
+                if train_obj.property == "phase":
+                    return self.phase_circ
+                elif train_obj.property == "amplitude":
+                    return self.amp_circ
+                else:
+                    raise ValueError("property must be 'phase' or 'amplitude'")
+            else:
+                residual = self.calculate_residual(
+                                                hp, 
+                                                hc, 
+                                                mean_ano_ref=l,
+                                                ecc_ref=ecc, 
+                                                mass_ratio=q, 
+                                                chi1=chi1, 
+                                                chi2=chi2, 
+                                                property=train_obj.property
+                                                )
+                
+                return residual
 
 
         try:
@@ -1186,13 +1198,14 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
 
 
     def _plot_residuals(
-        self,
-        train_obj,
-        plot_eccentric_evolve=False,
-        save_fig_eccentric_evolve=False,
-        plot_time_evolve=False,
-        save_fig_time_evolve=False
-    ):
+            self,
+            train_obj,
+            plot_eccentric_evolve=False,
+            save_fig_eccentric_evolve=False,
+            plot_time_evolve=False,
+            save_fig_time_evolve=False,
+            plot_dims=("ecc", "mean_ano", "q", "chi1"),   # NEW
+        ):
 
         train_obj.load_residuals()
 
@@ -1233,6 +1246,16 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
             "chi2": r"$\chi_2$",
         }
 
+        # ------------------------------------------------------------
+        # NEW: filter dimensions
+        # ------------------------------------------------------------
+        if plot_dims is None:
+            plot_dims = list(COL.keys())
+        else:
+            plot_dims = list(plot_dims)
+
+        COL = {k: v for k, v in COL.items() if k in plot_dims}
+
         def five_indices(n):
             if n <= 1:
                 return np.array([0], dtype=int)
@@ -1245,21 +1268,23 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         def fixed_text(vary_key):
             parts = []
 
-            if vary_key != "ecc":
-                parts.append(f"e={params[base_idx, 0]:.4g}")
-            if vary_key != "mean_ano":
-                parts.append(f"l={params[base_idx, 1]:.4g}")
-            if vary_key != "q":
-                parts.append(f"q={params[base_idx, 2]:.4g}")
-            if vary_key != "chi1":
-                parts.append(rf"$\chi_1$={params[base_idx, 3]:.4g}")
-            if vary_key != "chi2":
-                parts.append(rf"$\chi_2$={params[base_idx, 4]:.4g}")
+            for k, c in COL.items():
+                if k != vary_key:
+                    if k == "ecc":
+                        parts.append(f"e={params[base_idx, c]:.4g}")
+                    elif k == "mean_ano":
+                        parts.append(f"l={params[base_idx, c]:.4g}")
+                    elif k == "q":
+                        parts.append(f"q={params[base_idx, c]:.4g}")
+                    elif k == "chi1":
+                        parts.append(rf"$\chi_1$={params[base_idx, c]:.4g}")
+                    elif k == "chi2":
+                        parts.append(rf"$\chi_2$={params[base_idx, c]:.4g}")
 
             return "Fixed: " + ", ".join(parts)
 
         # ------------------------------------------------------------
-        # BUILD EFFECTS 
+        # BUILD EFFECTS
         # ------------------------------------------------------------
         parameter_effects = []
 
@@ -1365,7 +1390,10 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                         label=f"t/M = {time[t]:.4g}"
                     )
 
-                ax.set_title(f"Residual change while varying {names[effect['key']]}\n{fixed_text(effect['key'])}")
+                ax.set_title(
+                    f"Residual change while varying {names[effect['key']]}\n"
+                    f"{fixed_text(effect['key'])}"
+                )
                 ax.set_xlabel(symbols[effect['key']])
                 ax.set_ylabel(ylabel)
                 ax.grid(True)
@@ -1909,7 +1937,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                 parameters = self.parameter_grid,
                 physical_points = self.time
                 )
-
+            # print(train_obj.basis_indices, type(train_obj.basis_indices))
             train_obj.orthonormal_basis = []
             train_obj.greedy_errors = []
             for leaf in reduced_basis_object.tree.leaves:
@@ -1924,7 +1952,10 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
 
                 # errors
                 train_obj.greedy_errors.extend(np.asarray(leaf.errors).ravel())
-
+            
+            print(self.colored_text(f'Basis calculated using {len(reduced_basis_object.tree.leaves)} discretized space(s).', 'green'))
+            # print(0, train_obj.basis_indices, train_obj.leaf_basis_indices, train_obj.orthonormal_basis)
+            
             # Save large data to file to avoid memory issues
             if save_greedy_errors:
                 train_obj.save_greedy_errors()
@@ -2007,9 +2038,9 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
             label="selected"
         )
 
-        ax.set_xlabel("eccentricity")
-        ax.set_ylabel("mass ratio q")
-        ax.set_zlabel(r"$\chi_{\mathrm{eff}}$")
+        ax.set_xlabel(f"eccentricity (N={len(greedy[:, 0])})")
+        ax.set_ylabel(f"mass ratio q (N={len(greedy[:, 2])})")
+        ax.set_zlabel(rf"$\chi_{{\mathrm{{eff}}}}$ (N={len(greedy[:, 3])})")
         ax.set_title(f"3D parameter space {train_obj.property} (e, q, chi_eff)")
         ax.legend()
 
@@ -2037,8 +2068,8 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
             label="selected"
         )
 
-        ax2.set_xlabel(r"$\chi_1$")
-        ax2.set_ylabel(r"$\chi_2$")
+        ax2.set_xlabel(rf"$\chi_1$ (N={len(greedy[:, 3])})")
+        ax2.set_ylabel(rf"$\chi_2$ (N={len(greedy[:, 4])})")
         ax2.set_title(
             rf"$\chi_1$ vs $\chi_2$ (color = $\chi_{{\mathrm{{eff}}}}$), {train_obj.property}"
         )        
@@ -3565,6 +3596,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
     def get_training_set_greedy(self, 
                             property, 
                             min_greedy_error=None, N_greedy_vecs=None, 
+                            max_tree_depth=0,
                             plot_training_set=False, save_fig_training_set=False,
                             plot_greedy_error=False, save_fig_greedy_error=False,
                             plot_emp_nodes_on_basis=False, save_fig_emp_nodes_on_basis=False,
@@ -3575,6 +3607,8 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                             plot_basis_indices=False, save_fig_basis_indices=False,
                             save_residuals=True, 
                             save_polarizations=True,
+                            save_greedy_errors=True,
+                            save_orthonormal_basis=True,
                             save_train_obj=True,
                             free_memory=True,
                             show_legend_ts=True
@@ -3661,6 +3695,9 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                 train_obj=train_obj,
                 N_greedy_vecs=N_greedy_vecs,
                 min_greedy_error=min_greedy_error,
+                max_tree_depth=max_tree_depth,
+                save_greedy_errors=save_greedy_errors,
+                save_orthonormal_basis=save_orthonormal_basis,
                 plot_greedy_error=plot_greedy_error,
                 save_greedy_error_fig=save_fig_greedy_error,
                 plot_basis_indices=plot_basis_indices,
@@ -3685,7 +3722,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
             train_obj.training_set = residual_basis[:, train_obj.empirical_indices]
             self.time_training = self.time[train_obj.empirical_indices]
 
-            print('greedy errors:', train_obj.greedy_errors)
             if save_train_obj:
                 train_obj.save(save_residuals=save_residuals, save_polarizations=save_polarizations)
 

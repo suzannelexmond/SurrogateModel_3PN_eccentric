@@ -827,9 +827,12 @@ class Waveform_Properties(Simulate_Waveform):
         ----------------
         residual : residual = eccentric - non-eccentric for chosen property
         """     
-        
-        if ecc_ref is None:
-            ecc_ref = self.ecc_ref
+ 
+        ecc_ref = self.resolve_property(prop=ecc_ref, default=self.ecc_ref)
+        mean_ano_ref = self.resolve_property(prop=mean_ano_ref, default=self.mean_ano_ref)
+        mass_ratio = self.resolve_property(prop=mass_ratio, default=self.mass_ratio)
+        chi1 = self.resolve_property(prop=chi1, default=self.chi1)
+        chi2 = self.resolve_property(prop=chi2, default=self.chi2)
 
         # Calculate plus and cross polarizations of circular (non-eccentric) waveform
         self.circulair_wf(mass_ratio=mass_ratio, 

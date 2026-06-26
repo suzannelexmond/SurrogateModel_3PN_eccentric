@@ -206,3 +206,4 @@ class Automated_Settings:
             settings['show_legend'] = False
             
         return settings
+    
