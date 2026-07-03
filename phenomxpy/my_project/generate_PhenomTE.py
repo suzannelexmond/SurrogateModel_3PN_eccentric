@@ -22,8 +22,7 @@ from phenomxpy.utils import SecondtoMass, AmpSItoNR, m1ofq, m2ofq, AmpNRtoSI, Hz
 
 from gw_eccentricity import measure_eccentricity
 
-
-
+import gc
 
 @dataclass
 class WaveformResult:

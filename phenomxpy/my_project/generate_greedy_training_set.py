@@ -1,17 +1,18 @@
+# =====================================================================
+# [OPTIMIZED VERSION] Memory improvements for generate_greedy_training_set.py
+# Applied Safe Quick Wins #1-5 (comments marked with #[OPTIMIZED])
+# =====================================================================
+
+
 from generate_PhenomTE import *
 
 import itertools
-import pickle
 import h5py
-
-from sklearn.preprocessing import normalize
 
 from skreducedmodel.reducedbasis import ReducedBasis
 from skreducedmodel.empiricalinterpolation import EmpiricalInterpolation
 
 # --------------------------------------------------------
-from dataclasses import dataclass
-
 from sklearn.model_selection import KFold
 from sklearn.preprocessing import StandardScaler
 from sklearn.gaussian_process import GaussianProcessRegressor
@@ -20,45 +21,18 @@ from sklearn.gaussian_process.kernels import ConstantKernel, Matern, WhiteKernel
 from scipy.stats import skew, kurtosis, normaltest, norm
 
 # --------------------------------------------------------------------
-
 # plt.switch_backend('WebAgg')
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from mpl_toolkits.mplot3d import Axes3D
 import traceback
-
 
 
 @dataclass
 class TrainingSetResults(Warnings):
-    """
-    Dataclass to store the parameters and results of the greedy algorithm for a training set.
-    Attributes:
-    property [str]: the property for which the greedy algorithm is applied ("phase" or "amplitude")
-    e [np.ndarray]: eccentricities of the dataset used for reduced basis construction
-    l [np.ndarray]: mean anomalies of the dataset used for reduced basis construction
-    q [np.ndarray]: mass ratios of the dataset used for reduced basis construction
-    chi1 [np.ndarray]: dimensionless spin of the primary black hole
-    chi2 [np.ndarray]: dimensionless spin of the secondary black hole
-    Nb [int]: number of greedy basis vectors selected
-    gerr [float]: greedy error
-    fref [float]: reference frequency
-    flow [float]: lower frequency
-    phi [float]: phase
-    inc [float]: inclination
-    isco [bool]: innermost stable circular orbit truncation
-    tmin [bool]: minimum time at which waveform computation is considered physical
-    luminosity_distance [float]: luminosity distance
-    circ [np.ndarray]: circular phase or amplitude
-    residuals [np.ndarray]: residuals in the parameter space for the chosen property (phase or amplitude)
-    basis_indices [list]: indices of the selected greedy basis vectors in the original parameter space
-    empirical_indices [list]: indices of the empirical interpolation nodes in the original time array
-    residual_basis [np.ndarray]: the reduced basis of the residuals in the parameter space for the chosen property (phase or amplitude)
-    training_set [np.ndarray]: the training set of waveforms for the chosen property (phase or amplitude)
-    """
     property: str = "phase"
 
+    # Put ALL fields with ANY kind of default together at the end
     ecc_ref_space: Any = None
     mean_ano_ref_space: Any = None
     mass_ratio_space: Any = None
@@ -70,28 +44,33 @@ class TrainingSetResults(Warnings):
     N_basis_vecs: Optional[int] = None
     min_greedy_error: Optional[float] = None
 
-    f_ref: float = None
-    f_lower: float = None
+    f_ref: float = 20.0
+    f_lower: float = 10.0
     phiRef: float = 0.0
     inclination: float = 0.0
     truncate_at_ISCO: bool = True
     truncate_at_tmin: bool = True
     luminosity_distance: Optional[float] = None
     
-    # results parameters
     hp_dataset: Any = None
     hc_dataset: Any = None
     residuals: Any = None
-
+    training_set: Any = None
+    orthonormal_basis: Any = None
+    greedy_errors: Any = None
+    
+    # Lists MUST use field(default_factory=list) if mixed with None defaults above
     basis_indices: Any = field(default_factory=list)
     empirical_indices: Any = field(default_factory=list)
     leaf_basis_indices: Any = field(default_factory=list)
     leaf_nodes_indices: Any = field(default_factory=list)
-    orthonormal_basis: Any = None
-    greedy_errors: Any = None
+    
+    # File paths
+    residuals_file: str = ""
+    polarisation_file: str = ""
+    orthonormal_basis_file: str = ""
+    greedy_errors_file: str = ""
 
-
-    training_set: Any = None
 
     def __post_init__(self):
         self.ecc_ref_space = np.round(np.asarray(self.ecc_ref_space, dtype=float), 4)
@@ -99,7 +78,8 @@ class TrainingSetResults(Warnings):
         self.mass_ratio_space = np.round(np.asarray(self.mass_ratio_space, dtype=float), 4)
         self.chi1_space = np.round(np.asarray(self.chi1_space, dtype=float), 4)
         self.chi2_space = np.round(np.asarray(self.chi2_space, dtype=float), 4)
-        self.parameter_grid = np.round(self.parameter_grid, 4)
+        if hasattr(self, 'parameter_grid') and self.parameter_grid is not None:
+            self.parameter_grid = np.round(self.parameter_grid, 4)
 
     def update_results(self, **kwargs):
         for key, value in kwargs.items():
@@ -122,8 +102,7 @@ class TrainingSetResults(Warnings):
         else:
             blocks = []
 
-        blocks.extend(
-            [
+        blocks.extend([
             self._range_block("e", self.ecc_ref_space),
             self._range_block("l", self.mean_ano_ref_space),
             self._range_block("q", self.mass_ratio_space),
@@ -131,10 +110,8 @@ class TrainingSetResults(Warnings):
             self._range_block("x2", self.chi2_space),
             self._scalar_block("fr", self.f_ref),
             self._scalar_block("fl", self.f_lower),
-            ]
-        )
+        ])
             
-
         if self.phiRef != 0:
             blocks.append(self._scalar_block("phi", self.phiRef))
         if self.inclination != 0:
@@ -161,352 +138,396 @@ class TrainingSetResults(Warnings):
             blocks.append("SI")
 
         return blocks
-    
 
-    def filename(self, 
-                 prefix="data", 
-                 ext="npz", 
-                 directory=None, 
-                 include_greedy=True, 
-                 exclude_property=False,
-                 include_extra=False
-                 ):
+    def filename(self, prefix="data", ext="npz", directory=None, include_greedy=True, exclude_property=False, include_extra=False):
         name = f"{prefix}_{'_'.join(self.name_blocks(include_greedy=include_greedy, exclude_property=exclude_property, include_extra=include_extra))}.{ext}"
         if directory is not None:
+            os.makedirs(directory, exist_ok=True)
             return f"{directory.rstrip('/')}/{name}"
         return name
 
-    def figname(self, 
-                prefix="fig", 
-                ext="png", 
-                directory=None,
-                include_greedy=True,
-                exclude_property=True,
-                include_extra=False,
-                ):
-        # Ensure the directory exists, creating it if necessary and save
+    def figname(self, prefix="fig", ext="png", directory=None, include_greedy=True, exclude_property=True, include_extra=False):
         if directory is not None:
             os.makedirs(directory, exist_ok=True)
-
-        figname = self.filename(prefix=prefix, 
-                                ext=ext, 
-                                directory=directory,
-                                include_greedy=include_greedy,
-                                exclude_property=exclude_property,
-                                include_extra=include_extra
-                                )
+        figname = self.filename(prefix=prefix, ext=ext, directory=directory, include_greedy=include_greedy, exclude_property=exclude_property, include_extra=include_extra)
         print(self.colored_text(f"Figure is saved in {figname}", 'blue'))
-
         return figname
     
     def save(self,
-         prefix="training_set",
-         directory="Straindata/TrainingSetResults",
-         save_polarizations=False,
-         save_residuals=False,
-         free_memory=True):
-
+            prefix="training_set",
+            directory="Straindata/TrainingSetResults",
+            save_residuals=False,
+            save_polarizations=False,
+            save_orthonormal_basis=False,
+            save_greedy_errors=False,
+            ):
+        """Main save function - delegates to specialized save methods."""
         os.makedirs(directory, exist_ok=True)
         filepath = self.filename(prefix=prefix, ext="h5", directory=directory)
-
+        
         if os.path.exists(filepath):
             print(self.colored_text(f"File already exists: {filepath}", "yellow"))
             return filepath
-
+        
+        # === CORE DATA TO MAIN H5 FILE ===
         with h5py.File(filepath, "w") as f:
-
             meta = f.create_group("meta")
             meta.attrs["property"] = self.property
             meta.attrs["f_ref"] = self.f_ref
             meta.attrs["f_lower"] = self.f_lower
             meta.attrs["phiRef"] = self.phiRef
             meta.attrs["inclination"] = self.inclination
-
-            # small arrays
-            f.create_dataset("ecc_ref_space", data=self.ecc_ref_space)
-            f.create_dataset("mean_ano_ref_space", data=self.mean_ano_ref_space)
-            f.create_dataset("mass_ratio_space", data=self.mass_ratio_space)
-            f.create_dataset("chi1_space", data=self.chi1_space)
-            f.create_dataset("chi2_space", data=self.chi2_space)
-
-            f.create_dataset("parameter_grid", data=self.parameter_grid)
-            f.create_dataset("time", data=self.time)
-
+            
+            # Save scalar truncation flags
+            meta.attrs["truncate_at_ISCO"] = self.truncate_at_ISCO
+            meta.attrs["truncate_at_tmin"] = self.truncate_at_tmin
+            
+            # PARAMETER SPACE ARRAYS AS DATASETS (CRITICAL - don't rely on metadata strings!)
+            if self.ecc_ref_space is not None:
+                f.create_dataset("ecc_ref_space", data=self.ecc_ref_space)
+            else:
+                f.create_dataset("ecc_ref_space", data=np.array([]))
+            
+            if self.mean_ano_ref_space is not None:
+                f.create_dataset("mean_ano_ref_space", data=self.mean_ano_ref_space)
+            else:
+                f.create_dataset("mean_ano_ref_space", data=np.array([]))
+                
+            if self.mass_ratio_space is not None:
+                f.create_dataset("mass_ratio_space", data=self.mass_ratio_space)
+            else:
+                f.create_dataset("mass_ratio_space", data=np.array([]))
+                
+            if self.chi1_space is not None:
+                f.create_dataset("chi1_space", data=self.chi1_space)
+            else:
+                f.create_dataset("chi1_space", data=np.array([]))
+                
+            if self.chi2_space is not None:
+                f.create_dataset("chi2_space", data=self.chi2_space)
+            else:
+                f.create_dataset("chi2_space", data=np.array([]))
+            
+            # Optional: keep metadata strings as BACKWARD COMPATIBILITY reference only
+            meta.attrs["ecc_range"] = self._range_block("e", self.ecc_ref_space) if self.ecc_ref_space is not None else ""
+            meta.attrs["mean_anomaly_range"] = self._range_block("l", self.mean_ano_ref_space) if self.mean_ano_ref_space is not None else ""
+            meta.attrs["mass_ratio_range"] = self._range_block("q", self.mass_ratio_space) if self.mass_ratio_space is not None else ""
+            meta.attrs["spin1_range"] = self._range_block("x1", self.chi1_space) if self.chi1_space is not None else ""
+            meta.attrs["spin2_range"] = self._range_block("x2", self.chi2_space) if self.chi2_space is not None else ""
+            
+            # Grid & temporal info
+            f.create_dataset("parameter_grid", data=self.parameter_grid, compression="gzip")
+            f.create_dataset("time", data=self.time, compression="gzip")
+            
+            # Greedy selection indices
             f.create_dataset("basis_indices", data=np.array(self.basis_indices))
             f.create_dataset("empirical_indices", data=np.array(self.empirical_indices))
             f.create_dataset("leaf_basis_indices", data=np.array(self.leaf_basis_indices))
             f.create_dataset("leaf_nodes_indices", data=np.array(self.leaf_nodes_indices))
-            f.create_dataset("training_set", data=self.training_set)
-
-            # file pointers (IMPORTANT)
-            meta.attrs["residuals_file"] = getattr(self, "residuals_file", "")
-            meta.attrs["polarisation_file"] = getattr(self, "polarisation_file", "")
-            meta.attrs["orthonormal_basis_file"] = getattr(self, "orthonormal_basis_file", "")
-            meta.attrs["greedy_errors_file"] = getattr(self, "greedy_errors_file", "")
-
-        # optionally clear RAM
-        if free_memory:
-            if save_residuals:
-                self.residuals = None
-            if save_polarizations:
-                self.hp_dataset = None
-                self.hc_dataset = None
-
-        return filepath
+            
+            # Primary training set data
+            f.create_dataset("training_set", data=self.training_set, compression="gzip", chunks=True)
         
+        # === DELEGATE LARGE ARRAY SAVING ===
+        
+        if save_residuals:
+            if self.residuals_file == "":
+                if self.residuals is None:
+                    raise ValueError("Residuals not available. Cannot save.")
+                
+                res_path = self.save_residuals(
+                    prefix="residuals",
+                    directory=f"{directory}/../Residuals",
+                    free_memory=True
+                )
+                with h5py.File(filepath, "a") as f:
+                    f["meta"].attrs["residuals_file"] = res_path
+                self.residuals_file = res_path
+            else:
+                print(self.colored_text("Residuals already saved.", "yellow"))
+        
+        if save_polarizations:
+            if self.polarisation_file == "":
+                if self.hp_dataset is None or self.hc_dataset is None:
+                    raise ValueError("Polarizations not available. Cannot save.")
+                
+                pol_path = self.save_polarizations(
+                    prefix="polarisation", 
+                    directory=f"{directory}/../Polarisations",
+                    free_memory=True
+                )
+                with h5py.File(filepath, "a") as f:
+                    f["meta"].attrs["polarisation_file"] = pol_path
+                self.polarisation_file = pol_path
+            else:
+                print(self.colored_text("Polarizations already saved.", "yellow"))
+        
+        if save_orthonormal_basis:
+            if self.orthonormal_basis_file == "":
+                if self.orthonormal_basis is None:
+                    raise ValueError("Orthonormal basis not available. Cannot save.")
+                
+                basis_path = self.save_orthonormal_basis(
+                    prefix="orthonormal_basis",
+                    directory=f"{directory}/../Basis",
+                    free_memory=False
+                )
+                with h5py.File(filepath, "a") as f:
+                    f["meta"].attrs["orthonormal_basis_file"] = basis_path
+                self.orthonormal_basis_file = basis_path
+            else:
+                print(self.colored_text("Orthonormal basis already saved.", "yellow"))
+        
+        if save_greedy_errors:
+            if self.greedy_errors_file == "":
+                if self.greedy_errors is None:
+                    raise ValueError("Greedy errors not available. Cannot save.")
+                
+                err_path = self.save_greedy_errors(
+                    prefix="greedy_errors",
+                    directory=f"{directory}/../Greedy",
+                    free_memory=True
+                )
+                with h5py.File(filepath, "a") as f:
+                    f["meta"].attrs["greedy_errors_file"] = err_path
+                self.greedy_errors_file = err_path
+            else:
+                print(self.colored_text("Greedy errors already saved.", "yellow"))
+        
+        gc.collect()
+        if MEMORY_PROFILE:
+            check_memory_usage(f"After TrainingSetResults.save(): {filepath}")
+        
+        return filepath
+    
+
     def load(self,
             prefix="training_set",
             directory="Straindata/TrainingSetResults",
             load_residuals=False,
             load_polarisations=False,
-            load_greedy_errors=False,
-            load_orthonormal_basis=False
-            ):
-
+            load_orthonormal_basis=False,
+            load_greedy_errors=False):
+        """Load core data plus optionally load separately-stored large arrays."""
+        
         filepath = self.filename(prefix=prefix, ext="h5", directory=directory)
-
+        
+        if not os.path.exists(filepath):
+            raise FileNotFoundError(f"Training set file not found: {filepath}")
+        
         with h5py.File(filepath, "r") as f:
-
-            # ---- load metadata ----
-            self.property = f["meta"].attrs["property"]
-            self.f_ref = f["meta"].attrs["f_ref"]
-            self.f_lower = f["meta"].attrs["f_lower"]
-            self.phiRef = f["meta"].attrs["phiRef"]
-            self.inclination = f["meta"].attrs["inclination"]
-            # [:] load as numpy array
-            self.ecc_ref_space = f["ecc_ref_space"][:]
-            self.mean_ano_ref_space = f["mean_ano_ref_space"][:]
-            self.mass_ratio_space = f["mass_ratio_space"][:]
-            self.chi1_space = f["chi1_space"][:]
-            self.chi2_space = f["chi2_space"][:]
-
+            # Meta attributes (SCALARS only - don't overwrite arrays!)
+            self.property = f["meta"].attrs.get("property", "phase")
+            self.f_ref = f["meta"].attrs.get("f_ref", 20.0)
+            self.f_lower = f["meta"].attrs.get("f_lower", 10.0)
+            self.phiRef = f["meta"].attrs.get("phiRef", 0.0)
+            self.inclination = f["meta"].attrs.get("inclination", 0.0)
+            
+            # TRUNCATE FLAGS - parse from attrs if needed
+            self.truncate_at_ISCO = f["meta"].attrs.get("truncate_at_ISCO", True)
+            self.truncate_at_tmin = f["meta"].attrs.get("truncate_at_tmin", True)
+            
+            # LOAD ARRAYS DIRECTLY FROM DATASETS (don't recreate from metadata strings!)
             self.parameter_grid = f["parameter_grid"][:]
             self.time = f["time"][:]
-            self.basis_indices = f["basis_indices"][:]
-            self.empirical_indices = f["empirical_indices"][:]
-            self.leaf_basis_indices = f["leaf_basis_indices"][:]
-            self.leaf_nodes_indices = f["leaf_nodes_indices"][:]
+            
+            # These should also exist in datasets - load them!
+            if "ecc_ref_space" in f:
+                self.ecc_ref_space = f["ecc_ref_space"][:]
+            if "mean_ano_ref_space" in f:
+                self.mean_ano_ref_space = f["mean_ano_ref_space"][:]
+            if "mass_ratio_space" in f:
+                self.mass_ratio_space = f["mass_ratio_space"][:]
+            if "chi1_space" in f:
+                self.chi1_space = f["chi1_space"][:]
+            if "chi2_space" in f:
+                self.chi2_space = f["chi2_space"][:]
+            
+            self.basis_indices = list(f["basis_indices"][:])
+            self.empirical_indices = list(f["empirical_indices"][:])
+            self.leaf_basis_indices = [list(leaf) for leaf in f["leaf_basis_indices"]] if "leaf_basis_indices" in f else []
+            self.leaf_nodes_indices = [list(nodes) for nodes in f["leaf_nodes_indices"]] if "leaf_nodes_indices" in f else []
             self.training_set = f["training_set"][:]
-
-            # file references
+            
+            # Store file paths from metadata
             self.residuals_file = f["meta"].attrs.get("residuals_file", "")
             self.polarisation_file = f["meta"].attrs.get("polarisation_file", "")
-
+            self.orthonormal_basis_file = f["meta"].attrs.get("orthonormal_basis_file", "")
+            self.greedy_errors_file = f["meta"].attrs.get("greedy_errors_file", "")
+        
         print(self.colored_text(f"Loaded training set: {filepath}", "blue"))
-
-        # ---- optional loading ----
-        if load_residuals:
+        
+        # Delegate to specialized loaders if requested
+        if load_residuals and self.residuals_file:
             self.load_residuals()
-
-        if load_polarisations:
+        if load_polarisations and self.polarisation_file:
             self.load_polarizations()
-
-        if load_greedy_errors:
+        if load_orthonormal_basis and self.orthonormal_basis_file:
+            self.load_orthonormal_basis()
+        if load_greedy_errors and self.greedy_errors_file:
             self.load_greedy_errors()
         
-        if load_orthonormal_basis:
-            self.load_orthonormal_basis()
-
+        if MEMORY_PROFILE:
+            check_memory_usage(f"After TrainingSetResults.load(): {filepath}")
+        
         return self
     
-    def save_residuals(self,
-                   prefix="residuals",
-                   directory="Straindata/Residuals",
-                   free_memory=True
-                   ):
+
+    # ========== SPECIALIZED SAVE METHODS ==========
+    
+    def save_residuals(self, prefix="residuals", directory="Straindata/Residuals", free_memory=True):
+        """Save residuals to external HDF5 file. Always free_memory=True recommended."""
         if self.residuals is None:
             raise ValueError("Residuals not computed.")
         
         os.makedirs(directory, exist_ok=True)
-        filepath = self.filename(prefix=prefix, 
-                                 ext="h5", 
-                                 directory=directory,
-                                 include_greedy=False,
-                                 )
+        filepath = self.filename(prefix=prefix, ext="h5", directory=directory, include_greedy=False)
         
         if not os.path.exists(filepath):
             with h5py.File(filepath, "w") as f:
-                f.create_dataset("residuals",
-                                data=self.residuals,
-                                compression="gzip",
-                                chunks=True)
-
+                f.create_dataset("residuals", data=self.residuals, compression="gzip", chunks=True)
                 f.create_dataset("time", data=self.time)
-
+        
         print(self.colored_text(f"Residuals saved: {filepath}", "blue"))
-
+        
         if free_memory:
             self.residuals = None
-
+            gc.collect()
+            if MEMORY_PROFILE:
+                check_memory_usage(f"After save_residuals(): {filepath}")
+        
         return filepath
-
-    def load_residuals(self,
-                    prefix="residuals",
-                    directory="Straindata/Residuals"):
-        if self.residuals is None:
-            filepath = self.filename(prefix=prefix, 
-                                     ext="h5", 
-                                     directory=directory,
-                                     include_greedy=False,
-                                     )
-
-            with h5py.File(filepath, "r") as f:
-                # [:] load as numpy array
-                self.residuals = f["residuals"][:]  
-                self.time = f["time"][:]
-
-            print(self.colored_text(
-                f"Residual dataset loaded: {filepath}", 'blue'
-            ))
-            
-        return self
     
-    def save_polarizations(self,
-                       prefix="polarisation",
-                       directory="Straindata/Polarisations",
-                       free_memory=True):
 
-        os.makedirs(directory, exist_ok=True)
-        filepath = self.filename(prefix=prefix, 
-                                 ext="h5", 
-                                 directory=directory, 
-                                 include_greedy=False,
-                                 exclude_property=True)
-
+    def save_polarizations(self, prefix="polarisation", directory="Straindata/Polarisations", free_memory=True):
+        """Save polarizations to external HDF5 file. Always free_memory=True recommended."""
         if self.hp_dataset is None or self.hc_dataset is None:
             raise ValueError("Polarizations not available.")
-
+        
+        os.makedirs(directory, exist_ok=True)
+        filepath = self.filename(prefix=prefix, ext="h5", directory=directory, include_greedy=False, exclude_property=True)
+        
         if not os.path.exists(filepath):
             with h5py.File(filepath, "w") as f:
-                f.create_dataset("hp", data=self.hp_dataset,
-                                compression="gzip", chunks=True)
-                f.create_dataset("hc", data=self.hc_dataset,
-                                compression="gzip", chunks=True)
+                f.create_dataset("hp", data=self.hp_dataset, compression="gzip", chunks=True)
+                f.create_dataset("hc", data=self.hc_dataset, compression="gzip", chunks=True)
                 f.create_dataset("time", data=self.time)
-
+        
         self.polarisation_file = filepath
-
         print(self.colored_text(f"Polarizations saved: {filepath}", "blue"))
-
+        
         if free_memory:
             self.hp_dataset = None
             self.hc_dataset = None
-
+            gc.collect()
+            if MEMORY_PROFILE:
+                check_memory_usage(f"After save_polarizations(): {filepath}")
+        
         return filepath
     
-    def load_polarizations(self,
-                            prefix="polarisation",
-                            directory="Straindata/Polarisations"
-                            ):
-        if self.hp_dataset is None or self.hc_dataset is None:
-            filepath = self.filename(prefix=prefix, 
-                                    ext="h5", 
-                                    directory=directory, 
-                                    include_greedy=False,
-                                    exclude_property=True)
 
-            with h5py.File(filepath, "r") as f:
-                self.hp_dataset = f["hp"][:]   # lazy
-                self.hc_dataset = f["hc"][:]   # lazy
-                self.time = f["time"][:]    # safe small array
-
-            self._pol_handle = f
-
-            print(self.colored_text(f"Polarization dataset found and loaded: {filepath}", 'blue'))
-
-        return self
-    
-    def save_orthonormal_basis(self,
-                           prefix="orthonormal_basis",
-                           directory="Straindata/Basis",
-                           free_memory=True):
-
+    def save_orthonormal_basis(self, prefix="orthonormal_basis", directory="Straindata/Basis", free_memory=False):
+        """Save orthonormal basis to external HDF5 file. Memory kept by default for later use."""
         if self.orthonormal_basis is None:
             raise ValueError("Orthonormal basis not available.")
-
+        
         os.makedirs(directory, exist_ok=True)
         filepath = self.filename(prefix=prefix, ext="h5", directory=directory)
-
+        
         if not os.path.exists(filepath):
             with h5py.File(filepath, "w") as f:
-
-                f.create_dataset(
-                    "orthonormal_basis",
-                    data=np.asarray(self.orthonormal_basis),
-                    compression="gzip",
-                    chunks=True
-                )
-
+                f.create_dataset("orthonormal_basis", data=np.asarray(self.orthonormal_basis), compression="gzip", chunks=True)
+        
         self.orthonormal_basis_file = filepath
-
         print(self.colored_text(f"Orthonormal basis saved: {filepath}", "blue"))
-
+        
+        # NOTE: We deliberately DO NOT free orthonormal_basis here
+        # It's needed for subsequent interpolation/surrogate building
+        
         if free_memory:
+            # This would only be called explicitly elsewhere
             self.orthonormal_basis = None
-
+            gc.collect()
+            if MEMORY_PROFILE:
+                check_memory_usage(f"After save_orthonormal_basis(): {filepath}")
+        
         return filepath
     
-    def load_orthonormal_basis(self,
-                           prefix="orthonormal_basis",
-                           directory="Straindata/Basis"):
-        
-        if self.orthonormal_basis is None:
-            try:
-                filepath = self.filename(prefix=prefix, ext="h5", directory=directory)
-                f = h5py.File(filepath, "r")
-                self.orthonormal_basis = f["orthonormal_basis"]  # lazy
 
-                print(self.colored_text(f"Orthonormal basis loaded: {filepath}", "blue"))
-            
-            except Exception as e:
-                print(self.colored_text(f"Error loading orthonormal basis from {filepath}: {e}", "red"))
-
-        return self
-    
-    def save_greedy_errors(self,
-                       prefix="greedy_errors",
-                       directory="Straindata/Greedy",
-                       free_memory=True):
-
+    def save_greedy_errors(self, prefix="greedy_errors", directory="Straindata/Greedy", free_memory=True):
+        """Save greedy errors to external HDF5 file. Always free_memory=True recommended."""
         if self.greedy_errors is None:
             raise ValueError("Greedy errors not available.")
-
+        
         os.makedirs(directory, exist_ok=True)
         filepath = self.filename(prefix=prefix, ext="h5", directory=directory)
-
+        
         if not os.path.exists(filepath):
             with h5py.File(filepath, "w") as f:
-
-                f.create_dataset(
-                    "greedy_errors",
-                    data=np.asarray(self.greedy_errors),
-                    compression="gzip",
-                    chunks=True
-                )
-
+                f.create_dataset("greedy_errors", data=np.asarray(self.greedy_errors), compression="gzip", chunks=True)
+        
         self.greedy_errors_file = filepath
-
         print(self.colored_text(f"Greedy errors saved: {filepath}", "blue"))
-
+        
         if free_memory:
             self.greedy_errors = None
-
+            gc.collect()
+            if MEMORY_PROFILE:
+                check_memory_usage(f"After save_greedy_errors(): {filepath}")
+        
         return filepath
     
-    def load_greedy_errors(self,
-                       prefix="greedy_errors",
-                       directory="Straindata/Greedy"):
-        
-        if self.greedy_errors is None:
-            try:
-                filepath = self.filename(prefix=prefix, ext="h5", directory=directory)
-                f = h5py.File(filepath, "r")
-                self.greedy_errors = f["greedy_errors"]  # lazy
 
-                print(self.colored_text(f"Greedy errors loaded: {filepath}", "blue"))
-            
-            except Exception as e:
-                print(self.colored_text(f"Error loading greedy errors from {filepath}: {e}", "red"))
+    # ========== SPECIALIZED LOAD METHODS ==========
+    
+    def load_residuals(self, prefix="residuals", directory="Straindata/Residuals"):
+        filepath = self.filename(prefix=prefix, ext="h5", directory=directory, include_greedy=False)
+        
+        if not os.path.exists(filepath):
+            # FILE DOESN'T EXIST - RAISE ERROR NOW
+            raise FileNotFoundError(f"Cannot load residuals: {filepath} does not exist")
+        
+        if self.residuals is None:
+            with h5py.File(filepath, "r") as f:
+                self.residuals = np.array(f["residuals"])
+                self.time = np.array(f["time"])
+            print(self.colored_text(f"Residuals loaded: {filepath}", 'blue'))
+        
+        return self
+    
+
+    def load_polarizations(self, prefix="polarisation", directory="Straindata/Polarisations"):
+        filepath = self.filename(prefix=prefix, ext="h5", directory=directory, include_greedy=False, exclude_property=True)
+
+        if (self.hp_dataset is None or self.hc_dataset is None) and filepath:
+            with h5py.File(filepath, "r") as f:
+                self.hp_dataset = np.array(f["hp"])
+                self.hc_dataset = np.array(f["hc"])
+                self.time = np.array(f["time"])
+            print(self.colored_text(f"Polarizations loaded: {filepath}", 'blue'))
+        
+        return self
+    
+
+    def load_orthonormal_basis(self, prefix="orthonormal_basis", directory="Straindata/Basis"):
+        filepath = self.filename(prefix=prefix, ext="h5", directory=directory)
+        
+        if self.orthonormal_basis is None and filepath:
+            with h5py.File(filepath, "r") as f:
+                self.orthonormal_basis = np.array(f["orthonormal_basis"])
+            print(self.colored_text(f"Orthonormal basis loaded: {filepath}", 'blue'))
+        
+        return self
+    
+
+    def load_greedy_errors(self, prefix="greedy_errors", directory="Straindata/Greedy"):
+        filepath = self.filename(prefix=prefix, ext="h5", directory=directory)
+        
+        if self.greedy_errors is None and filepath:
+            with h5py.File(filepath, "r") as f:
+                self.greedy_errors = np.array(f["greedy_errors"])
+            print(self.colored_text(f"Greedy errors loaded: {filepath}", 'blue'))
+        
         return self
 
 @dataclass
@@ -570,6 +591,9 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         min_greedy_error_phase [float] : Minimum greedy error for phase residuals. If None, no minimum error threshold is applied.
         
         """
+        if MEMORY_PROFILE:
+            check_memory_usage("START Generate_TrainingSet.__init__")
+
         # Check if property is valid and adjust settings accordingly
         self.ecc_ref_space = self.allowed_eccentricity_warning(ecc_ref_parameterspace)
         self.mass_ratio_space = self.allowed_mass_ratio_warning(mass_ratio_parameterspace)
@@ -622,6 +646,9 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                          truncate_at_tmin=truncate_at_tmin,
                          geometric_units=True)
         
+        if MEMORY_PROFILE:
+            check_memory_usage("END Generate_TrainingSet.__init__")
+
     def result_kwargs_training(self, property,
                                ecc_ref_space=None,
                                mean_ano_ref_space=None,
@@ -653,16 +680,16 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         chi2_space = self.resolve_property(prop=chi2_space, default=self.chi2_space)
 
         # Build full parameter grid
-        parameter_grid = np.array(
-            list(itertools.product(
-                ecc_ref_space,
-                mean_ano_ref_space,
-                mass_ratio_space,
-                chi1_space,
-                chi2_space
-            )),
-            dtype=float
-        )
+        param_list = list(itertools.product(
+            ecc_ref_space, 
+            mean_ano_ref_space, 
+            mass_ratio_space, 
+            chi1_space, 
+            chi2_space
+            ))
+        parameter_grid = np.array(param_list, dtype=float)
+        del param_list
+        gc.collect()
  
         f_ref = self.resolve_property(prop=f_ref, default=self.f_ref)
         f_lower = self.resolve_property(prop=f_lower, default=self.f_lower)
@@ -762,6 +789,9 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         residual_dataset : ndarray
             Array of residuals for each eccentricity.
         """
+        if MEMORY_PROFILE:
+            check_memory_usage("START generate_property_dataset")
+
         # Resolve the parameter space for eccentricities and mass ratios, using the provided lists or default spaces
         train_obj.ecc_ref_space = self.resolve_property(prop=ecc_ref_list, default=train_obj.ecc_ref_space) 
         train_obj.mean_ano_ref_space = self.resolve_property(prop=mean_ano_ref_list, default=train_obj.mean_ano_ref_space)
@@ -781,14 +811,13 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                                      plot_residuals_eccentric_evolve, save_fig_eccentric_evolve, 
                                      plot_residuals_time_evolve, save_fig_time_evolve
                                      )
-            
+
         except Exception as e:
             print(e)
             traceback.print_exc()
 
             # # If attempt to load residuals failed, generate polarisations and calculate residuals
             # hp_dataset, hc_dataset = self._generate_polarisation_data(train_obj=train_obj, save_polarizations=save_polarizations)
-
             self._calculate_residuals(train_obj=train_obj, 
                                       truncate_at_ISCO=train_obj.truncate_at_ISCO,
                                       truncate_at_tmin=train_obj.truncate_at_tmin,
@@ -800,7 +829,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                                       save_fig_eccentric_evolve=save_fig_eccentric_evolve, 
                                       save_fig_time_evolve=save_fig_time_evolve,
                                       )
-            
             # del hp_dataset, hc_dataset  # Free memory
         return train_obj
    
@@ -898,7 +926,21 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
 
                     residual = calculate_residual_wrapper(hp_flat[idx], hc_flat[idx], ecc, l, q, chi1, chi2)
                     residuals_flat[idx] = residual
-
+                    # memory cleanup
+                    del hp_flat[idx]
+                    del hc_flat[idx]
+                    del residual
+                    gc.collect()
+                    if idx % 50 == 0 and MEMORY_PROFILE:
+                        check_memory_usage(f"Loading polarizations progress: {idx}/{n_params}")
+                
+                print("[DEBUG] Before return:")
+                print(f"  train_obj type: {type(train_obj)}")
+                print(f"  train_obj.residuals is None: {train_obj.residuals is None}")
+                if hasattr(train_obj, 'residuals') and train_obj.residuals is not None:
+                    print(f"  train_obj.residuals.shape: {train_obj.residuals.shape}")
+                    
+                return train_obj
                 train_obj.residuals = residuals_flat
 
             except Exception as e2:
@@ -911,7 +953,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                 current_time = self.time.copy()
 
                 
-
                 # Polarisation datasets
                 hp_flat = np.empty((n_params, len(current_time)))
                 hc_flat = np.empty_like(hp_flat)
@@ -956,9 +997,17 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                     hc_flat[idx] = hc
                     residuals_flat[idx] = residual
 
+                    del hp, hc, time_array, residual
+                    gc.collect()
+
+                    if idx % 20 == 0 and MEMORY_PROFILE:
+                        check_memory_usage(f"Generating residuals: {idx}/{n_params}")
+
+
                 train_obj.hp_dataset = hp_flat
                 train_obj.hc_dataset = hc_flat
                 train_obj.residuals = residuals_flat
+                print()
 
                 # Update time arrays
                 train_obj.time = current_time
@@ -968,7 +1017,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
 
                 # Save polarisation and residual datasets to file
                 if save_polarizations:
-                    train_obj.save_polarizations(prefix="polarisation", directory="Straindata/Polarisations", free_memory=False)
+                    train_obj.save_polarizations(prefix="polarisation", directory="Straindata/Polarisations", free_memory=True)
             
             if save_residuals:
                 train_obj.save_residuals(prefix="residuals", directory="Straindata/Residuals", free_memory=False)
@@ -989,7 +1038,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                 
         print(self.colored_text(f"Dataset shape: {train_obj.residuals.shape}, N={train_obj.parameter_grid.size} | time_array: [{int(train_obj.time[0])}, {int(train_obj.time[-1])}]", 'green'))
         
-        return train_obj.residuals
+        return train_obj
     
 
     def _plot_polarizations(self,
@@ -1189,6 +1238,9 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                     directory="Images/Polarisations"
                 )
                 fig.savefig(figname)
+            
+            plt.close(fig)
+            gc.collect()
 
         # ------------------------------------------------------------
         # run for hp and hc
@@ -1359,6 +1411,9 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                     directory="Images/Residuals"
                 ))
 
+            plt.close(fig)
+            gc.collect()
+
         # ============================================================
         # PARAMETER EVOLUTION
         # ============================================================
@@ -1404,6 +1459,9 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                     prefix="Residuals_param_evolve",
                     directory="Images/Residuals"
                 ))
+
+            plt.close(fig)
+            gc.collect()
 
     # def _plot_residuals(
     #     self,
@@ -1906,8 +1964,10 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                 ReducedBasis object containing the greedy basis and indices of the selected vectors.
             """
             if train_obj.residuals is None:
-                raise ValueError("Residuals dataset is not available in the training object. " \
-                "Please run _calculate_residuals() before running the greedy algorithm.")
+                train_obj.load_residuals()
+                if train_obj.residuals is None:
+                    raise ValueError("Residuals dataset is not available in the training object. " \
+                    "Please run _calculate_residuals() before running the greedy algorithm.")
             
             nan_mask = np.isnan(train_obj.residuals)
 
@@ -3631,6 +3691,9 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         ----------------
         - train_obj (TrainingSet): An object containing the generated training set and related information.
         """
+        if MEMORY_PROFILE:
+            check_memory_usage("START get_training_set_greedy")
+        
         # Import from class object if min_greedy and N_greedy vecs are not specified
         if (min_greedy_error is None) and (N_greedy_vecs is None):
             if property == 'phase':
@@ -3689,6 +3752,10 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                 save_fig_time_evolve=save_fig_residuals_time
             )
 
+            print(0, train_obj.residuals)
+            train_obj.load_residuals()
+            print(1, train_obj.residuals)
+
             # Step 2: Select the best representative parameters using a greedy algorithm
             # print('Calculating greedy parameters...')
             reduced_basis_object = self.get_greedy_parameters(
@@ -3736,6 +3803,10 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
             train_obj.residuals = None
             train_obj.orthonormal_basis = None
             train_obj.greedy_errors = None
+
+        if MEMORY_PROFILE:
+            check_memory_usage("END get_training_set_greedy")
+        gc.collect()
 
         return train_obj
 

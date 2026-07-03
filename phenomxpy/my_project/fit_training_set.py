@@ -23,6 +23,10 @@ import matplotlib.ticker as mticker
 from matplotlib.colors import Normalize, LogNorm
 import matplotlib.gridspec as gridspec
 
+import pickle
+
+from collections import Counter
+
 
 warnings.simplefilter("ignore", ConvergenceWarning)
 
@@ -100,6 +104,7 @@ class GPRFitResults(Warnings):
     best_lmls: Any = None
     best_train_rmses: Any = None
     best_scores: Any = None
+    validation_errors: Any = None
     fit_times: Any = None
 
     # ------------------------------------------------------------
@@ -107,6 +112,7 @@ class GPRFitResults(Warnings):
     # ------------------------------------------------------------
     scaler_x: list = field(default_factory=list)
     scaler_y: list = field(default_factory=list)
+
 
 
     def __post_init__(self):
@@ -586,7 +592,9 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         train_obj: TrainingSetResults,
         optimized_kernel=None,
         plot_kernel_predictions=False,
-        plot_kernel_errors=False,
+        plot_kernel_diagnostics=False,
+        plot_kernel_heatmaps=False,
+        plot_parity=False,
         save_fig_kernels=False,
         time_coupled=False,
         screening=True,
@@ -791,7 +799,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             X_train = np.asarray(train_obj.parameter_grid)[train_obj.basis_indices]
 
         else:
-            
+
             # append time as extra dimension for time-coupled regression predictions
             t_train = np.full((train_obj.parameter_grid.shape[0], 1), self.time[train_obj.empirical_indices[time_node]])
 
@@ -873,15 +881,13 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
 
         if optimized_kernel is not None:
 
-            kernels.insert(
-                0,
-                {
-                    "kernel": optimized_kernel,
-                    "type": "warm_start",
-                    "nu": None,
-                    "base_ls": None
-                }
-            )
+            k = optimized_kernel[0]
+
+            kernels.insert(0, {
+                "kernel": k,
+                "type":"warm_start",
+                "label":optimized_kernel[1],
+            })
 
         # ============================================================
         # STORAGE
@@ -934,17 +940,19 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                 # ----------------------------------------------------
                 # label
                 # ----------------------------------------------------
-                kernel_label = {
-                    "isotropic": "Iso",
-                    "anisotropic": "Aniso",
-                    "isotropic_noise": "Iso+W",
-                    "anisotropic_noise": "Aniso+W",
-                    "warm_start": "Warm"
-                }[entry["type"]]
+                if entry["type"] == 'warm_start':
+                    kernel_label = entry["label"]
+                else:
+                    kernel_label = {
+                        "isotropic": "Iso",
+                        "anisotropic": "Aniso",
+                        "isotropic_noise": "Iso+W",
+                        "anisotropic_noise": "Aniso+W",
+                    }[entry["type"]]
 
-                kernel_label += f" ν={entry['nu']}"
-                if "noise" in entry:
-                    kernel_label += f", noise={entry['noise']:.0e}"
+                    kernel_label += f" ν={entry['nu']}"
+                    if "noise" in entry:
+                        kernel_label += f", noise={entry['noise']:.0e}"
 
                 # ----------------------------------------------------
                 # timing
@@ -1165,8 +1173,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         # ============================================================
 
 
-        if plot_kernel_errors:
-
+        if plot_kernel_diagnostics:
             # Plot scores, rmse, lml, fit times for all kernels
             self._plot_kernel_diagnostics(
                 kernel_diagnostics,
@@ -1175,6 +1182,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                 save_fig=save_fig_kernels,
             )
 
+        if plot_kernel_heatmaps:
             # Plot error heatmaps for top k kernels
             self._plot_validation_heatmaps_kernels(
                 time_coupled=time_coupled,
@@ -1196,6 +1204,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                 save_kernel_predictions=save_fig_kernels,
             )
 
+        if plot_parity:
             self._plot_parity(
                 best_result_dict=result_dict,
                 train_obj=train_obj,
@@ -1571,86 +1580,120 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
 
         plt.tight_layout()
 
+
+        # ============================================================
+        # LML vs RMSE
+        # ============================================================
+
+        fig_lml_rmse, ax = plt.subplots(figsize=(7, 6))
+
+        sc = ax.scatter(
+            lmls,
+            rmses,
+            c=scores,
+            cmap="viridis",
+            s=80,
+            edgecolor="k"
+        )
+
+        ax.set_xlabel("Log Marginal Likelihood")
+        ax.set_ylabel("Train RMSE")
+        ax.set_title(
+            f"LML vs RMSE (T{kernel_diagnostics[0]['time_node']})"
+        )
+
+        cbar = plt.colorbar(sc, ax=ax)
+        cbar.set_label("Score")
+
+        plt.tight_layout()
+
+
         if save_fig:
-                figname = train_obj.figname(
-                    prefix="kernel_diagnostics",
-                    ext="png",
-                    directory="Images/Gaussian_kernels/Diagnostics",
-                    include_greedy=True,
-                    include_extra=f"node={kernel_diagnostics[0]['time_node']}"
-                )
-                fig_kernel_scores.savefig(figname, dpi=300)
+
+            figname = train_obj.figname(
+                prefix="kernel_diagnostics",
+                ext="pdf",
+                directory="Images/Gaussian_kernels/Diagnostics",
+                include_greedy=True,
+                include_extra=f"node={kernel_diagnostics[0]['time_node']}"
+            )
+
+            with PdfPages(figname) as pdf:
+
+                # ============================================================
+                # 1. MAIN DIAGNOSTICS (existing multi-panel figure)
+                # ============================================================
+                pdf.savefig(fig_kernel_scores, bbox_inches="tight")
+
+                # ============================================================
+                # 2. LML vs RMSE
+                # ============================================================
+                pdf.savefig(fig_lml_rmse, bbox_inches="tight")
+
 
     def _plot_validation_heatmaps_kernels(
-                                        self,
-                                        time_coupled,
-                                        kernel_diagnostics,
-                                        scaler_x,
-                                        scaler_y,
-                                        time_node,
-                                        train_obj:TrainingSetResults,
-                                        n_q_slices=3,
-                                        top_k=2
-                                        ):
+        self,
+        time_coupled,
+        kernel_diagnostics,
+        scaler_x,
+        scaler_y,
+        time_node,
+        train_obj: TrainingSetResults,
+        n_q_slices=3,
+        top_k=2
+    ):
         """
         Heatmaps of relative prediction error for best kernels.
 
-        Layout:
-        - rows = q-slices
-        - columns = kernels
-        - 1 colorbar per row (no overlap)
+        Supports dynamic parameter selection:
+        - max 3 effective varying dimensions
+        - x1 + x2 → x_eff
+        - remaining dims become slices
         """
 
         # ============================================================
         # VALIDATION DATA
         # ============================================================
-        # Validation parameter space
-        train_obj_truth_space = TrainingSetResults(
-            **self.result_kwargs_training(
-                property = train_obj.property,
-                ecc_ref_space=self.ecc_ref_space_output,
-                mean_ano_ref_space=self.mean_ano_ref_space_output,
-                mass_ratio_space=self.mass_ratio_space_output,)
+        train_obj_truth_space = self.generate_truth_residuals(
+            property=train_obj.property
         )
+
         X_val = train_obj_truth_space.parameter_grid
 
-        # append time as extra dimension for time-coupled regression predictions
-        t = np.full((X_val.shape[0], 1), self.time[train_obj.empirical_indices[time_node]])
-            
-        
+        t = np.full((X_val.shape[0], 1),
+                    self.time[train_obj.empirical_indices[time_node]])
+
         if time_coupled:
-            # full input matrix for time-coupled regression predictions (all grid points)
-            X_val = np.hstack([
-                X_val,
-                t
-            ])
+            X_val = np.hstack([X_val, t])
 
-            
         X_scaled = scaler_x.transform(X_val)
-        
-        
-        # ------------------------------------------------------------
-        # TRUTH ON FULL REQUESTED GRID
-        # ------------------------------------------------------------
-
-        try:
-            train_obj_truth_space.load_residuals()
-        except Exception as e:
-            print(f"Error loading residuals for full space: {e}")
-            self._calculate_residuals(
-                train_obj=train_obj_truth_space,
-                truncate_at_ISCO=train_obj.truncate_at_ISCO,
-                truncate_at_tmin=train_obj.truncate_at_tmin,
-            )
 
         truth_residuals = train_obj_truth_space.residuals
         y_true = truth_residuals[:, train_obj.empirical_indices[time_node]]
 
-        ecc = X_val[:, 0]
-        l = X_val[:, 1]
-        q = X_val[:, 2]
-
         eps = 1e-12
+
+        # ============================================================
+        # PARAMETER DETECTION (ORDERED)
+        # ============================================================
+        param_names = ["e", "l", "q", "x1", "x2"]
+        X_base = X_val[:, :len(param_names)]
+
+        varying = []
+        for i, name in enumerate(param_names):
+            if np.unique(X_base[:, i]).size > 1:
+                varying.append(name)
+
+        # ---- x1 + x2 compression ----
+        if "x1" in varying and "x2" in varying:
+            varying = [v for v in varying if v not in ["x1", "x2"]]
+            varying.append("x_eff")
+
+        if len(varying) > 3:
+            raise ValueError(
+                f"Too many varying parameters {varying}. "
+                "Max supported is 3 (after x_eff compression)."
+            )
 
         # ============================================================
         # BEST KERNELS
@@ -1659,22 +1702,26 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             [d["score"] for d in kernel_diagnostics]
         )[-top_k:][::-1]
 
-        
-
         best_kernels = [kernel_diagnostics[i] for i in best_indices]
-        # print(f'in func T{time_node}', best_indices[:5])
-        for k in best_kernels:
-            print(k["label"])
-        # ============================================================
-        # Q SLICES
-        # ============================================================
-        q_vals = np.unique(q)
-        if n_q_slices > len(q_vals):
-            n_q_slices = len(q_vals)
-        q_indices = np.linspace(0, len(q_vals) - 1, n_q_slices).astype(int)
-        q_slices = q_vals[q_indices]
 
-        print(f"Selected q slices: {q_slices}")
+        # ============================================================
+        # Q SLICES (OR GENERIC LAST DIM SLICES)
+        # ============================================================
+        slice_dim = varying[-1] if len(varying) > 2 else None
+
+        if slice_dim is not None:
+            if slice_dim == "x_eff":
+                x_eff = X_base[:, 3] + X_base[:, 4]
+                slice_vals = np.unique(x_eff)
+            else:
+                idx = param_names.index(slice_dim)
+                slice_vals = np.unique(X_base[:, idx])
+
+            n_slices = min(n_q_slices, len(slice_vals))
+            slice_indices = np.linspace(0, len(slice_vals) - 1, n_slices).astype(int)
+            slices = slice_vals[slice_indices]
+        else:
+            slices = [None]
 
         # ============================================================
         # OUTPUT FILE
@@ -1692,93 +1739,103 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         pdf = PdfPages(filepath)
 
         n_kernels = len(best_kernels)
-        n_q = len(q_slices)
+        n_slices = len(slices)
 
         # ============================================================
-        # FIGURE + GRID SPEC
+        # FIGURE LAYOUT
         # ============================================================
         fig = plt.figure(
-            figsize=(5 * n_kernels + 1.2, 4 * n_q)
+            figsize=(5 * n_kernels + 1.2, 4 * n_slices)
         )
 
         gs = gridspec.GridSpec(
-            n_q,
-            n_kernels + 1,  # extra column for colorbar
+            n_slices,
+            n_kernels + 1,
             width_ratios=[1] * n_kernels + [0.05],
             wspace=0.25,
             hspace=0.35
         )
 
-        axes = np.empty((n_q, n_kernels), dtype=object)
+        axes = np.empty((n_slices, n_kernels), dtype=object)
         cbar_axes = []
 
-        for qi in range(n_q):
-            for k_id in range(n_kernels):
-                axes[qi, k_id] = fig.add_subplot(gs[qi, k_id])
-
-            cbar_axes.append(fig.add_subplot(gs[qi, -1]))
+        for si in range(n_slices):
+            for ki in range(n_kernels):
+                axes[si, ki] = fig.add_subplot(gs[si, ki])
+            cbar_axes.append(fig.add_subplot(gs[si, -1]))
 
         # ============================================================
-        # LOOP OVER Q SLICES
+        # PRECOMPUTE PREDICTIONS (UNCHANGED LOGIC)
         # ============================================================
-        for qi, qv in enumerate(q_slices):
+        all_errors_per_kernel = []
 
-            mask_q = np.isclose(q, qv)
+        for k in best_kernels:
+            gp = k["gp"]
 
-            # --------------------------------------------------------
-            # compute row normalization (shared across kernels)
-            # --------------------------------------------------------
-            all_errors = []
+            y_pred_scaled, _ = gp.predict(X_scaled, return_std=True)
 
-            for k in best_kernels:
-                gp = k["gp"]
-                y_pred_scaled, _ = gp.predict(
-                            X_scaled,
-                            return_std=True
-                        )
+            y_pred = scaler_y.inverse_transform(
+                y_pred_scaled.reshape(-1, 1)
+            ).flatten()
 
-                y_pred = scaler_y.inverse_transform(
-                            y_pred_scaled.reshape(-1, 1)
-                        ).flatten()
-                
-                rel_error = np.abs(y_pred - y_true) / (np.abs(y_true) + eps)
-                all_errors.append(rel_error)
+            rel_error = np.abs(y_pred - y_true) / (np.abs(y_true) + eps)
+            all_errors_per_kernel.append(rel_error)
 
-                # print(f'T{time_node} ; {k["label"]}: {rel_error[:5]}, {y_true[:5]}')
+        all_errors_per_kernel = np.array(all_errors_per_kernel)
 
-            # Normalization for heatmap colorbar
-            all_vals_for_norm = np.concatenate(all_errors)
+        vmin = np.nanmin(all_errors_per_kernel)
+        vmax = np.nanmax(all_errors_per_kernel)
+        norm = Normalize(vmin=vmin, vmax=vmax)
 
-            vmin = np.nanmin(all_vals_for_norm)
-            vmax = np.nanmax(all_vals_for_norm)
+        # ============================================================
+        # PLOTTING
+        # ============================================================
+        for si, s in enumerate(slices):
 
-            norm = Normalize(vmin=vmin, vmax=vmax)
+            if slice_dim is None:
+                mask = np.ones(len(X_val), dtype=bool)
 
-            all_errors = np.array(all_errors)
+            else:
+                if slice_dim == "x_eff":
+                    x_eff = X_base[:, 3] + X_base[:, 4]
+                    mask = np.isclose(x_eff, s)
+                else:
+                    idx = param_names.index(slice_dim)
+                    mask = np.isclose(X_base[:, idx], s)
 
-            # --------------------------------------------------------
-            # LOOP KERNELS
-            # --------------------------------------------------------
-            for k_id, k in enumerate(best_kernels):
+            for ki, k in enumerate(best_kernels):
 
-                ax = axes[qi, k_id]
+                ax = axes[si, ki]
 
-                rel_error = all_errors[k_id]
-                err_vals = rel_error[mask_q]
-                
-                e_vals = ecc[mask_q]
-                l_vals = l[mask_q]
-                
+                err_vals = all_errors_per_kernel[ki][mask]
 
-                e_unique = np.unique(e_vals)
-                l_unique = np.unique(l_vals)
+                X_sub = X_base[mask]
 
-                Z = np.full((len(e_unique), len(l_unique)), np.nan)
+                # ====================================================
+                # DETERMINE 2D AXES (FIRST TWO VARYING)
+                # ====================================================
+                active_dims = []
+                for i, name in enumerate(param_names):
+                    if name in varying and name != slice_dim:
+                        active_dims.append(i)
 
-                for i in range(len(e_vals)):
-                    ei = np.where(e_unique == e_vals[i])[0][0]
-                    li = np.where(l_unique == l_vals[i])[0][0]
-                    Z[ei, li] = err_vals[i]
+                if len(active_dims) < 2:
+                    raise ValueError("Need at least 2 varying dims for heatmap")
+
+                d0, d1 = active_dims[:2]
+
+                x_vals = X_sub[:, d1]
+                y_vals = X_sub[:, d0]
+
+                x_unique = np.unique(x_vals)
+                y_unique = np.unique(y_vals)
+
+                Z = np.full((len(y_unique), len(x_unique)), np.nan)
+
+                for i in range(len(x_vals)):
+                    yi = np.where(y_unique == y_vals[i])[0][0]
+                    xi = np.where(x_unique == x_vals[i])[0][0]
+                    Z[yi, xi] = err_vals[i]
 
                 im = ax.imshow(
                     Z,
@@ -1786,48 +1843,41 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                     origin="lower",
                     norm=norm,
                     extent=[
-                        l_unique.min() if len(l_unique) > 1 else l_unique.min() - 1e-3,
-                        l_unique.max() if len(l_unique) > 1 else l_unique.max() + 1e-3,
-                        e_unique.min() if len(e_unique) > 1 else e_unique.min() - 1e-3,
-                        e_unique.max() if len(e_unique) > 1 else e_unique.max() + 1e-3
+                        x_unique.min(), x_unique.max(),
+                        y_unique.min(), y_unique.max()
                     ],
                 )
 
-                ax.set_title(f"k={k['label']}, q={qv:.3g}")
+                title_extra = f"k={k['label']}"
+                if slice_dim is not None:
+                    title_extra += f", {slice_dim}={s:.3g}"
 
-                ax.xaxis.set_major_formatter(mticker.FormatStrFormatter('%.2f'))
-                ax.yaxis.set_major_formatter(mticker.FormatStrFormatter('%.2f'))
+                ax.set_title(title_extra)
 
-                if qi == n_q - 1:
-                    ax.set_xlabel("l")
-                else:
-                    ax.set_xticklabels([])
+                ax.set_xlabel(param_names[d1])
+                ax.set_ylabel(param_names[d0])
 
-                if k_id == 0:
-                    ax.set_ylabel("e")
-                else:
-                    ax.set_yticklabels([])
-
-            # ========================================================
-            # COLORBAR (PER ROW, NO OVERLAP)
-            # ========================================================
             cbar = fig.colorbar(
-                axes[qi, 0].images[0],
-                cax=cbar_axes[qi]
+                axes[si, 0].images[0],
+                cax=cbar_axes[si]
             )
             cbar.set_label(r"$|y_{pred} - y_{true}|$")
 
         # ============================================================
-        # FINALIZE
+        # FINALIZE PDF
         # ============================================================
         fig.tight_layout()
+
+        plt.show()
 
         pdf.savefig(fig, bbox_inches="tight")
         plt.close(fig)
         pdf.close()
 
-        print(self.colored_text(f"Saved kernel error PDF → {filepath}", "blue"))
-
+        print(self.colored_text(
+            f"Saved kernel error PDF → {filepath}",
+            "blue"
+        ))
 
     def _plot_parity(self,
                     best_result_dict,
@@ -1907,91 +1957,6 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                             include_extra=f"T{best_result_dict['time_node']}")
             fig_parity.savefig(figname, dpi=300)
 
-    # def _gaussian_process_regression(self, time_node, training_set, optimized_kernel=None, plot_kernels=False, save_fig_kernels=False):
-    #     # Extract X and training data
-    #     X = self.ecc_ref_space_output[:, np.newaxis]
-    #     X_train = np.array(self.best_rep_parameters).reshape(-1, 1)
-    #     y_train = np.squeeze(training_set.T[time_node])
-
-    #     # Scale X_train
-    #     scaler_x = StandardScaler()
-    #     X_train_scaled = scaler_x.fit_transform(X_train)
-
-    #     # Scale X (for predictions)
-    #     X_scaled = scaler_x.transform(X)
-
-    #     # Scale y_train
-    #     scaler_y = StandardScaler()
-    #     y_train_scaled = scaler_y.fit_transform(y_train.reshape(-1, 1)).flatten()
-
-    #     kernels = [
-    #         Matern(length_scale=0.1, length_scale_bounds=(1e-1, 1), nu=1.5)  # <= 0.3 eccentricity
-    #     ]
-
-    #     mean_prediction_per_kernel = []
-    #     std_predictions_per_kernel = []
-    #     lml_per_kernel = []
-
-    #     for kernel in kernels:
-    #         start = time.time()
-    #         if optimized_kernel is None:
-    #             gaussian_process = GaussianProcessRegressor(kernel=kernel, n_restarts_optimizer=20)
-    #         else:
-    #             gaussian_process = GaussianProcessRegressor(kernel=optimized_kernel, optimizer=None)
-
-    #         # Fit the GP model on scaled data
-    #         gaussian_process.fit(X_train_scaled, y_train_scaled)
-    #         optimized_kernel = gaussian_process.kernel_
-
-    #         end = time.time()
-
-    #         # Log-Marginal Likelihood
-    #         lml = gaussian_process.log_marginal_likelihood_value_
-    #         lml_per_kernel.append(lml)
-
-    #         # Print the optimized kernel and hyperparameters
-    #         print(f"kernel = {kernel}; Optimized kernel: {optimized_kernel} | time = {end - start:.2f}s | LML = {lml:.4f}")
-
-    #         # Make predictions on scaled X
-    #         mean_prediction_scaled, std_prediction_scaled = gaussian_process.predict(X_scaled, return_std=True)
-    #         mean_prediction = scaler_y.inverse_transform(mean_prediction_scaled.reshape(-1, 1)).flatten()
-    #         std_prediction = std_prediction_scaled * scaler_y.scale_[0]
-
-    #         mean_prediction_per_kernel.append(mean_prediction)
-    #         std_predictions_per_kernel.append(std_prediction)
-        
-    #     if plot_kernels is True:
-    #         GPR_fit = plt.figure()
-
-    #         for i in range(len(mean_prediction_per_kernel)):
-    #             plt.scatter(X_train, y_train, color='red', label="Observations", s=10)
-    #             plt.plot(X, mean_prediction_per_kernel[i], label='Mean prediction', linewidth=0.8)
-    #             plt.fill_between(
-    #                 X.ravel(),
-    #             (mean_prediction_per_kernel[i] - 1.96 * std_predictions_per_kernel[i]), 
-    #             (mean_prediction_per_kernel[i] + 1.96 * std_predictions_per_kernel[i]),
-    #                 alpha=0.5,
-    #                 label=r"95% confidence interval",
-    #             )
-    #         plt.legend(loc = 'upper left')
-    #         plt.xlabel("$e$")
-    #         if train_obj.property == 'amplitude':
-    #             plt.ylabel("$f_A(e)$")
-    #         elif train_obj.property == 'phase':
-    #             plt.ylabel("$f_{\phi}(e)$")
-    #         # plt.title(f"GPR {train_obj.property} at T_{time_node}")
-    #         # plt.show()
-
-    #         if save_fig_kernels is True:
-    #             figname = f'Gaussian_kernels_{train_obj.property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_space)}_{max(self.ecc_ref_space)}_Ni={len(self.ecc_ref_space)}]_No={len(self.ecc_ref_space_output)}_gp={self.min_greedy_error_phase}_ga={self.min_greedy_error_amp}_Ngp={self.N_greedy_vecs_phase}_Nga={self.N_greedy_vecs_amp}.png'
-                
-    #             # Ensure the directory exists, creating it if necessary and save
-    #             os.makedirs('Images/Gaussian_kernels', exist_ok=True)
-    #             GPR_fit.savefig('Images/Gaussian_kernels/' + figname)
-
-    #             print('Figure is saved in Images/Gaussian_kernels/' + figname)
-
-    #     return mean_prediction, [(mean_prediction - 1.96 * std_prediction), (mean_prediction + 1.96 * std_prediction)], optimized_kernel, lml_per_kernel
 
     def _get_gpr_obj(self, property):
         """Helper method to get or create the GPRFitResults object for the specified property."""
@@ -2015,12 +1980,13 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                             min_greedy_error=None, N_basis_vecs=None, 
                             time_coupled=False, 
                             save_fits_to_file=True, 
-                            plot_kernel_errors=False, plot_kernel_predictions=False, save_fig_kernels=False,
-                            plot_GPR_fits=False, save_fig_GPR_fits=False,
-                            n_worst_pred=5, save_fig_pred=False, 
-                            plot_residuals_ecc_evolve=False, save_fig_ecc_evolve=False, 
-                            plot_residuals_time_evolve=False, save_fig_time_evolve=False, 
-                            plot_validation_heatmaps=False, n_q_slices_heatmapplot=3, save_fig_heatmaps=False,
+                            plot_kernel_diagnostics=False, plot_kernel_predictions=False, plot_kernel_heatmaps=False, plot_parity=False,
+                            plot_worst_predictions=False, n_worst_pred=5,
+                            plot_residuals_ecc_evolve=False,
+                            plot_residuals_time_evolve=False, 
+                            plot_validation_heatmaps=False, n_q_slices_heatmap=3, error_metric_heatmap='mismatch', # 'mismatch' or 'difference'
+                            plot_fit_diagnostics=False,
+                            save_figs=False,
                             no_file_load=False
                             ):
 
@@ -2084,9 +2050,11 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                     time_node=node_i,
                     train_obj=train_obj,
                     optimized_kernel=optimized_kernel,
-                    plot_kernel_errors=plot_kernel_errors,
+                    plot_kernel_diagnostics=plot_kernel_diagnostics,
                     plot_kernel_predictions=plot_kernel_predictions,
-                    save_fig_kernels=save_fig_kernels,
+                    plot_kernel_heatmaps=plot_kernel_heatmaps,
+                    plot_parity=plot_parity,
+                    save_fig_kernels=save_figs,
                     time_coupled=time_coupled
                 )
 
@@ -2137,7 +2105,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                 # --------------------------------------------
                 # Warm-start next empirical node
                 # --------------------------------------------
-                optimized_kernel = best_result["kernel"]
+                optimized_kernel = [best_result["kernel"], best_result["label"]]
 
             end2 = time.time()
             print(f'time full GPR = {end2 - start2}')
@@ -2148,21 +2116,12 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                 gpr_obj.save_gpr_obj()
 
         # If plot_fits is True, plot the GPR fits
-        if plot_GPR_fits:
-            # self._plot_GPR_fits(
-            #     train_obj=train_obj, 
-            #     gpr_obj=gpr_obj, 
-            #     gaussian_fit=None, 
-            #     training_set=None, 
-            #     lml_fits=None, 
-            #     save_fig_fits=save_fig_GPR_fits
-            #     )
-
+        if plot_worst_predictions:
             self._plot_fit_predictions(
                 gpr_obj=gpr_obj,
                 train_obj=train_obj,
                 n_worst=n_worst_pred,
-                save_kernel_predictions=save_fig_pred
+                save_fig=save_figs
             )
 
         if plot_validation_heatmaps:
@@ -2170,9 +2129,16 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                 time_coupled=time_coupled,
                 gpr_obj=gpr_obj,
                 train_obj=train_obj,
-                n_q_slices=n_q_slices_heatmapplot,
-                save_fig=save_fig_heatmaps,
+                n_q_slices=n_q_slices_heatmap,
+                error_metric=error_metric_heatmap,
+                save_fig=save_figs,
                 )
+            
+        if plot_fit_diagnostics:
+            self._plot_fit_diagnostics(
+                gpr_obj=gpr_obj,
+                save_fig=save_figs,
+            )
         
         
         # If plot_residuals_ecc_evolve or plot_residuals_time_evolve is True, plot the residuals
@@ -2181,9 +2147,9 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             self._plot_residuals(
                 train_obj=train_obj, 
                 plot_eccentric_evolv=plot_residuals_ecc_evolve, 
-                save_fig_eccentric_evolve=save_fig_ecc_evolve, 
+                save_fig_eccentric_evolve=save_figs, 
                 plot_time_evolve=plot_residuals_time_evolve, 
-                save_fig_time_evolve=save_fig_time_evolve
+                save_fig_time_evolve=save_figs
                 )
 
         return gpr_obj
@@ -2401,12 +2367,136 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             figname = gpr_obj.figname(prefix="GPR_fits", ext="png", directory="Images/Gaussian_fits")
             fig_residual_training_fit.savefig(figname)
 
+    def mismatch(self, h1, h2):
+        h1_n = h1 / np.linalg.norm(h1)
+        h2_n = h2 / np.linalg.norm(h2)
+        pointwise_overlap = (h1_n * h2_n)
+        return 1 - pointwise_overlap
+
+    def generate_truth_residuals(self,
+                            property,
+                            ):
+        # ============================================================
+        # VALIDATION GRID
+        # ============================================================
+        train_obj_truth_space = TrainingSetResults(
+            **self.result_kwargs_training(
+                property=property,
+                ecc_ref_space=self.ecc_ref_space_output,
+                mean_ano_ref_space=self.mean_ano_ref_space_output,
+                mass_ratio_space=self.mass_ratio_space_output,
+                chi1_space=self.chi1_space_output,
+                chi2_space=self.chi2_space_output,
+            )
+        )
+        
+        # ============================================================
+        # GET TRUTH RESIDUALS
+        # ============================================================
+
+        try:
+            train_obj_truth_space.load_residuals()
+        except Exception:
+            self._calculate_residuals(
+                train_obj=train_obj_truth_space,
+            )
+
+        return train_obj_truth_space
+    
+    def get_true_vs_pred(self,
+                            time_coupled,
+                            train_obj:TrainingSetResults,
+                            gpr_obj:GPRFitResults,
+                            get_mismatch=False,
+                            get_diff=False,
+                            get_relative_diff=False
+                            ):
+        if gpr_obj.validation_errors is None:
+
+            train_obj_truth_space = self.generate_truth_residuals(
+                property=gpr_obj.property
+            )
+            truth_residuals = train_obj_truth_space.residuals
+            y_true = truth_residuals.T[train_obj.empirical_indices]
+
+            X_val_base = train_obj_truth_space.parameter_grid
+
+            
+            
+            y_pred = []
+
+            for t_node, gp in enumerate(gpr_obj.gp_models):
+
+                X_node = X_val_base.copy()
+
+                if time_coupled:
+                    t = np.full(
+                        (X_val_base.shape[0], 1),
+                        self.time[train_obj.empirical_indices[t_node]],
+                    )
+
+                    X_val = np.hstack([X_val_base, t])
+                else:
+                    X_val = X_val_base
+
+                # Scale x
+                X_scaled = gpr_obj.scaler_x[t_node].transform(X_node)
+
+                # Predict y_pred with scaled x and y
+                gp = gpr_obj.gp_models[t_node]
+
+                y_pred_scaled, _ = gp.predict(
+                    X_scaled,
+                    return_std=True
+                )
+
+                # Unscale y
+                y_pred_node = gpr_obj.scaler_y[t_node].inverse_transform(
+                            y_pred_scaled.reshape(-1, 1)
+                        ).flatten()
+
+                y_pred.append(y_pred_node)
+
+            if time_coupled:
+                # collapse time dimension (or store full tensor if needed)
+                y_pred = np.mean(y_pred, axis=0)
+
+            y_pred = np.array(y_pred)
+
+            results = {
+                "y_true": y_true,
+                "y_pred": y_pred,
+                "X_val": X_val
+            }
+
+            def mismatch(h1, h2):
+                    h1_n = h1 / np.linalg.norm(h1)
+                    h2_n = h2 / np.linalg.norm(h2)
+                    pointwise_overlap = (h1_n * h2_n)
+                    return 1 - pointwise_overlap
+
+            if get_mismatch:
+                results["mismatch"] = mismatch(y_pred, y_true)
+            
+            if get_diff:
+                results["diff"] = y_pred - y_true
+
+            if get_relative_diff:
+                eps = 1e-12
+                results["relative_diff"] = np.abs((y_pred - y_true) / (y_true + eps))
+            
+            gpr_obj.validation_errors = results
+        
+        return gpr_obj.validation_errors
+
+
     def _plot_validation_heatmaps(
         self,
         time_coupled,
         gpr_obj:GPRFitResults,
         train_obj:TrainingSetResults,
         n_q_slices=3,
+        error_metric='mismatch', # "mismatch" vs "difference"
         save_fig=False,
     ):
         """
@@ -2418,39 +2508,35 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         - 1 colorbar per row
         """
 
-        # ============================================================
-        # VALIDATION GRID
-        # ============================================================
-        train_obj_truth_space = TrainingSetResults(
-            **self.result_kwargs_training(
-                property=gpr_obj.property,
-                ecc_ref_space=self.ecc_ref_space_output,
-                mean_ano_ref_space=self.mean_ano_ref_space_output,
-                mass_ratio_space=self.mass_ratio_space_output,
-            )
+        if error_metric == "mismatch":
+            get_mismatch = True
+            get_diff = False
+        elif error_metric == "difference":
+            get_mismatch = False
+            get_diff = True
+        else:
+            print(self.colored_text("Choose either 'mismatch' or 'difference' as error metric", 'red'))
+            sys.exit(1)
+
+        err_results = self.get_true_vs_pred(
+            time_coupled=time_coupled,
+            train_obj=train_obj,
+            gpr_obj=gpr_obj,
+            get_diff=get_diff,
+            get_mismatch=get_mismatch,
         )
 
-        X_val = train_obj_truth_space.parameter_grid
+        if error_metric == "mismatch":
+            errors = err_results["mismatch"]
+        else:
+            errors = np.abs(err_results["diff"])
 
-        
-        # ============================================================
-        # LOAD TRUTH
-        # ============================================================
 
-        try:
-            train_obj_truth_space.load_residuals()
-        except Exception:
-            self._calculate_residuals(
-                train_obj=train_obj_truth_space,
-                truncate_at_ISCO=gpr_obj.truncate_at_ISCO,
-                truncate_at_tmin=gpr_obj.truncate_at_tmin,
-            )
+        X_val = err_results["X_val"]
 
         ecc = X_val[:, 0]
         l = X_val[:, 1]
         q = X_val[:, 2]
-
-        eps = 1e-12
 
         # ============================================================
         # Q SLICES
@@ -2463,76 +2549,14 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         print(f"Selected q slices: {q_slices}")
 
         # ============================================================
-        # PRECOMPUTE ALL ERRORS (IMPORTANT FIX)
+        # PLOTTING
         # ============================================================
+        
         n_fits = len(gpr_obj.gp_models)
-        truth_residuals = train_obj_truth_space.residuals
-
-        all_errors = np.zeros((n_fits, truth_residuals.shape[0]))
-        all_errors_global = []
-
-        for i, gp in enumerate(gpr_obj.gp_models):
-
-            if time_coupled:
-
-                # ========================================================
-                # TIME IS A FEATURE → must evaluate multiple times
-                # ========================================================
-
-                rel_errors_time = []
-
-                for time_node in range(n_fits):
-
-                    t = np.full(
-                        (X_val.shape[0], 1),
-                        self.time[train_obj.empirical_indices[time_node]],
-                    )
-
-                    X_val_time = np.hstack([X_val, t])
-
-                    X_scaled = gpr_obj.scaler_x[i].transform(X_val_time)
-
-                    y_true = truth_residuals[:, train_obj.empirical_indices[time_node]]
-
-                    y_pred_scaled, _ = gp.predict(X_scaled, return_std=True)
-
-                    y_pred = gpr_obj.scaler_y[i].inverse_transform(
-                        y_pred_scaled.reshape(-1, 1)
-                    ).flatten()
-
-                    rel_error = np.abs(y_pred - y_true) / (np.abs(y_true) + eps)
-
-                    rel_errors_time.append(rel_error)
-
-                # collapse time dimension (or store full tensor if needed)
-                rel_error = np.mean(rel_errors_time, axis=0)
-
-            else:
-
-                # ========================================================
-                # TIME IS MODEL INDEX → original logic
-                # ========================================================
-
-                X_scaled = gpr_obj.scaler_x[i].transform(X_val)
-
-                y_true = truth_residuals[:, train_obj.empirical_indices[i]]
-
-                y_pred_scaled, _ = gp.predict(X_scaled, return_std=True)
-
-                y_pred = gpr_obj.scaler_y[i].inverse_transform(
-                    y_pred_scaled.reshape(-1, 1)
-                ).flatten()
-
-                rel_error = np.abs(y_pred - y_true) / (np.abs(y_true) + eps)
-                print(f'T{i} ; {gpr_obj.labels[i]}: {rel_error[:5]}, {y_true[:5]}')
-
-            all_errors[i] = rel_error
-            all_errors_global.append(rel_error)
-            # print(3, all_errors, '\n', all_errors_global)
 
         norm = LogNorm(
-            vmin=np.nanmin(all_errors_global),
-            vmax=np.nanmax(all_errors_global),
+            vmin=np.nanmin(errors),
+            vmax=np.nanmax(errors),
         )
 
         # ============================================================
@@ -2570,7 +2594,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
 
                 ax = axes[gp_id, qi]
 
-                rel_error = all_errors[gp_id]
+                rel_error = errors[gp_id]
                 # print(f'in err ; T{gp_id}', gpr_obj.labels[gp_id])
                 err_vals = rel_error[mask_q]
 
@@ -2612,10 +2636,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                 else:
                     ax.set_xlabel("")
 
-                if gp_id == 0:
-                    ax.set_ylabel("e")
-                else:
-                    ax.set_yticklabels([])
+                ax.set_ylabel("e")
 
         # ============================================================
         # COLORBARS (FIXED: ONE PER ROW)
@@ -2626,7 +2647,11 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                 axes[i, 0].images[0],
                 cax=cbar_axes[i],
             )
-            cbar.set_label("Relative error")
+
+            if error_metric == 'difference':
+                cbar.set_label(r"$|y_{\rm pred}-y_{\rm true}|$")
+            else:
+                cbar.set_label(r"$1 - \hat{y}_{\mathrm{pred}}(x)\,\hat{y}_{\mathrm{true}}(x)$")
 
         # ============================================================
         # FINALIZE
@@ -2651,7 +2676,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         gpr_obj:GPRFitResults,
         train_obj:TrainingSetResults,
         n_worst=5,
-        save_kernel_predictions=False,
+        save_fig=False,
         ):
         """
         Plots kernel comparison for GP models and computes best/worst kernels.
@@ -2685,137 +2710,180 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         best_info : dict
         """
 
-                # ============================================================
+        # ============================================================
         # VALIDATION GRID
         # ============================================================
-        train_obj_truth_space = TrainingSetResults(
-            **self.result_kwargs_training(
-                property=gpr_obj.property,
-                ecc_ref_space=self.ecc_ref_space_output,
-                mean_ano_ref_space=self.mean_ano_ref_space_output,
-                mass_ratio_space=self.mass_ratio_space_output,
-            )
+
+        err_results = self.get_true_vs_pred(
+            time_coupled=False,
+            train_obj=train_obj,
+            gpr_obj=gpr_obj,
+            get_diff=True,
+            get_mismatch=True,
         )
 
-        X_val = train_obj_truth_space.parameter_grid
-
-        
-        # ============================================================
-        # LOAD TRUTH
-        # ============================================================
-
-        try:
-            train_obj_truth_space.load_residuals()
-        except Exception:
-            self._calculate_residuals(
-                train_obj=train_obj_truth_space,
-                truncate_at_ISCO=gpr_obj.truncate_at_ISCO,
-                truncate_at_tmin=gpr_obj.truncate_at_tmin,
-            )
+        X_val = err_results["X_val"]
 
         # ============================================================
         # PLOT SETUP
         # ============================================================
-        fig_kernel_predictions, (ax1, ax2) = plt.subplots(
-            2, 1,
+        fig_worst_predictions, (ax1, ax2, ax3) = plt.subplots(
+            3, 1,
             figsize=(12, 8),
-            gridspec_kw={"height_ratios": [3, 1]},
+            gridspec_kw={"height_ratios": [3, 1, 1]},
             sharex=True
         )
 
-        eps = 1e-12
-
+        # Plot colors
+        colors = plt.cm.tab10(np.linspace(0, 1, n_worst))
+        # Pick n_worst based on lowest score
         worst_gp_indices = np.argsort(gpr_obj.best_scores)[-n_worst:][::-1]
 
-        for time_node in worst_gp_indices:
-            truth_residuals = train_obj_truth_space.residuals
-            y_true = truth_residuals[:, train_obj.empirical_indices[time_node]]
+        for i, time_node in enumerate(worst_gp_indices):
 
-            gp = gpr_obj.gp_models[time_node]
-            X_scaled = gpr_obj.scaler_x[time_node].transform(X_val)
+            color = colors[i]
 
-            y_pred_scaled, _ = gp.predict(
-                        X_scaled,
-                        return_std=True
-                    )
-
-            y_pred = gpr_obj.scaler_y[time_node].inverse_transform(
-                        y_pred_scaled.reshape(-1, 1)
-                    ).flatten()
+            y_pred = err_results["y_pred"][time_node]
+            y_true = err_results["y_true"][time_node]
+            mismatch = err_results["mismatch"][time_node]
+            error_diff = err_results["diff"][time_node]
             
             # ============================================================
-            # COMPUTE RELATIVE ERROR
+            # KEEP TRACK OF VARYING AND CONSTANT PARAMETERS FOR LABELING
             # ============================================================
-        
+
+
+            # Parameter label
+            param_names = ["e", "l", "q", "x1", "x2"]
+            param_fmts  = [".3f", ".2f", ".1f", ".2f", ".2f"]
+
+            values = [X_val[:, i] for i in range(X_val.shape[1])]
+            vary = [len(np.unique(v)) > 1 for v in values]
+
+            varying_params = []
+
+            for i, (name, fmt) in enumerate(zip(param_names, param_fmts)):
+                if vary[i]:
+                    varying_params.append(f"{name}={X_val[time_node, i]:{fmt}}")
+
+            x_label = "(" + ", ".join(varying_params) + ")"
+
+            fixed_params = []
+
+            for i, (name, fmt) in enumerate(zip(param_names, param_fmts)):
+                if not vary[i]:
+                    fixed_params.append(f"{name}={X_val[0, i]:{fmt}}")
+
+            fixed_title = ""
+            if fixed_params:
+                fixed_title = " | fixed: " + ", ".join(fixed_params)
+            
+            # ============================================================
+            # PLOT N-WORST
+            # ============================================================
+
 
             x_axis = np.arange(len(y_pred))
-
-            # ============================================================
-            # TRUE VALUES
-            # ============================================================
+            
+            # Truth (only first gets generic legend entry)
             ax1.plot(
                 x_axis,
                 y_true,
-                color="blue",
-                linewidth=2.5,
-                linestyle='dashed',
-                label="Truth"
+                color=color,
+                linestyle="--",
+                linewidth=2
             )
 
-            # ============================================================
-            # TRAINING POINTS
-            # ============================================================
-            y_train = np.squeeze(train_obj.training_set.T[time_node])
-
-            ax1.scatter(
-                x_axis[train_obj.basis_indices],
-                y_train,
-                color="red",
-                s=40,
-                zorder=10,
-                label="Training points"
-            )
-
-
+            # Prediction
             ax1.plot(
                 x_axis,
                 y_pred,
-                linewidth=1,
-                alpha=0.6,
-                
-                label=f"Prediction"
+                color=color,
+                linewidth=1.5
             )
-            
-            rel_error = np.abs(y_pred - y_true) / (np.abs(y_true) + eps)
+
+            # Invisible line to create one legend entry per parameter set
+            ax1.plot(
+                [],
+                [],
+                color=color,
+                linewidth=4,
+                label=x_label,
+            )
 
             ax2.plot(
                 x_axis,
-                rel_error,
-                linewidth=2.5,
-                label="Relative error"
+                error_diff,
+                color=color,
+                linewidth=2,
             )
 
+            ax3.plot(
+                x_axis,
+                mismatch,
+                color=color,
+                linewidth=2,
+            )
         # ============================================================
         # FINAL LABELS
         # ============================================================
-        ax1.set_ylabel("Residual")
-        ax2.set_ylabel(r"$y_{pred}$ - $y_{true}$")
+
+        # Add generic legend entries once
+        ax1.plot(
+            [], [],
+            color="black",
+            linestyle="--",
+            linewidth=2,
+            label="Truth",
+        )
+
+        ax1.plot(
+            [], [],
+            color="black",
+            linestyle="-",
+            linewidth=2,
+            label="Prediction",
+        )
+
+        # Add generic legend entries once
+        ax2.plot(
+            [], [],
+            color="black",
+            linewidth=2,
+            label="Prediction error",
+        )
+
+        # Add generic legend entries once
+        ax3.plot(
+            [], [],
+            color="black",
+            linewidth=2,
+            label="Mismatch",
+        )
+
+        if train_obj.property == "amplitude":
+            ax1.set_ylabel(r"$\Delta A$")
+        else:
+            ax1.set_ylabel(r"$\Delta \phi$")
+        ax2.set_ylabel(r"$y_{\rm pred}-y_{\rm true}$")
+        ax3.set_ylabel(r"$1 - \hat{y}_{\mathrm{pred}}(x)\,\hat{y}_{\mathrm{true}}(x)$")
         ax2.set_xlabel("Parameter grid index")
 
         ax1.set_title(
-            f"Worst {n_worst} predictions and their true residuals"
+            f"Worst {n_worst} predictions and their true residuals{fixed_title}"
         )
 
-        ax1.legend(fontsize=8)
-        ax2.legend(fontsize=8)
+        ax1.legend()
+        ax2.legend()
+        ax3.legend()
 
         plt.tight_layout()
 
-        if save_kernel_predictions:
-            figname = train_obj.figname(prefix="best_gp",
-                                directory="Images/Fit_Diagnostics/Predictions",
+        if save_fig:
+            figname = train_obj.figname(prefix=f"worst_{n_worst}_gp",
+                                directory="Images/Fit_Diagnostics/Worst_predictions",
             )
-            fig_kernel_predictions.savefig(figname, dpi=300)
+            fig_worst_predictions.savefig(figname, dpi=300)
 
 
 
@@ -3053,10 +3121,9 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
     #     print(self.colored_text(f"Saved kernel error PDF → {filepath}", "blue"))
 
 
-    def _plot_best_fit_diagnostics(
+    def _plot_fit_diagnostics(
         self,
         gpr_obj:GPRFitResults,
-        best_score=None,
         save_fig=False
     ):
         """
@@ -3138,9 +3205,10 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         rmses = gpr_obj.best_train_rmses
         scores = gpr_obj.best_scores
 
+
         lml_label = "Log Marginal Likelihood"
         rmse_label = "Train RMSE"
-        score_label = "Score (Norm[LML] - 0.5 * Norm[RMSE])"
+        score_label = r"$N_{\mathrm{LML}} - \frac{1}{2}N_{\mathrm{RMSE}}$"
                 
         kernel_fit_times = gpr_obj.fit_times
         n_plots = 4
@@ -3188,9 +3256,6 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         ax.axhline(np.mean(scores), linestyle="--", color="gray", label="mean")
         ax.axhline(np.max(scores), linestyle=":", color="green", label="best")
 
-        if best_score is not None:
-            ax.axhline(best_score, linestyle="--", color="black", label="selected best")
-
         ax.legend()
 
         # ============================================================
@@ -3211,22 +3276,59 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
 
         ax.legend()
 
+        plt.tight_layout()
+
         # ============================================================
         # X LABELS
         # ============================================================
         axes[-1].set_xticks(x)
         axes[-1].set_xticklabels(labels, rotation=45, ha="right")
 
+
+
+        # ============================================================
+        # HISTOGRAM KERNELS PLOT
+        # ============================================================
+
+        counts = Counter(gpr_obj.labels)
+
+        fig_kernel_freq, ax = plt.subplots(
+            figsize=(10, 4),
+            constrained_layout=True
+        )
+
+        ax.bar(counts.keys(), counts.values())
+
+        ax.set_ylabel("Wins")
+        ax.set_title("Kernel selection frequency")
+
+        ax.tick_params(axis="x", rotation=30)
+
         plt.tight_layout()
 
+
         if save_fig:
-                figname = gpr_obj.figname(
-                    prefix="fit_diagnostics",
-                    ext="png",
-                    directory="Images/Fit_Diagnostics/Errors",
-                    include_greedy=True,
-                )
-                fig_kernel_scores.savefig(figname, dpi=300)
+
+            figname = gpr_obj.figname(
+                prefix="fit_diagnostics",
+                ext="pdf",
+                directory="Images/Fit_Diagnostics/Errors",
+            )
+
+            with PdfPages(figname) as pdf:
+
+                # ============================================================
+                # 1. MAIN FIT DIAGNOSTICS
+                # ============================================================
+                pdf.savefig(fig_kernel_scores, bbox_inches="tight")
+
+                # ============================================================
+                # 2. KERNEL SELECTION FREQUENCY
+                # ============================================================
+                pdf.savefig(fig_kernel_freq, bbox_inches="tight")
+                
+
+        
 
 
     def compute_B_matrix(self, train_obj:TrainingSetResults, save_matrix_to_file=True):
@@ -3286,12 +3388,12 @@ duration = 4 # seconds
 time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
 
 gt = Generate_Offline_Surrogate(time_array=time_array, 
-                                ecc_ref_parameterspace=np.linspace(0.001, 0.3, num=80),
-                                mean_ano_parameterspace=[0],
-                                mass_ratio_parameterspace=[1],
+                                ecc_ref_parameterspace=np.linspace(0.001, 0.1, num=10),
+                                mean_ano_parameterspace=[0, np.pi],
+                                mass_ratio_parameterspace=[1, 2],
                                 chi1_parameterspace=[0],
                                 chi2_parameterspace=[0],
-                                sampling_step_output=0.001,
+                                sampling_step_output=0.01,
                                 min_greedy_error_amp=1e-6,
                                 min_greedy_error_phase=1e-6,
                                 # N_basis_vecs_amp=60,
@@ -3340,18 +3442,18 @@ gt = Generate_Offline_Surrogate(time_array=time_array,
 # plt.show()
 gt.fit_to_training_set('amplitude', 
                     #    min_greedy_error=1e-8, 
-                       save_fits_to_file=False, 
-                    #    plot_kernel_errors=True,
+                       save_fits_to_file=True, 
+                       plot_kernel_heatmaps=True,
                     #    plot_kernel_predictions=True,
-                       save_fig_kernels=True,
                        time_coupled=False,
-                    #    plot_validation_heatmaps=True,
-                    #    save_fig_heatmaps=True    
-                       plot_GPR_fits=True, save_fig_pred=True, 
+                    #    plot_validation_heatmaps=True, n_q_slices_heatmap=1, error_metric_heatmap='difference',
+                    #    plot_worst_predictions=True, n_worst_pred=15, 
+                    #    plot_fit_diagnostics=True, 
+                       save_figs=True,
                     #    plot_residuals_ecc_evolve=True, save_fig_ecc_evolve=True, 
                     #    plot_residuals_time_evolve=True, save_fig_time_evolve=True,
                     )
-
+# plt.show()
 # gt.fit_to_training_set('phase', 
 #                     #    min_greedy_error=1e-8, 
 #                        save_fits_to_file=False, 
@@ -3363,7 +3465,7 @@ gt.fit_to_training_set('amplitude',
 #                     #    plot_residuals_ecc_evolve=True, save_fig_ecc_evolve=True, 
 #                     #    plot_residuals_time_evolve=True, save_fig_time_evolve=True,
 #                     )
-plt.close()
+plt.close('all')
 
     # gt.fit_to_training_set('amplitude', min_greedy_error=1e-6, save_fits_to_file=True, plot_GPR_fits=True, save_fig_GPR_fits=True, plot_residuals_ecc_evolve=True, save_fig_ecc_evolve=True, plot_residuals_time_evolve=True, save_fig_time_evolve=True)
 
