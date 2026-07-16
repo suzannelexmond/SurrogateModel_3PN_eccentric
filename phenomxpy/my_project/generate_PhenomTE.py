@@ -22,7 +22,10 @@ from phenomxpy.utils import SecondtoMass, AmpSItoNR, m1ofq, m2ofq, AmpNRtoSI, Hz
 
 from gw_eccentricity import measure_eccentricity
 
+from scipy.interpolate import interp1d, CubicSpline
+
 import gc
+
 
 @dataclass
 class WaveformResult:
@@ -39,7 +42,6 @@ class WaveformResult:
     mean_ano_ref: float
     mass_ratio: float
 
-
     mass1: float = None
     mass2: float = None
     total_mass: float = None
@@ -47,26 +49,27 @@ class WaveformResult:
     chi2: float = None
     luminosity_distance: float = None
 
+
 class Simulate_Waveform(Warnings, Automated_Settings):
-    """ 
-    Simulates time-domain (2,2) mode EOB waveform of a binary blackhole merger. Generates time-domain from starting frequency (f_lower) till peak at t=0 for time in geometric units. 
     """
-    
-    def __init__(self, 
-                 time_array, 
-                 f_lower=10, 
-                 f_ref=20, 
-                 ecc_ref=None, 
-                 mean_anomaly_ref=0., 
-                 total_mass=None, 
-                 luminosity_distance=None, 
-                 mass_ratio=1, 
-                 chi1=0, 
-                 chi2=0, 
-                 phiRef=0., 
-                 inclination=0., 
-                 truncate_at_ISCO=True, 
-                 truncate_at_tmin=True, 
+    Simulates time-domain (2,2) mode EOB waveform of a binary blackhole merger. Generates time-domain from starting frequency (f_lower) till peak at t=0 for time in geometric units.
+    """
+
+    def __init__(self,
+                 time_array,
+                 f_lower=10,
+                 f_ref=20,
+                 ecc_ref=None,
+                 mean_anomaly_ref=0.,
+                 total_mass=None,
+                 luminosity_distance=None,
+                 mass_ratio=1,
+                 chi1=0,
+                 chi2=0,
+                 phiRef=0.,
+                 inclination=0.,
+                 truncate_at_ISCO=True,
+                 truncate_at_tmin=True,
                  geometric_units=True):
         """
         Parameters:
@@ -81,112 +84,82 @@ class Simulate_Waveform(Warnings, Automated_Settings):
         f_ref [Hz], float: Reference frequency at which the waveform parameters (eccentricity, spin, ...) are defined.
         chi1 [dimensionless], float, ndarray : Spin of primary. If float, interpreted as z component
         chi2 [dimensionless], float, ndarray : Spin of secondary. If float, interpreted as z component
-        PhiRef = [rad], float : Reference phase of the waveform. 
+        PhiRef = [rad], float : Reference phase of the waveform.
         inclination [rad], float : Inclination angle of the binary system. Defaults to 0 (face-on).
-        truncate_at_ISCO, True OR False, bool : If the waveform should be truncated at the ISCO frequency, set to True. 
+        truncate_at_ISCO, True OR False, bool : If the waveform should be truncated at the ISCO frequency, set to True.
         truncate_at_tmin, True OR False, bool : If the waveform should be truncated at the physical start of the time-domain (tmin), set to True.
         geometric_units, True OR False, bool : If the waveform should be generated in geometric units (c=G=M=1), set to True. For physical units, set to False and provide total_mass and luminosity_distance.
         """
 
-        # Initial parameters
         if total_mass is None:
-            total_mass = 60 # Reference total mass for geometric frequency calculations [M_sun]
+            total_mass = 60
 
-        self.time = SecondtoMass(time_array, total_mass) # Time array in geometric units c=G=M=1
-        self.original_time = np.copy(self.time) # Keep original time array for reference
+        self.time = SecondtoMass(time_array, total_mass)
+        self.original_time = np.copy(self.time)
+
+        self.f_lower = f_lower
+        self.f_ref = f_ref
+        self.total_mass = total_mass
+        self.mass_ratio = mass_ratio
+        self.luminosity_distance = luminosity_distance
+        self.chi1 = chi1
+        self.chi2 = chi2
+        self.inclination = inclination
+        self.phiRef = phiRef
+        self.ecc_ref = ecc_ref
+        self.mean_ano_ref = mean_anomaly_ref
+
+        self.truncate_at_ISCO = truncate_at_ISCO
+        self.truncate_at_tmin = truncate_at_tmin
+
+        self.geometric_units = geometric_units
+
+        self.hp_ecc = None
+        self.hc_ecc = None
+        self.amp_ecc = None
+        self.phase_ecc = None
+
+        self.hp_circ = None
+        self.hc_circ = None
+        self.phase_circ = None
+        self.amp_circ = None
+
+        self.mean_anomaly = None
+        self.eccentricity = None
+
+        self.t_vs_l_mapping_dict=None # Mapping of mean anomaly vs time domain
         
-        self.f_lower =  f_lower# Start frequency [Hz]
-        self.f_ref = f_ref # Reference frequency at which the waveform parameters (eccentricity, spin, ...) are defined.
-        self.total_mass = total_mass # Total mass of the binary [M]
-        self.mass_ratio = mass_ratio # Mass ratio of the binary (m1/m2 >= 1)
-        self.luminosity_distance = luminosity_distance # Luminosity distance of the binary [Mpc]
-        self.chi1 = chi1 # Dimensionless spin of primary [float,ndarray]. If float, interpreted as z component
-        self.chi2 = chi2 # Dimensionless spin of secondary [float,ndarray]. If float, interpreted as z component
-        self.inclination = inclination # Inclination angle of the binary system [rad]
-        self.phiRef = phiRef # Reference phase of the waveform [rad]
-        self.ecc_ref = ecc_ref # eccentricity of binary at start frequency
-        self.mean_ano_ref = mean_anomaly_ref # Mean anomaly at reference frequency [rad]
+        super().__init__()
 
-        self.truncate_at_ISCO = truncate_at_ISCO # If the waveform should be truncated at the ISCO frequency, set to True.
-        self.truncate_at_tmin = truncate_at_tmin # If the waveform should be truncated at the physical start of the time-domain (tmin), set to True.
-
-        self.geometric_units = geometric_units   # Waveform in geometric units for True and SI units for False
-
-        self.hp_ecc = None # TimeSeries object of plus polarisation
-        self.hc_ecc = None # TimeSeries object of cross polarisation
-        self.amp_ecc = None # Amplitude of the waveform
-        self.phase_ecc = None # Phase of the waveform
-
-        self.hp_circ = None # TimeSeries object of plus polarisation for non-eccentric inspiral 
-        self.hc_circ = None # TimeSeries object of cross polarisation for non-eccentric inspiral 
-        self.phase_circ = None # Phase of the non-eccentric inspiral waveform
-        self.amp_circ = None # Amplitude of the non-eccentric inspiral waveform
-
-        self.mean_anomaly = None # Mean anomaly for self.time [rad]
-        self.eccentricity = None # Eccentricity for self.time [dimensionless]
-    
-        super().__init__() # Initialize Inherited classes
-
-    def simulate_waveform(self, 
+    def simulate_waveform(self,
                           time_array=None,
-                          f_ref=None, 
-                          f_lower=None, 
-                          ecc_ref=None, 
+                          f_ref=None,
+                          f_lower=None,
+                          ecc_ref=None,
                           mean_ano_ref=None,
                           total_mass=None,
-                          luminosity_distance=None,  
-                          mass_ratio=None, 
-                          chi1=None, 
-                          chi2=None, 
-                          phiRef=None, 
-                          inclination=None, 
-                          truncate_at_ISCO=False, 
-                          truncate_at_tmin=False, 
-                          geometric_units=True, 
-                          plot_polarisations=False, 
-                          save_fig_polarisations=False, 
-                          plot_ISCO_cut_off=False, 
-                          save_fig_ISCO_cut_off=False, 
+                          luminosity_distance=None,
+                          mass_ratio=None,
+                          chi1=None,
+                          chi2=None,
+                          phiRef=None,
+                          inclination=None,
+                          truncate_at_ISCO=False,
+                          truncate_at_tmin=False,
+                          geometric_units=True,
+                          plot_polarisations=False,
+                          save_fig_polarisations=False,
+                          plot_ISCO_cut_off=False,
+                          save_fig_ISCO_cut_off=False,
                           update_results=False,
                           show_truncation_warnings=True,
                           ):
         """
         Simulate plus and cross polarisations of the eccentric IMRPhenomTE waveform (2,2) mode for a user-defined time array (waveform peak at t=0).
-        
-        Parameters:
-        ----------------
-        time_array [s], np.array : Time array in seconds.
-        ecc_ref [dimensionless], float: Eccentricity of binary at start f_lower
-        mean_anomaly_ref [rad], float : Mean anomaly at reference frequency f_ref
-        total_mass [M_sun], int : Total mass of the binary in solar masses. =None for geometric units
-        luminosity_distance [Mpc], float : Luminosity distance of the binary in megaparsec. =None for geometric units
-        mass_ratio [dimensionless], float [1, inf] : Mass ratio of the binary, q >= 1
-        f_lower [Hz], float: Start frequency of the waveform
-        f_ref [Hz], float: Reference frequency at which the waveform parameters (eccentricity, spin, ...) are defined.
-        chi1 [dimensionless], float, ndarray : Spin of primary. If float, interpreted as z component
-        chi2 [dimensionless], float, ndarray : Spin of secondary. If float, interpreted as z component
-        PhiRef = [rad], float : Reference phase of the waveform. 
-        inclination [rad], float : Inclination angle of the binary system. Defaults to 0 (face-on).
-        truncate_at_ISCO, True OR False, bool : If the waveform should be truncated at the ISCO frequency, set to True. 
-        truncate_at_tmin, True OR False, bool : If the waveform should be truncated at the physical start of the time-domain (tmin), set to True.
-
-        geometric_units, True OR False, bool : If the waveform should be generated in geometric units (c=G=M=1), set to True. For physical units, set to False and provide total_mass and luminosity_distance.
-        plot_polarisations, True OR False, bool : For a plot of the plus and cross polarisations, set to True.
-        save_polarisations, True Or False, bool : If plot of the polarisations should be saved to a automatically created folder \Images, set to True.
-        plot_ISCO_cut_off, True OR False, bool : If the cut-off at ISCO frequency should be plotted in the instantaneous phase frequency evolution, set to True.
-        save_fig_ISCO_cut_off, True OR False, bool : If the plot of the ISCO cut-off should be saved to a automatically created folder \Images\ISCO, set to True.
-        
-        update_results, True OR False, bool : If the class attributes should be updated with the new simulation results (time, hp, hc), set to True.
-        
-        Returns:
-        ----------------
-        hp [dimensionless], np.array: Time-domain plus polarisation 
-        hc [dimensionless], np.array: Time-domain cross polarisation 
         """
 
         # ---------------------------- Parameter resolution and consistency checks --------------------------
 
-        # Resolve parameters (if not specified, use instance objects or default values)
         total_mass, luminosity_distance = self._resolve_mass_distance(total_mass, luminosity_distance, geometric_units)
         time_array = self.resolve_property(prop=time_array, default=self.time)
         mass_ratio = self.resolve_property(prop=mass_ratio, default=self.mass_ratio)
@@ -201,30 +174,30 @@ class Simulate_Waveform(Warnings, Automated_Settings):
         truncate_at_ISCO = self.resolve_property(prop=truncate_at_ISCO, default=self.truncate_at_ISCO)
         truncate_at_tmin = self.resolve_property(prop=truncate_at_tmin, default=self.truncate_at_tmin)
 
-        # If total mass not specified, fall back to PhenomTE reference_mass
         reference_total_mass = 60
         mass_for_conversion = self.resolve_property(prop=total_mass, default=reference_total_mass)
 
-        # Calculate f_geom for conversion between total_mass vs Phenom reference_mass for geometric waveforms
         if geometric_units:
             f_ref, f_lower = self._convert_frequencies(
                 total_mass=mass_for_conversion, reference_total_mass=60
             )
 
-        # Calculate symmetric mass ratio eta from mass ratio q = m1/m2 >= 1
         eta = self._eta_from_mass_ratio(q=mass_ratio)
 
         # --------------------------- Generate waveform with PhenomTE --------------------------
-        # start timer for waveform generation
         start = time.time()
+
+        # [OPTIMIZED #2]
+        # if MEMORY_PROFILE:
+        #     check_memory_usage(f"simulate_waveform START ecc={ecc_ref} q={mass_ratio}")
 
         phen = phenomt.PhenomTE(
             mode=[2, 2],
-            times=time_array, # time array in geometric units
-            total_mass=mass_for_conversion, # total mass for geometric frequency conversion. If total_mass is not specified, fall back to reference mass of 60 M_sun
-            eta=eta, # symmetric mass-ratio eta = [0, 0.25]
-            s1=chi1, # spin of primary, dimensionless. If float, interpreted as z component
-            s2=chi2, # spin of secondary, dimensionless. If float, interpreted as z component
+            times=time_array,
+            total_mass=mass_for_conversion,
+            eta=eta,
+            s1=chi1,
+            s2=chi2,
             eccentricity=ecc_ref,
             f_ref=f_ref,
             f_lower=f_lower,
@@ -233,24 +206,19 @@ class Simulate_Waveform(Warnings, Automated_Settings):
             mean_anomaly=mean_ano_ref,
         )
 
-        # Geometric units vs SI units
-        # compute_polarizations() only accepts inclination, phiRef, times, distance and total_mass variables. It silently ignores all other parameters.
         if geometric_units:
             phen.compute_polarizations(times=time_array)
         else:
-            # for SI units, the distance and total mass are needed for the amplitude scaling, so they must be included in the compute_polarizations call. 
             phen.compute_polarizations(
                 times=time_array,
                 total_mass=phen.pWF.total_mass,
                 distance=luminosity_distance,
             )
-        
+
         # -------------------------- waveform truncation to physical lengths (tmin and ISCO) --------------------------
 
-        # Mask for physical parts of the waveform (tmin - ISCO), initially set to all True (no truncation)
         valid_mask = np.ones_like(time_array, dtype=bool)
 
-        # Check if the waveform is physical for the given time_array. Otherwise cut to physical lengths
         if truncate_at_tmin:
             if phen.pWF.tmin > time_array[0]:
                 warnings.warn(self.colored_text(
@@ -258,8 +226,6 @@ class Simulate_Waveform(Warnings, Automated_Settings):
                     "Either use the truncate_at_tmin=True setting to automatically truncate to physical start of the time-domain "
                     "or adjust the time-array manually to start at higher values."
                 , 'red'))
-                # mask to only include the physical range of the time-domain
-                # Set to False for everything before tmin, effectively truncating the waveform to the physical start of the time-domain.
                 valid_mask &= (time_array >= phen.pWF.tmin)
 
             if show_truncation_warnings:
@@ -269,26 +235,21 @@ class Simulate_Waveform(Warnings, Automated_Settings):
                     'green'
                 ))
 
-        # True because it's smallest truncated waveform AND true because the surrogate is called with the ISCO cut-off.
         if truncate_at_ISCO:
-            # Truncate the waveform at ISCO frequency
-            idx_cut = self._compute_idx_ISCO(phen.hp[valid_mask], phen.hc[valid_mask], time_array[valid_mask], plot_ISCO_cut_off=plot_ISCO_cut_off, save_fig_ISCO_cut_off=save_fig_ISCO_cut_off)
-            
-            # Map masked indices back to full-array indices
-            masked_indices = np.where(valid_mask)[0]
+            idx_cut = self._compute_idx_ISCO(phen.hp[valid_mask], phen.hc[valid_mask], time_array[valid_mask],
+                                             plot_ISCO_cut_off=plot_ISCO_cut_off,
+                                             save_fig_ISCO_cut_off=save_fig_ISCO_cut_off)
 
-            # Turn off everything from idx_cut onward in the currently valid region
+            masked_indices = np.where(valid_mask)[0]
             valid_mask[masked_indices[idx_cut:]] = False
 
             if show_truncation_warnings:
                 print(self.colored_text(
                     f'NEW TIME-DOMAIN after truncate at ISCO (in geometric units): '
-                    f'[{int(time_array[valid_mask][0])}, {int(time_array[valid_mask][-1])}] M', 
+                    f'[{int(time_array[valid_mask][0])}, {int(time_array[valid_mask][-1])}] M',
                     'green'
                 ))
-        
-            
-        # Update the waveform and time array to only include the valid (physical) parts of the waveform. This is done after both truncation steps, so the final waveform is truncated to the shortest physical waveform.
+
         hp = phen.hp[valid_mask]
         hc = phen.hc[valid_mask]
         time_array = time_array[valid_mask]
@@ -297,8 +258,14 @@ class Simulate_Waveform(Warnings, Automated_Settings):
         if geometric_units is False:
             time_array = MasstoSecond(time_array, total_mass)
 
-        print(f'time : SimInspiral_M_independent ecc = {round(ecc_ref, 3)}, q={mass_ratio}, chi1={chi1}, chi2={chi2}, len = {len(phen.hp)}, M = {self.total_mass}, lum_dist={self.luminosity_distance}, t=[{int(time_array[0])}, {int(time_array[-1])}, num={len(time_array)}], f_lower={self.f_lower}, f_ref={self.f_ref} | computation time = {(time.time()-start)} seconds')
-        
+        print(f'time : SimInspiral_M_independent e = {round(ecc_ref, 3)}, '
+        f'l={mean_ano_ref}, q={mass_ratio}, chi1={chi1}, chi2={chi2}, '
+        f'len = {len(phen.hp)}, M = {self.total_mass}, '
+        f'lum_dist={self.luminosity_distance}, '
+        f't=[{int(time_array[0])}, {int(time_array[-1])}, num={len(time_array)}], '
+        f'f_lower={self.f_lower}, f_ref={self.f_ref} | '
+        f'computation time = {np.round(time.time()-start, 3)} seconds')
+
         self.last_result = WaveformResult(
             hp=hp,
             hc=hc,
@@ -315,24 +282,28 @@ class Simulate_Waveform(Warnings, Automated_Settings):
             luminosity_distance=luminosity_distance,
         )
 
-
         # --------------------------- Plot polarizations --------------------------
         if plot_polarisations is True:
             self._plot_polarisations(save_fig=save_fig_polarisations)
-        
+
         # --------------------------- Update instance attributes --------------------------
         if update_results is True:
             self.time = time_array
             self.hp_ecc, self.hc_ecc = hp, hc
-        
+
+        # [OPTIMIZED #4]: Clean up phenom object internals we no longer need
+        del phen
+        gc.collect()
+
+        # [OPTIMIZED #2]
+        # if MEMORY_PROFILE:
+        #     check_memory_usage(f"simulate_waveform END ecc={ecc_ref} q={mass_ratio}")
+
         return hp, hc, time_array
-    
-        
 
     def _resolve_mass_distance(self, total_mass, luminosity_distance, geometric_units):
         """
-        Checks for consistency between parameters (total_mass and luminosity_distance) and the choice of geometric units vs SI units. 
-        If asked for SI units and total_mass and luminosity distance are not available, the function checks for existing instance objects.
+        Checks for consistency between parameters (total_mass and luminosity_distance) and the choice of geometric units vs SI units.
         """
         if geometric_units:
             if total_mass is not None or luminosity_distance is not None:
@@ -351,57 +322,37 @@ class Simulate_Waveform(Warnings, Automated_Settings):
 
         return total_mass, luminosity_distance
 
-
     def _convert_frequencies(self, total_mass, reference_total_mass=60):
         """
-        Conversion for geometric reference frequency based on the total mass of the system. 
-        PhenomTE always uses M_ref=60 for f_geom conversion, so given a different total_mass, this can give different waveform results due to incompatibility with the M_ref.
-        PhenomTE also uses a reference mass for geometric systems! This is always needed for f_geom conversion.
+        Conversion for geometric reference frequency based on the total mass of the system.
         """
-        # Convert f_ref and f_lower to geometric frequencies based on the reference total mass
         f_ref_geom = HztoMf(self.f_ref, reference_total_mass)
         f_lower_geom = HztoMf(self.f_lower, reference_total_mass)
-        # Convert geometric frequencies to physical frequencies based on the actual total mass of the system
         f_ref = MftoHz(f_ref_geom, total_mass)
         f_lower = MftoHz(f_lower_geom, total_mass)
 
         return f_ref, f_lower
 
-
     def _eta_from_mass_ratio(self, q):
-        # Calculate symmetric mass ratio eta from mass ratio q = m1/m2 >= 1
         eta = q / (1 + q)**2
         return eta
-    
 
     def _plot_polarisations(self, save_fig=True):
         """
         Plot the plus and cross polarizations of the waveform.
-        
-        Parameters:
-        ----------------
-        hp [dimensionless], np.array: Plus polarization of the waveform
-        hc [dimensionless], np.array: Cross polarization of the waveform
-        plot_polarisations, True OR False, bool: Set to True to include a plot of the polarizations
-        save_fig, True OR False, bool: Saves the figure to the directory Images/Polarisations
-        
-        Returns:
-        ----------------
-        None
         """
 
         if not hasattr(self, "last_result"):
             raise ValueError("Run simulate_waveform() first.")
 
-        # Load latest waveform run specifics
         r = self.last_result
-            
-        fig = plt.figure(figsize=(12,5))
-      
-        plt.plot(r.time[-len(r.hp):], r.hp, label = f'$h_+$', linewidth=0.6)
+
+        fig = plt.figure(figsize=(12, 5))
+
+        plt.plot(r.time[-len(r.hp):], r.hp, label=f'$h_+$', linewidth=0.6)
         plt.plot(r.time[-len(r.hc):], r.hc, label=r'$h_{\times}$', linewidth=0.6)
 
-        plt.legend(loc = 'upper left')
+        plt.legend(loc='upper left')
         if r.geometric_units:
             plt.xlabel('t [M]')
             plt.title(f'e_ref={round(r.ecc_ref, 3)}, q={r.mass_ratio}, l_ref={round(r.mean_ano_ref, 3)}, chi1={r.chi1}, chi2={r.chi2}, f_min={round(r.f_lower, 2)} Hz, f_ref={round(r.f_ref, 2)} Hz')
@@ -410,56 +361,36 @@ class Simulate_Waveform(Warnings, Automated_Settings):
             plt.title(f'M={r.total_mass}, e_ref={round(r.ecc_ref, 3)}, q={r.mass_ratio}, l_ref={round(r.mean_ano_ref, 3)}, chi1={r.chi1}, chi2={r.chi2}, f_min={round(r.f_lower, 2)} Hz, f_ref={round(r.f_ref, 2)} Hz, D_L={r.luminosity_distance} Mpc')
         plt.ylabel('$h_{22}$')
 
-        
         plt.grid(True)
-
         plt.tight_layout()
-        # plt.show()
 
         if save_fig is True:
             dir = 'Images/Polarisations/'
             figname = f'Polarisations_M={r.total_mass}_ecc_ref={round(r.ecc_ref, 3)}_mean_ano_ref={round(r.mean_ano_ref, 2)}_q={r.mass_ratio}.png'
-            # Ensure the directory exists, creating it if necessary and save
             os.makedirs('Images/Polarisations', exist_ok=True)
             fig.savefig(figname, dpi=300, bbox_inches='tight')
-
             print(self.colored_text(f'Figure is saved in {dir + figname}', 'blue'))
 
-        # plt.close('all')
+        # [OPTIMIZED #5]: Close figure after saving or displaying
+        plt.close(fig)
 
-    
     def _compute_idx_ISCO(self, hp, hc, time_array, plot_ISCO_cut_off=False, save_fig_ISCO_cut_off=False):
         """
-        Compute the index at which the waveform reaches the ISCO frequency, which is approximately 0.021 in dimensionless units.
-        This is done by finding the point where the instantaneous phase frequency Mf crosses the ISCO frequency.
-
-        Parameters:
-        ----------------
-        hp [dimensionless], np.array: Plus polarization of the waveform
-        hc [dimensionless], np.array: Cross polarization of the waveform
-        time_array [dimensionless], np.array: Time array corresponding to the waveform
-        plot_ISCO_cut_off, True OR False, bool: Set to True to include a plot of the ISCO cut-off
-        save_fig_ISCO_cut_off, True OR False, bool: Saves the figure to the directory Images/ISCO
-        
-        Returns:
-        ----------------
-        idx_cut [int]: Index at which the waveform reaches the ISCO frequency
+        Compute the index at which the waveform reaches the ISCO frequency.
         """
-        # Compute instantaneous phase frequency Mf = dϕ/dt / 2π
-        phase = np.unwrap(np.arctan2(hc, hp))
-        phase -= phase[0] # Normalize phase to start at zero, correcting for the initial phase offset.
 
-        # Calculate phase from plus and cross polarizations
+        phase = np.unwrap(np.arctan2(hc, hp))
+        phase -= phase[0]
+
         dphi_dt = np.gradient(phase, time_array)
         Mf = dphi_dt / (2 * np.pi)
 
-        # Calculate ISCO frequency (dimensionless): Mf_ISCO = 1 / (6^(3/2) * π) ≈ 0.021
-        f_isco = 1 / (6**1.5 * np.pi)  # dimensionless Mf_ISCO
+        f_isco = 1 / (6**1.5 * np.pi)
 
         above_isco = np.where(Mf >= f_isco)[0]
 
         if len(above_isco) == 0:
-            idx_cut = len(time_array) # in case there is no ISCO wihtin the specified time-array range
+            idx_cut = len(time_array)
         else:
             idx_cut = above_isco[0]
 
@@ -467,7 +398,7 @@ class Simulate_Waveform(Warnings, Automated_Settings):
             plot_ISCO_cut_off = False
 
         if plot_ISCO_cut_off is True:
-            ISCO_vs_Mf_after = plt.figure(figsize=(12,5))
+            ISCO_vs_Mf_after = plt.figure(figsize=(12, 5))
 
             plt.plot(time_array, Mf, label=f'Mf before ISCO cut')
             plt.axhline(f_isco, color='red', linestyle='--', label='Mf ISCO $e$=0', linewidth=0.6)
@@ -478,20 +409,19 @@ class Simulate_Waveform(Warnings, Automated_Settings):
             plt.show()
 
             if save_fig_ISCO_cut_off is True:
-                os.makedirs('Images/ISCO', exist_ok=True)  # Ensure the directory exists
-
+                os.makedirs('Images/ISCO', exist_ok=True)
                 figname = 'Images/ISCO/truncate_at_ISCO_vs_Mf_M={}_f_ref={}_f_lower={}.svg'.format(self.total_mass, round(self.f_ref, 2), self.f_lower)
                 ISCO_vs_Mf_after.savefig(figname, dpi=300, bbox_inches='tight')
-                # plt.close('all') 
                 print(self.colored_text(f'Figure is saved in {figname}', 'blue'))
-            
-        # Clean memory
+
+            # [OPTIMIZED #5]: Close figure after saving
+            plt.close(ISCO_vs_Mf_after)
+
+        # [OPTIMIZED #4]: Clean memory
         del phase, dphi_dt, Mf, f_isco, above_isco
+        gc.collect()
 
         return idx_cut
-
-    
-
 
 
 class Waveform_Properties(Simulate_Waveform):
@@ -499,22 +429,23 @@ class Waveform_Properties(Simulate_Waveform):
     Calculates and plots residuals (residual = eccentric - non-eccentric) of waveform properties: amplitude, phase and frequency.
     """
 
-    def __init__(self, 
-                 time_array, 
-                 f_lower=10, 
-                 f_ref=20, 
-                 ecc_ref=None, 
-                 mean_anomaly_ref=0, 
-                 total_mass=None, 
-                 luminosity_distance=None, 
-                 mass_ratio=1, 
-                 chi1=0, 
-                 chi2=0, 
+    def __init__(self,
+                 time_array,
+                 f_lower=10,
+                 f_ref=20,
+                 ecc_ref=None,
+                 mean_anomaly_ref=0,
+                 total_mass=None,
+                 luminosity_distance=None,
+                 mass_ratio=1,
+                 chi1=0,
+                 chi2=0,
                  phiRef=0.,
-                 inclination=0., 
-                 truncate_at_ISCO=True, 
+                 inclination=0.,
+                 truncate_at_ISCO=True,
                  truncate_at_tmin=True,
-                 geometric_units=True
+                 geometric_units=True,
+                 parametrization='mean_anomaly'
                  ):
         """
         Parameters:
@@ -529,29 +460,31 @@ class Waveform_Properties(Simulate_Waveform):
         f_ref [Hz], float: Reference frequency at which the waveform parameters (eccentricity, spin, ...) are defined.
         chi1 [dimensionless], float, ndarray : Spin of primary. If float, interpreted as z component
         chi2 [dimensionless], float, ndarray : Spin of secondary. If float, interpreted as z component
-        PhiRef = [rad], float : Reference phase of the waveform. 
+        PhiRef = [rad], float : Reference phase of the waveform.
         inclination [rad], float : Inclination angle of the binary system. Defaults to 0 (face-on).
-        truncate_at_ISCO, True OR False, bool : If the waveform should be truncated at the ISCO frequency, set to True. 
+        truncate_at_ISCO, True OR False, bool : If the waveform should be truncated at the ISCO frequency, set to True.
         truncate_at_tmin, True OR False, bool : If the waveform should be truncated at the physical start of the time-domain (tmin), set to True.
         geometric_units, True OR False, bool : If the waveform should be generated in geometric units (c=G=M=1), set to True. For physical units, set to False and provide total_mass and luminosity_distance.
         """
+        # Parametrization of the waveforms 
+        self.parametrization = parametrization # "mean_anomaly" vs "time"
+        
 
-        # Inherit parameters from Simulate_Inspiral class
-        super().__init__(time_array=time_array, 
-                         ecc_ref=ecc_ref, 
-                         total_mass=total_mass, 
+        super().__init__(time_array=time_array,
+                         ecc_ref=ecc_ref,
+                         total_mass=total_mass,
                          mass_ratio=mass_ratio,
-                         luminosity_distance=luminosity_distance, 
-                         f_lower=f_lower, 
-                         f_ref=f_ref, 
-                         mean_anomaly_ref=mean_anomaly_ref, 
-                         chi1=chi1, 
-                         chi2=chi2, 
-                         phiRef=phiRef, 
-                         inclination=inclination, 
-                         truncate_at_ISCO=truncate_at_ISCO, 
+                         luminosity_distance=luminosity_distance,
+                         f_lower=f_lower,
+                         f_ref=f_ref,
+                         mean_anomaly_ref=mean_anomaly_ref,
+                         chi1=chi1,
+                         chi2=chi2,
+                         phiRef=phiRef,
+                         inclination=inclination,
+                         truncate_at_ISCO=truncate_at_ISCO,
                          truncate_at_tmin=truncate_at_tmin,
-                         geometric_units=geometric_units
+                         geometric_units=geometric_units,
                          )
 
     def phase(self, hplus, hcross):
@@ -559,19 +492,14 @@ class Waveform_Properties(Simulate_Waveform):
         Calculate the phase from the plus and cross polarizations. Unitless.
         """
         phase = np.unwrap(np.arctan2(hcross, hplus))
-        phase -= phase[0] # Normalize phase to start at zero, correcting for the initial phase offset.
-        
+        phase -= phase[0]
+
         self.phase_ecc = phase
         return phase
-    
 
     def amplitude(self, hplus_geom, hcross_geom, geometric_units=True, luminosity_distance=None, total_mass=None):
         """
         Calculate the amplitude from the plus and cross polarizations.
-        If geometric_units is True, the amplitude is returned in geometric units.
-
-        Parameters:
-        hplus_geom and hcross_geom are the geometric units polarizations.
         """
         amp_geom = np.abs(hplus_geom - 1j * hcross_geom)
 
@@ -583,11 +511,9 @@ class Waveform_Properties(Simulate_Waveform):
             self.amp_ecc = amp_SI
             return amp_SI
 
-
     def polarisations(self, phase, amplitude, geometric_units=True, distance=None, total_mass=None, plot_polarisations=False, save_fig=False):
         """
         Calculate the plus and cross polarizations from the phase and amplitude.
-        If geometric_units is True, the polarizations are returned in geometric units.
         """
         if geometric_units:
             hp = amplitude * np.cos(phase)
@@ -596,71 +522,48 @@ class Waveform_Properties(Simulate_Waveform):
             hp = AmpNRtoSI(amplitude, distance, total_mass) * np.cos(phase)
             hc = AmpNRtoSI(amplitude, distance, total_mass) * np.sin(phase)
             self.time = MasstoSecond(self.time, self.total_mass)
-        
+
         if plot_polarisations is True:
-            self._plot_polarisations(hp, hc, save_fig=save_fig)
+            self._plot_polarisations(save_fig=save_fig)
 
         self.hp_ecc, self.hc_ecc = hp, hc
         return hp, hc
-    
 
     def get_orbital_parameters(self, plot_orbital_parameters=False, save_fig_orbital_parameters=False, make_diagnostic_plots=False):
         """
         Compute mean anomaly from time array and waveform polarizations.
-        Parameters:
-        ----------------
-        time_array [M], np.array : Time array in geometric units
-        hp [dimensionless], np.array : Plus polarization of the waveform
-        hc [dimensionless], np.array : Cross polarization of the waveform
-        
-        Returns:
-        ----------------
-        M [rad], np.array : Mean anomaly corresponding to the time array
         """
-        # Circulair waveform with more extended time-domain to prevent gw_eccentricity length errors
-        time_circ = np.arange(self.time[0] - 200, self.time[-1] + 200, step=self.time[1]-self.time[0])
-        self.circulair_wf(custom_time_array=time_circ)
+        time_circ_ext = np.arange(self.time[0] - 200, self.time[-1] + 200, step=self.time[1]-self.time[0])
+        self.circulair_wf(time_array=time_circ_ext)
 
         if self.hp_ecc is None or self.hc_ecc is None:
             self.simulate_waveform(truncate_at_tmin=True, truncate_at_ISCO=True, update_results=True)
 
-        # Setup dataDict (Note the required format)
         h22_ecc = self.hp_ecc - 1j * self.hc_ecc
         h22_circ = self.hp_circ - 1j * self.hc_circ
 
-        # fig, ax = plt.subplots(1,1, figsize=(12,5), sharex=True)
-        # ax.plot(self.time, h22_ecc, label='Eccentric Amplitude')
-        # ax.plot(time_circ, h22_circ, label='Circular Amplitude')
-        # ax.set_ylabel('Amplitude')
-        # ax.legend()
-        # fig.savefig('test_h22_ecc_vs_circ.png', dpi=300, bbox_inches='tight')
-
         dataDict = {"t": self.time,
            "hlm": {(2, 2): h22_ecc},
-           "t_zeroecc": time_circ, # Must be longer than ecc to avoid extrapolation errors in gw_eccentricity package
+           "t_zeroecc": time_circ_ext,
            "hlm_zeroecc": {(2, 2): h22_circ}}
 
-        # Choose method and set tref_in to full time domain for full evolution computation
-        method = "ResidualAmplitude"  # Chosen method to measure eccentricity/mean anomaly (most accurate possibility)
+        method = "ResidualAmplitude"
         tref_in = self.time
 
         return_dict = measure_eccentricity(tref_in=tref_in,
                                             method=method,
                                             dataDict=dataDict)
-        
-        # Object with all orbital parameters
-        gwecc_object = return_dict["gwecc_object"]
 
-        # Plots to show estimations by the gw_eccentricity package
+        gwecc_object = return_dict["gwecc_object"]
+        t = gwecc_object.tref_out
+
         if make_diagnostic_plots is True:
             fig, ax = gwecc_object.make_diagnostic_plots()
-
-        # Save in class object
-        self.mean_anomaly, self.eccentricity = gwecc_object.mean_anomaly, gwecc_object.eccentricity
+            # [OPTIMIZED #5]: Close diagnostic plots
+            plt.close(fig)
 
         if plot_orbital_parameters is True:
             if plot_orbital_parameters:
-
                 fig_orbital_parameters, axs = plt.subplots(
                     3, 1,
                     sharex=True,
@@ -668,13 +571,11 @@ class Waveform_Properties(Simulate_Waveform):
                     constrained_layout=True
                 )
 
-                # --- Amplitude ---
                 A = self.amplitude(self.hp_ecc, self.hc_ecc)
                 axs[0].plot(gwecc_object.tref_in, A, lw=1.2)
                 axs[0].set_ylabel(r'$A_{22}$')
                 axs[0].grid(alpha=0.3)
 
-                # --- Eccentricity ---
                 axs[1].plot(
                     gwecc_object.tref_out,
                     gwecc_object.eccentricity,
@@ -683,8 +584,6 @@ class Waveform_Properties(Simulate_Waveform):
                 axs[1].set_ylabel(r'$e$')
                 axs[1].grid(alpha=0.3)
 
-                # --- Mean anomaly ---
-                # Wrap to [0, 2π) to avoid visual jumps
                 mean_anomaly = np.mod(gwecc_object.mean_anomaly, 2*np.pi)
 
                 axs[2].plot(
@@ -699,63 +598,378 @@ class Waveform_Properties(Simulate_Waveform):
 
                 plt.show()
 
-            
             if save_fig_orbital_parameters is True:
-                os.makedirs('Images/Orbital_Parameters', exist_ok=True)  # Ensure the directory exists
-                figname = 'Images/Orbital_Parameters/Orbital_Parameters_vs_time_e_ref={}_l_ref={}f_lower={}_f_ref={}.png'.format(round(self.ecc_ref, 2), round(self.mean_ano_ref,2), self.f_lower, self.f_ref)
+                os.makedirs('Images/Orbital_Parameters', exist_ok=True)
+                figname = 'Images/Orbital_Parameters/Orbital_Parameters_vs_time_e_ref={}_l_ref={}f_lower={}_f_ref={}.png'.format(round(self.ecc_ref, 2), round(self.mean_ano_ref, 2), self.f_lower, self.f_ref)
                 fig_orbital_parameters.savefig(figname, dpi=300, bbox_inches='tight')
-                
                 print(self.colored_text(f'Figure is saved in {figname}', 'blue'))
 
-        return gwecc_object
-    
+            # [OPTIMIZED #5]: Close figure after saving
+            plt.close(fig_orbital_parameters)
 
-    # def circulair_wf(self, time_array=None):
-    #     """
-    #     Simulate plus and cross polarisations of NON-ECCENTRIC waveform Inspiral for t in units [M]. 
-    #     Also saves the phase and amplitude accordingly.
-       
-    #     Returns:
-    #     ----------------
-    #     hp_circ [dimensionless], np.array: Time-domain plus polarisation of NON-ECCENTRIC waveform
-    #     hc_circ [dimensionless], np.array: Time-domain cross polarisation of NON-ECCENTRIC waveform
+        return gwecc_object    
 
-    #     """
-    #     time_array = self.resolve_property(time_array, self.time)
-
-    #     if (self.phase_circ is None) or (self.amp_circ is None):
-    #         self.hp_circ, self.hc_circ, _ = self.simulate_waveform(ecc_ref=0, time_array=time_array)
-            
-    #         self.phase_circ = self.phase(self.hp_circ, self.hc_circ)
-    #         self.amp_circ = self.amplitude(self.hp_circ, self.hc_circ)
-
-    #     elif self.amp_circ is not None and len(self.amp_circ) != len(time_array):
-    #         # Truncate to match
-    #         self.phase_circ = self.phase_circ[:len(time_array)]
-    #         self.amp_circ = self.amp_circ[:len(time_array)]
-    #     else:
-    #         pass # self.hp_circ and self.hc_circ are already set, no need to recompute
-
-    def circulair_wf(self, mass_ratio, mean_ano_ref, chi1, chi2, time_array=None):
+    def _create_mean_anomaly_mapping(self, 
+                                     make_diagnostic_plots=False,
+                                     plot_mapping=False, 
+                                     save_fig_mapping=False,
+                                     ):
         """
-        Simulate plus and cross polarisations of NON-ECCENTRIC waveform Inspiral for t in units [M]. 
-        Also saves the phase and amplitude accordingly.
-
+        Create bidirectional time ↔ mean_anomaly interpolation mappings.
+        
+        This function handles the orbital parameter extraction and interpolation infrastructure
+        WITHOUT computing any waveform properties (amplitude/phase).
+        
         Parameters:
-        ----------------
-        mass_ratio [dimensionless], float [1, inf] : Mass ratio of the binary, q >= 1
-        mean_ano_ref [rad], float : Mean anomaly at reference frequency f_ref
-        chi1 [dimensionless], float, ndarray : Spin of primary. If float, interpreted as z component
-        chi2 [dimensionless], float, ndarray : Spin of secondary. If float, interpreted as z component
-        time_array [dimensionless], np.array : Time array in geometric units. If None, uses the instance time array.
-       
+        -----------
+        make_diagnostic_plots : bool
+            Whether to generate diagnostic plots during orbital parameter extraction
+        target_n_points : int or None
+            Target number of points for the mean anomaly domain representation.
+            If None, uses the native resolution from tref_out.
+        
         Returns:
-        ----------------
-        hp_circ [dimensionless], np.array: Time-domain plus polarisation of NON-ECCENTRIC waveform
-        hc_circ [dimensionless], np.array: Time-domain cross polarisation of NON-ECCENTRIC waveform
-
+        --------
+        mapping_dict : dict
+            Dictionary containing:
+            - 'mean_anomaly': Unwrapped mean anomaly array
+            - 'tref_out': Time aligned with mean anomaly
+            - 'time_to_mean_anomaly': Interpolant: L(t)
+            - 'mean_anomaly_to_time': Interpolant: t(L)
+            - 'original_time_grid': Original time array
+            - 'native_resolution': Original data resolution
+            - 'final_resolution': Final data resolution (may be resampled)
         """
-        # Resolve parameters (if not specified, use instance objects or default values)
+        if self.t_vs_l_mapping_dict is None:
+            # ========================================================================
+            # Get orbital parameters and extract mean anomaly
+            # ========================================================================
+            gwecc_object = self.get_orbital_parameters(make_diagnostic_plots=make_diagnostic_plots)
+            
+            # Extract mean anomaly - unwrap for continuous progression
+            L_out = np.unwrap(gwecc_object.mean_anomaly)
+
+            # ========================================================================
+            # 2. Create UNIFORM L grid
+            # ========================================================================
+            L_min, L_max = L_out.min(), L_out.max()
+            n_points = len(L_out)
+            L_uni = np.linspace(L_min, L_max, n_points)
+
+            t_out = gwecc_object.tref_out
+
+            # Save eccentricity and mean anomaly for the new mean anomaly uniform timegrid
+            self.eccentricity, self.mean_anomaly = gwecc_object.eccentricity, L_uni
+            
+            # ========================================================================
+            # 4. Build bidirectional interpolants from uniform pair (L_out, t_out)
+            # ========================================================================
+            time_to_mean_anomaly_interp = CubicSpline(t_out, L_uni, bc_type='natural')
+            mean_anomaly_to_time_interp = CubicSpline(L_uni, t_out, bc_type='natural')
+            
+            # ========================================================================
+            # Step 3: Create bidirectional interpolants: time ↔ mean_anomaly
+            #        using the CORRECTLY PAIRED (L_out, t_out) data
+            # ========================================================================
+            # time_to_mean_anomaly_interp = interp1d(
+            #     t_out, 
+            #     L_out,
+            #     kind='cubic',
+            #     fill_value='extrapolate',
+            #     assume_sorted=True,
+            # )
+
+            # mean_anomaly_to_time_interp = interp1d(
+            #     L_out,
+            #     t_out,
+            #     kind='cubic',
+            #     fill_value='extrapolate',
+            #     assume_sorted=True,
+            # )
+            
+            # ========================================================================
+            # Build mapping dictionary
+            # ========================================================================
+            mapping_dict = {
+                'mean_anomaly': L_uni,           # Unwrapped mean anomaly array
+                'tref_out': t_out,                       # Time aligned with mean anomaly
+                'time_to_mean_anomaly': time_to_mean_anomaly_interp,
+                'mean_anomaly_to_time': mean_anomaly_to_time_interp,
+            }
+            
+            self.t_vs_l_mapping_dict = mapping_dict
+
+        if plot_mapping:
+            self.plot_mean_anomaly_mappings(
+                save_fig=save_fig_mapping,
+            )
+        
+        return self.t_vs_l_mapping_dict
+    
+    
+    def to_l_domain(self, 
+                                         property_name, 
+                                         make_diagnostic_plots=False,
+                                         plot_in_L_domain=False,
+                                         save_fig=False,
+                                         ):
+        """
+        Convert waveform property (amplitude or phase) from time domain to mean anomaly domain.
+        
+        Uses the time↔mean_anomaly mappings to reparametrize the property.
+        ALWAYS OUTPUTS ON A UNIFORM MEAN-ANOMALY GRID (same number of points as native).
+        
+        Parameters
+        -----------
+        property_name : str
+            Name of property to convert: 'amplitude' or 'phase'
+        make_diagnostic_plots : bool
+            Whether to generate diagnostic plots during orbital parameter extraction
+        plot_in_L_domain : bool
+            Whether to generate diagnostic plots of the property in L-domain
+        save_fig : bool
+            Save figures instead of displaying them
+        
+        Returns
+        --------
+        result : dict
+            Dictionary containing:
+            - All keys from mapping_dict
+            - f'{property_name}_in_L': Property values on UNIFORM L grid
+            - f'{property_name}_in_t': Original property sampled at tref_out times
+            - f'{property_name}_interp': Interpolant object (L → property)
+        """
+        
+        if property_name not in ['amplitude', 'phase']:
+            raise ValueError(f"property_name must be 'amplitude' or 'phase', got '{property_name}'")
+        
+        # ========================================================================
+        # Create uniform L mapping
+        # ========================================================================
+        mapping_dict = self._create_mean_anomaly_mapping(
+            make_diagnostic_plots=make_diagnostic_plots,
+        )
+        
+        # ========================================================================
+        # Compute property if not provided
+        # ========================================================================
+        if self.hp_ecc is None or self.hc_ecc is None:
+            self.simulate_waveform(
+                truncate_at_tmin=True, 
+                truncate_at_ISCO=True, 
+                update_results=True,
+            )
+        
+        if property_name == 'amplitude':
+            prop_in_t = self.amplitude(self.hp_ecc, self.hc_ecc, geometric_units=True)
+        elif property_name == 'phase':
+            prop_in_t = self.phase(self.hp_ecc, self.hc_ecc)
+
+        # ========================================================================
+        # Map property onto UNIFORM mean-anomaly grid
+        # ========================================================================
+        L_out = mapping_dict['mean_anomaly']
+        t_out = mapping_dict['tref_out']
+        time_grid = self.time
+
+        prop_on_time = CubicSpline(time_grid, prop_in_t, bc_type='natural')
+        prop_in_tout = prop_on_time(t_out)
+        
+        # ========================================================================
+        # Create interpolant: mean_anomaly → property
+        # ========================================================================
+        L_interp = CubicSpline(L_out, prop_in_tout, bc_type='natural')
+        prop_in_Lout = L_interp(L_out)
+        
+        # ========================================================================
+        # Optional diagnostic plots
+        # ========================================================================
+        if plot_in_L_domain:
+            self.plot_property_in_mean_anomaly_domain(
+                property_name=property_name,
+                save_fig=save_fig,
+            )
+        
+        # ========================================================================
+        # Build result dictionary
+        # ========================================================================
+        result = {
+            # Mapping info (copied from input)
+            'mean_anomaly': mapping_dict['mean_anomaly'],
+            'tref_out': mapping_dict['tref_out'],
+            'time_to_mean_anomaly': mapping_dict['time_to_mean_anomaly'],
+            'mean_anomaly_to_time': mapping_dict['mean_anomaly_to_time'],
+          
+            # Property-specific
+            f'{property_name}_in_L': prop_in_Lout,
+            f'{property_name}_in_t': prop_in_tout,
+        }
+        
+        return result
+
+
+    def compute_interpolation_error(self, property_name, 
+                                    plot_interp_errors=True):
+        """
+        Quantify the interpolation error introduced by converting properties
+        through the mean-anomaly domain.
+
+        Pipeline tested:
+        
+        1. Forward: t → L (via time_to_mean_anomaly) → interpolate property(L)
+        2. Reverse: L → t (via mean_anomaly_to_time) → evaluate property(L) at recovered L
+        
+        Then compare recovered property(t) vs ORIGINAL property(t) at the SAME t_out grid.
+
+        Parameters
+        ----------
+        property_name : str
+            'amplitude' or 'phase'.
+        plot_interp_errors : bool
+            If True, generate diagnostic plots of interpolation residuals.
+
+        Returns
+        -------
+        result : dict
+            Keys:
+            - 'L_out'              : Mean anomaly grid
+            - 't_out'              : Time aligned with mean anomaly
+            - 'prop_true_t'        : Original property sampled at t_out
+            - 'prop_recovered_t'   : Recovered property from prop(L) → t(L)
+            - 'absolute_error'     : |prop_true - prop_recovered|
+            - 'relative_error'     : |prop_true - prop_recovered| / |prop_true|
+            - 'max_abs_error'      : float
+            - 'rms_abs_error'      : float  
+            - 'max_rel_error'      : float
+            - 'rms_rel_error'      : float
+            - 'mapping_dict'       : The mapping dict used
+            - 'prop_in_Lout'       : The interpolated property on L grid
+        """
+
+        from scipy.interpolate import CubicSpline
+
+        # ==================================================================
+        # 1. Forward pass: build the L-domain interpolant
+        # ==================================================================
+        fwd_result = self.to_l_domain(
+            property_name=property_name,
+        )
+        mapping_dict = fwd_result
+
+        L_out = fwd_result['mean_anomaly']
+        t_out = fwd_result['tref_out']
+        prop_in_Lout = fwd_result[f'{property_name}_in_L']    # CubicSpline on L grid
+
+        # ==================================================================
+        # 2. Compute TRUE property on t_out using the original simulation
+        #    Use CubicSpline instead of interp1d for consistency
+        # ==================================================================
+        if self.hp_ecc is None or self.hc_ecc is None:
+            self.simulate_waveform(
+                truncate_at_tmin=True,
+                truncate_at_ISCO=True,
+                update_results=True,
+            )
+
+        time_grid = self.time
+
+        if property_name == 'amplitude':
+            prop_true_on_t = self.amplitude(self.hp_ecc, self.hc_ecc, geometric_units=True)
+            # Use CubicSpline for smooth interpolation onto t_out
+            true_prop_interp = CubicSpline(time_grid, prop_true_on_t, bc_type='natural')
+            prop_true_t = true_prop_interp(t_out)
+            
+        elif property_name == 'phase':
+            phase_on_time = self.phase(self.hp_ecc, self.hc_ecc)
+            true_phase_interp = CubicSpline(time_grid, phase_on_time, bc_type='natural')
+            prop_true_t = true_phase_interp(t_out)
+
+        # ==================================================================
+        # 3. Reverse pass: recover property at t_out via L-domain
+        #    Step A: Map L_out → t (should give t_back ≈ t_out)
+        #    Step B: The recovered property is prop_in_Lout evaluated at L_out
+        #    Since L_out ↔ t_out are paired, prop_recovered_t = prop_in_Lout
+        # ==================================================================
+        mean_anomaly_to_time = mapping_dict['mean_anomaly_to_time']
+        t_back = mean_anomaly_to_time(L_out)
+
+        # Also report how well t_back matches t_out
+        time_match_err = np.abs(t_back - t_out)
+        print(self.colored_text(
+            f"Time mapping fidelity:  max_dt={np.max(time_match_err):.6e}  "
+            f"rms_dt={np.sqrt(np.mean(time_match_err**2)):.6e}",
+            'yellow'
+        ))
+
+        # The recovered property is just prop_in_Lout (evaluated on L grid)
+        # But we should verify that t_back ≈ t_out
+        prop_recovered_t = prop_in_Lout.copy()
+
+        # ==================================================================
+        # 4. Error metrics
+        # ==================================================================
+        abs_err = np.abs(prop_true_t - prop_recovered_t)
+        
+        denom = np.abs(prop_true_t)
+        rel_err = np.where(denom > 0, abs_err / denom, 0.0)
+
+        max_abs_err = float(np.max(abs_err))
+        rms_abs_err = float(np.sqrt(np.mean(abs_err ** 2)))
+        max_rel_err = float(np.max(rel_err))
+        rms_rel_err = float(np.sqrt(np.mean(rel_err ** 2)))
+
+        print(self.colored_text(
+            f"Interpolation error ({property_name}):  "
+            f"max_abs={max_abs_err:.6e}  rms_abs={rms_abs_err:.6e}  "
+            f"max_rel={max_rel_err:.6e}  rms_rel={rms_rel_err:.6e}",
+            'yellow'
+        ))
+
+        
+
+        # ==================================================================
+        # 5. Diagnostic plots
+        # ==================================================================
+        if plot_interp_errors:
+            self._plot_interpolation_diagnostics(
+                t_out, 
+                prop_true_t, prop_recovered_t,
+                abs_err, rel_err,
+                time_match_err,
+                property_name,
+            )
+
+        # ==================================================================
+        # 6. Assemble result
+        # ==================================================================
+        result = {
+            'L_out': L_out,
+            't_out': t_out,
+            't_back': t_back,
+            'prop_true_t': prop_true_t,
+            'prop_recovered_t': prop_recovered_t,
+            'prop_in_Lout': prop_in_Lout,
+            
+            'absolute_error': abs_err,
+            'relative_error': rel_err,
+            'max_abs_error': max_abs_err,
+            'rms_abs_error': rms_abs_err,
+            'max_rel_error': max_rel_err,
+            'rms_rel_error': rms_rel_err,
+            
+            'time_mapping_error': time_match_err,
+            'mapping_dict': fwd_result,
+        }
+        result.update(fwd_result)
+
+        return result
+ 
+
+    def circulair_wf(self, mass_ratio=None, mean_ano_ref=None, chi1=None, chi2=None, time_array=None):
+        """
+        Simulate plus and cross polarisations of NON-ECCENTRIC waveform Inspiral for t in units [M].
+        Also saves the phase and amplitude accordingly.
+        """
         time_array = self.resolve_property(time_array, self.time)
         mass_ratio = self.resolve_property(mass_ratio, self.mass_ratio)
         mean_ano_ref = self.resolve_property(mean_ano_ref, self.mean_ano_ref)
@@ -764,7 +978,6 @@ class Waveform_Properties(Simulate_Waveform):
 
         circ_params = (mass_ratio, mean_ano_ref, chi1, chi2)
 
-        # If circular waveform does not yet exist, or parameters changed, or requested time_array is longer → recompute
         if (
             (self.phase_circ is None) or (self.amp_circ is None)
             or (not hasattr(self, "_circ_params")) or (self._circ_params != circ_params)
@@ -779,17 +992,12 @@ class Waveform_Properties(Simulate_Waveform):
                 chi2=chi2
             )
 
-            # Calculate phase and amplitude of the circular waveform
             self.phase_circ = self.phase(self.hp_circ, self.hc_circ)
             self.amp_circ = self.amplitude(self.hp_circ, self.hc_circ)
 
-            # Store parameters used for this circular waveform
             self._circ_params = circ_params
 
-
-        # If circular waveform already exists but is longer than requested time_array, truncate to match the new time_array length. 
         elif self.amp_circ is not None and len(self.amp_circ) > len(time_array):
-            # Truncate to match
             n_t = len(time_array)
 
             self.hp_circ = self.hp_circ[-n_t:]
@@ -798,95 +1006,82 @@ class Waveform_Properties(Simulate_Waveform):
             self.amp_circ = self.amp_circ[-n_t:]
 
         else:
-            pass  # self.hp_circ and self.hc_circ are already set, no need to recompute
-    
-    
-    def calculate_residual(self, 
-                           hp, 
-                           hc, 
-                           ecc_ref=None, 
-                           mass_ratio=None, 
+            pass
+
+    def calculate_residual(self,
+                           hp,
+                           hc,
+                           ecc_ref=None,
+                           mass_ratio=None,
                            mean_ano_ref=None,
                            chi1=None,
-                           chi2=None, 
-                           property=None, 
+                           chi2=None,
+                           property=None,
                            plot_residual=False, save_fig=False):
         """
         Calculate residual (= eccentric - non-eccentric) of Waveform Inspiral property.
         Possible properties: phase, amplitude or frequency
-        
-        Parameters: 
-        ----------------
-        hp [dimensionless], np.array : mass independent plus polarisation
-        hc [dimensionless], np.array : mass independent cross polarisation        property, str: Choose residual for ['phase', 'amplitude']
-        plot_residual, True OR False, bool: Set to True to include a plot of the residual including eccentric and non-eccentric case
-        save_fig, True OR False, bool: Saves the figure to the directory Images/Residuals
-        
-        Returns:
-        ----------------
-        residual : residual = eccentric - non-eccentric for chosen property
-        """     
- 
+        """
+
         ecc_ref = self.resolve_property(prop=ecc_ref, default=self.ecc_ref)
         mean_ano_ref = self.resolve_property(prop=mean_ano_ref, default=self.mean_ano_ref)
         mass_ratio = self.resolve_property(prop=mass_ratio, default=self.mass_ratio)
         chi1 = self.resolve_property(prop=chi1, default=self.chi1)
         chi2 = self.resolve_property(prop=chi2, default=self.chi2)
 
-        # Calculate plus and cross polarizations of circular (non-eccentric) waveform
-        self.circulair_wf(mass_ratio=mass_ratio, 
-                          mean_ano_ref=mean_ano_ref, 
-                          chi1=chi1, 
+        self.circulair_wf(mass_ratio=mass_ratio,
+                          mean_ano_ref=mean_ano_ref,
+                          chi1=chi1,
                           chi2=chi2)
+        
+        if self.parametrization == "mean_anomaly":
+            self.get_amplitude_phase_in_mean_anomaly_domain()
 
-        # Calculate phase from plus and cross polarizations
         if property == 'phase':
-            circ = self.phase_circ # non-eccentric case
-            eccentric = self.phase(hp, hc) # eccentric case
+            circ = self.phase_circ
+            eccentric = self.phase(hp, hc)
             units = '[radians]'
-            
-            # Residual = circular - eccentric to prevent negative residual values
-            residual = circ - eccentric # to prevent negative values
-            
-            # Warning for negative residual values
-            if eccentric[1] < 0: # 
-                warnings.warn(self.colored_text("Eccentric phase has negative starting values. " \
-                "This may not be expected for physical waveforms. This usually happens when the eccentric waveformlength is shorter than the chosen time array. " \
+
+            residual = circ - eccentric
+
+            if eccentric[1] < 0:
+                warnings.warn(self.colored_text("Eccentric phase has negative starting values. "
+                "This may not be expected for physical waveforms. This usually happens when the eccentric waveformlength is shorter than the chosen time array. "
                 "Consider decreasing the time array length or decreasing the eccentricity.", 'red'))
-            
-        # Calculate amplitude from plus and cross polarisations
+
         elif property == 'amplitude':
-            circ = self.amp_circ # non-eccentric case
-            eccentric = self.amplitude(hp, hc) # eccentric case
-            units = '' # for plotting 
-            # Residual = eccentric - circular to prevent negative residual values
+            circ = self.amp_circ
+            eccentric = self.amplitude(hp, hc)
+            units = ''
             residual = eccentric - circ
 
         else:
             print('Choose property = "phase", "amplitude", "frequency"', property, 2)
             sys.exit(1)
-        
+
         if np.any(np.isnan(residual)) or np.any(np.isinf(residual)):
             print(self.colored_text(f"Warning: Residual contains NaN or Inf values for parameters ecc={ecc_ref}, l={mean_ano_ref}, q={mass_ratio}, chi1={chi1}, chi2={chi2}. Setting residual to zero. \
                     \n hp, hc: {hp, hc}", 'red'))
-                
+
             plot_residual = True
 
-            fig_polarizations = plt.figure(figsize=(12,5))
+            fig_polarizations = plt.figure(figsize=(12, 5))
             plt.plot(self.time, hp, label='hp', linewidth=0.6)
             plt.plot(self.time, hc, label='hc', linewidth=0.6)
             plt.legend()
             plt.title(f'Polarizations for parameters ecc={ecc_ref}, l={mean_ano_ref}, q={mass_ratio}, chi1={chi1}, chi2={chi2}')
             plt.grid(True)
             plt.tight_layout()
+            # [OPTIMIZED #5]: Close figure
+            # plt.close(fig_polarizations)
 
         if plot_residual is True:
             fig_residual = plt.figure()
-            
-            plt.plot(self.time, eccentric, label= f'Eccentric {property}: $e$={ecc_ref}', linewidth=0.6) # eccentric property
-            plt.plot(self.time, circ, label=f'Circular {property}: $e$=0', linewidth=0.6) # non-eccentric property
-            plt.plot(self.time, residual, label=f'Residual {property}', linewidth=0.6) # residual property
-            
+
+            plt.plot(self.time, eccentric, label=f'Eccentric {property}: $e$={ecc_ref}', linewidth=0.6)
+            plt.plot(self.time, circ, label=f'Circular {property}: $e$=0', linewidth=0.6)
+            plt.plot(self.time, residual, label=f'Residual {property}', linewidth=0.6)
+
             plt.xlabel('t [M]')
             plt.ylabel(property + ' ' + units)
             plt.title(f'Residual {property}, ecc={round(ecc_ref, 3)}, q={mass_ratio}, chi1={chi1}, chi2={chi2}, mean_ano_ref={round(mean_ano_ref, 2)}')
@@ -895,17 +1090,258 @@ class Waveform_Properties(Simulate_Waveform):
 
             plt.tight_layout()
 
-            # plt.close('all')  # Clean up plots
-
             if save_fig is True:
                 figname = f'Images/Residuals/Residual {property} M={self.total_mass}, ecc={round(ecc_ref, 3)}.png'
-                
-                # Ensure the directory exists, creating it if necessary and save
                 os.makedirs('Images/Residuals', exist_ok=True)
                 fig_residual.savefig(figname, dpi=300, bbox_inches='tight')
-
                 print(self.colored_text(f'Figure is saved in {figname}', 'blue'))
-        
-        del circ, eccentric # clear memory
+
+            # [OPTIMIZED #5]: Close figure after saving
+            plt.close(fig_residual)
+
+        # [OPTIMIZED #4]: Clean memory
+        del circ, eccentric
+        gc.collect()
+
         return residual
+
+
+    #######################################################################
+    # PLOTTING FUNCTIONS
+    #######################################################################
+
+    def _plot_interpolation_diagnostics(self, t, prop_true, prop_rec, abs_err, rel_err, time_err, property_name):
+        """Four-panel diagnostic: property comparison, errors, time mapping fidelity."""
+
+        fig, axes = plt.subplots(4, 1, figsize=(11, 11), sharex=True,
+                                gridspec_kw={'height_ratios': [2, 1, 1, 1]})
+
+        prop_label = property_name.capitalize()
+
+        # ---- Panel 1: True vs Recovered property ---------------------------
+        ax = axes[0]
+        ax.plot(t, prop_true, 'b-', lw=1.2, alpha=0.8, label='True (simulation)')
+        ax.plot(t, prop_rec,  'r--', lw=1.2, alpha=0.8, label='Recovered (L-domain interp)')
+        ax.set_ylabel(prop_label)
+        ax.set_title(f'Interpolation Quality: {prop_label}  at t_out grid')
+        ax.legend(loc='best', fontsize=9)
+
+        # ---- Panel 2: Absolute error --------------------------------------
+        ax = axes[1]
+        ax.plot(t, abs_err, 'k-', lw=0.8)
+        ax.axhline(0, color='grey', ls=':', lw=0.5)
+        ax.fill_between(t, abs_err, alpha=0.25, color='orange')
+        ax.set_ylabel('|Δ{}|'.format(prop_label))
+        ax.set_title('Absolute interpolation error')
+
+        # ---- Panel 3: Relative error --------------------------------------
+        ax = axes[2]
+        ax.plot(t, rel_err, 'k-', lw=0.8)
+        ax.axhline(0, color='grey', ls=':', lw=0.5)
+        ax.fill_between(t, rel_err, alpha=0.25, color='teal')
+        ax.set_ylabel('|Δ{}| / |{}|'.format(prop_label, prop_label))
+        ax.set_title('Relative interpolation error')
+
+        # ---- Panel 4: Time mapping fidelity ------------------------------
+        ax = axes[3]
+        ax.plot(t, time_err, 'purple', lw=0.8)
+        ax.axhline(0, color='grey', ls=':', lw=0.5)
+        ax.fill_between(t, time_err, alpha=0.25, color='purple')
+        ax.set_xlabel('Time')
+        ax.set_ylabel('|t_back − t_out|')
+        ax.set_title('Time mapping fidelity (L → t → L round-trip)')
+
+        plt.tight_layout()
+
+
+    def plot_mean_anomaly_mappings(self, save_fig=False):
+        """
+        Plot the mean anomaly <-> time mappings for validation.
+        
+        Parameters:
+        -----------
+        mapping_dict : dict
+            Output from _create_mean_anomaly_mapping()
+        save_plots : bool
+            Whether to save the figure
+        """
+
+        mapping_dict = self._create_mean_anomaly_mapping()
+
+        L_raw = mapping_dict['mean_anomaly']
+        t_raw = mapping_dict['tref_out']
+
+        # Create dense grids for smooth interpolation curves
+        L_dense = np.linspace(L_raw.min(), L_raw.max(), 5000)
+        t_dense = np.linspace(t_raw.min(), t_raw.max(), 5000)
+
+        # Evaluate interpolants on dense grids
+        t_from_L = mapping_dict['mean_anomaly_to_time'](L_dense)
+        L_from_t = mapping_dict['time_to_mean_anomaly'](t_dense)
+
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+        # -----------------------------------------------------------------
+        # (a) Unwrapped mean anomaly vs time — raw data
+        # -----------------------------------------------------------------
+        axes[0, 0].plot(t_raw, L_raw, 'b-', linewidth=0.8)
+        axes[0, 0].scatter(t_raw[::200], L_raw[::200], s=8, c='red', alpha=0.6, label='Sample points')
+        axes[0, 0].set_xlabel('Time [M]', fontsize=11)
+        axes[0, 0].set_ylabel('Mean Anomaly ℓ [rad]', fontsize=11)
+        axes[0, 0].set_title('(a) Unwrapped Mean Anomaly vs Time (raw)', fontsize=12, fontweight='bold')
+        axes[0, 0].legend(fontsize=9)
+        axes[0, 0].grid(True, alpha=0.3)
+
+        # -----------------------------------------------------------------
+        # (b) Interpolated: mean_anomaly -> time (inverse mapping)
+        # -----------------------------------------------------------------
+        axes[0, 1].plot(L_dense, t_from_L, 'g-', linewidth=0.8, label='Interpolated ℓ → t')
+        axes[0, 1].scatter(L_raw[::200], t_raw[::200], s=8, c='red', alpha=0.6, label='Raw sample points')
+        axes[0, 1].set_xlabel('Mean Anomaly ℓ [rad]', fontsize=11)
+        axes[0, 1].set_ylabel('Time [M]', fontsize=11)
+        axes[0, 1].set_title('(b) Interpolated: Mean Anomaly → Time', fontsize=12, fontweight='bold')
+        axes[0, 1].legend(fontsize=9)
+        axes[0, 1].grid(True, alpha=0.3)
+
+        # -----------------------------------------------------------------
+        # (c) Interpolated: time -> mean_anomaly (forward mapping)
+        # -----------------------------------------------------------------
+        axes[1, 0].plot(t_dense, L_from_t, 'm-', linewidth=0.8, label='Interpolated t → ℓ')
+        axes[1, 0].scatter(t_raw[::200], L_raw[::200], s=8, c='red', alpha=0.6, label='Raw sample points')
+        axes[1, 0].set_xlabel('Time [M]', fontsize=11)
+        axes[1, 0].set_ylabel('Mean Anomaly ℓ [rad]', fontsize=11)
+        axes[1, 0].set_title('(c) Interpolated: Time → Mean Anomaly', fontsize=12, fontweight='bold')
+        axes[1, 0].legend(fontsize=9)
+        axes[1, 0].grid(True, alpha=0.3)
+
+        # -----------------------------------------------------------------
+        # (d) Overlay: raw vs interpolated (both directions) with residuals
+        # -----------------------------------------------------------------
+        # Forward: t -> L — compare interpolated to raw at raw time points
+        L_interp_at_raw_t = mapping_dict['time_to_mean_anomaly'](t_raw)
+        L_residual_forward = L_raw - L_interp_at_raw_t
+
+        # Inverse: L -> t — compare interpolated to raw at raw L points
+        t_interp_at_raw_L = mapping_dict['mean_anomaly_to_time'](L_raw)
+        t_residual_inverse = t_raw - t_interp_at_raw_L
+
+        ax_res = axes[1, 1]
+        ax_res.plot(t_raw, L_residual_forward, 'm-', linewidth=0.6, label='Δℓ (forward: raw − interp)')
+        ax_res.axhline(0, color='k', linestyle='--', linewidth=0.5, alpha=0.5)
+        ax_res.set_xlabel('Time [M]', fontsize=11)
+        ax_res.set_ylabel('Residual ℓ [rad]', fontsize=11)
+        ax_res.set_title('(d) Forward interpolation residual (t → ℓ)', fontsize=12, fontweight='bold')
+        ax_res.legend(fontsize=9)
+        ax_res.grid(True, alpha=0.3)
+
+        # Print residual stats
+        rms_L = np.sqrt(np.mean(L_residual_forward**2))
+        max_L = np.max(np.abs(L_residual_forward))
+        rms_t = np.sqrt(np.mean(t_residual_inverse**2))
+        max_t = np.max(np.abs(t_residual_inverse))
+
+        print(self.colored_text('=' * 50, 'cyan'))
+        print(self.colored_text('INTERPOLATION RESIDUAL SUMMARY', 'cyan'))
+        print(self.colored_text('=' * 50, 'cyan'))
+        print(f"  Forward (t → ℓ):  RMS = {rms_L:.6e} rad,  max = {max_L:.6e} rad")
+        print(f"  Inverse (ℓ → t):  RMS = {rms_t:.6e} M,    max = {max_t:.6e} M")
+        print('=' * 50)
+
+        plt.tight_layout()
+
+        if save_fig:
+            os.makedirs('Images/Validation', exist_ok=True)
+            fig.savefig('Images/Validation/mean_anomaly_mappings.png', dpi=300, bbox_inches='tight')
+            print(self.colored_text('Figure saved: Images/Validation/mean_anomaly_mappings.png', 'blue'))
+
+        # plt.close(fig)
+        return fig
+
+    def plot_property_in_mean_anomaly_domain(
+        self,
+        property_name,
+        save_fig=False,
+    ):
+        """
+        Plot a waveform property in the mean-anomaly domain.
+
+        Parameters
+        ----------
+        result_dict : dict
+            Output from ``tro_l_domain()``.
+        property_name : str
+            'amplitude' or 'phase' — used to pull the right keys and label the plot.
+        show_time_mapping : bool
+            If True, draw a secondary y-axis showing ``t_out`` vs ``L_out``
+            so you can visually inspect the non-uniform mapping
+            between reference time and mean anomaly.
+        ax : matplotlib.axes.Axes or None
+            Axis to draw on. If None, a new figure is created.
+        **plot_kwargs
+            Extra kwargs forwarded to the line plot (color, linewidth, …).
+
+        Returns
+        -------
+        ax : matplotlib.axes.Axes
+            The main axis (and the twin axis if ``show_time_mapping``).
+        """
+        result_dict = self.to_l_domain(property_name=property_name)                                                            
+
+        L_out  = result_dict["mean_anomaly"]
+        t_out = result_dict["tref_out"]
+        prop_in_L = result_dict[f"{property_name}_in_L"]
+        prop_in_t = result_dict[f"{property_name}_in_t"]
+
+        fig, ax = plt.subplots(figsize=(9, 5))
+
+        # ------------------------------------------------------------------ #
+        # Interpolated property (smooth line)
+        # ------------------------------------------------------------------ #
+        ax.plot(
+            L_out, prop_in_L,
+            linestyle="-", linewidth=1.5, alpha=0.9,
+            label=f"{property_name.capitalize()}(ℓ) — interpolant",
+        )
+
+        # ------------------------------------------------------------------ #
+        # Raw sampled points (scatter overlay)
+        # ------------------------------------------------------------------ #
+        ax.scatter(
+            L_out[::50], prop_in_t[::50],
+            s=8, zorder=5, edgecolors="k", linewidths=0.3,
+            color="crimson",
+            label=f"{property_name.capitalize()} sampled at t_out (every 50th point)",
+        )
+
+        ax.set_xlabel("Mean Anomaly ℓ  [rad]")
+        ax.set_ylabel(f"{property_name.capitalize()}")
+        ax.legend(loc="best", fontsize=9)
+        ax.set_title(f"{property_name.capitalize()} in Mean-Anomaly Domain")
+
+        # ------------------------------------------------------------------ #
+        # Optional twin axis: show the time → mean-anomaly mapping
+        # ------------------------------------------------------------------ #
+        twin_ax = None
+
+        twin_ax = ax.twiny()
+        # We need L_out sorted for a clean line
+        sort_idx = np.argsort(t_out)
+        twin_ax.plot(
+            t_out[sort_idx], L_out[sort_idx],
+            color="grey", linestyle="--", linewidth=1, alpha=0.6,
+            transform=twin_ax.get_xaxis_transform(),
+        )
+        twin_ax.set_xlabel("Reference time  t_out")
+        twin_ax.tick_params(axis="x", colors="grey")
+
+        plt.tight_layout()
+
+        if save_fig:
+            os.makedirs('Images/Validation', exist_ok=True)
+            figname = f'Images/Validation/{property_name}_in_L.png'
+            fig.savefig(figname, dpi=300, bbox_inches='tight')
+            print(self.colored_text(f'Figure saved: {figname}', 'blue'))
+
+        # plt.close(fig)
+        return fig
     

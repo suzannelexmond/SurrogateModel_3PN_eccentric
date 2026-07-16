@@ -673,3 +673,8 @@ What also needs to be done:
 - zscore is normalised and works better than score. The problme with score is that the lml and rmse have very different scales. 
 If you want to caluclate a score with a lml and rmse it would be better to normalise these before comparing.
 - First calculate all lmls and rmses and afterwards calculate the scores. 
+
+
+NOTES:
+- X_train unordered screws up the warm_start?
+- Kernels calculated 

@@ -1,50 +1,43 @@
-from tracemalloc import start
+# =====================================================================
+# [OPTIMIZED VERSION] Memory improvements for fit_training_set.py
+# Applied Safe Quick Wins #1-5 (comments marked with #[OPTIMIZED])
+# =====================================================================
+import datetime
 
-from matplotlib import axes, gridspec, path
+from generate_greedy_training_set_t import *
+
+from matplotlib import gridspec
 from matplotlib.backends.backend_pdf import PdfPages
 
-from generate_greedy_training_set import *
-
 from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.gaussian_process.kernels import RBF, Product, ConstantKernel as C
-from sklearn.gaussian_process.kernels import RBF, Matern, RationalQuadratic, WhiteKernel, ExpSineSquared, DotProduct, ConstantKernel as C
+from sklearn.gaussian_process.kernels import (
+    RBF, Matern, RationalQuadratic, WhiteKernel, 
+    ExpSineSquared, DotProduct, ConstantKernel as C, Product
+)
 import time
 import traceback
-import seaborn as sns
-from matplotlib.lines import Line2D
-from inspect import getframeinfo
 from sklearn.preprocessing import StandardScaler
-from fileinput import filename
 from inspect import currentframe
 from sklearn.neighbors import NearestNeighbors
 from sklearn.exceptions import ConvergenceWarning
 
-import matplotlib.ticker as mticker
 from matplotlib.colors import Normalize, LogNorm
 import matplotlib.gridspec as gridspec
-
-import pickle
+import matplotlib.ticker as mticker
 
 from collections import Counter
 
+import pickle
 
 warnings.simplefilter("ignore", ConvergenceWarning)
 
 f = currentframe()
 
 import plotly.io as pio
-# default for script-style plotting
 pio.renderers.default = "browser"
-
-import plotly.express as px
-from sklearn.decomposition import PCA
 
 @dataclass
 class GPRFitResults(Warnings):
-    
-    # ------------------------------------------------------------
-    # WAVEFORM SYSTEMATICS
-    # ------------------------------------------------------------
     
     property: str = "phase"
     time: Any = None
@@ -57,80 +50,60 @@ class GPRFitResults(Warnings):
     truncate_at_tmin: bool = True
     luminosity_distance: Optional[float] = None
 
-    # ------------------------------------------------------------
-    # INPUT/ OUTPUT SPACES
-    # ------------------------------------------------------------
-    
-    ecc_ref_space_input: Any = None
-    ecc_ref_space_output: Any = None
+    ecc_ref_space_sampl: Any = None
+    ecc_ref_space_val: Any = None
 
-    mean_ano_ref_space_input: Any = None
-    mean_ano_ref_space_output: Any = None
+    mean_ano_ref_space_sampl: Any = None
+    mean_ano_ref_space_val: Any = None
 
-    mass_ratio_space_input: Any = None
-    mass_ratio_space_output: Any = None
+    mass_ratio_space_sampl: Any = None
+    mass_ratio_space_val: Any = None
 
-    chi1_space_input: Any = None
-    chi1_space_output: Any = None
+    chi1_space_sampl: Any = None
+    chi1_space_val: Any = None
 
-    chi2_space_input: Any = None
-    chi2_space_output: Any = None
+    chi2_space_sampl: Any = None
+    chi2_space_val: Any = None
 
     parameter_grid: Any = None
 
-    # ------------------------------------------------------------
-    # TRAINING SYSTEMATICS
-    # ------------------------------------------------------------
     N_basis_vecs: Optional[int] = None
     min_greedy_error: Optional[float] = None
 
-    # ------------------------------------------------------------
-    # TRAINING STRUCTURE
-    # ------------------------------------------------------------
     residuals: Any = None
     basis_indices: list = field(default_factory=list)
     empirical_indices: list = field(default_factory=list)
     training_set: Any = None
 
-    # ------------------------------------------------------------
-    # FULL GP RESULTS (offline use)
-    # ------------------------------------------------------------
-    gp_models: list = field(default_factory=list)   # ONE GP per time node
+    gp_models: list = field(default_factory=list)
     kernels: list = field(default_factory=list)
     labels: list = field(default_factory=list)
 
-    # mean_predictions: Any = None
-    # confidence_95_preds: Any = None
+    refined: bool = False
+    screened: bool = False
+
     best_lmls: Any = None
     best_train_rmses: Any = None
     best_scores: Any = None
     validation_errors: Any = None
     fit_times: Any = None
 
-    # ------------------------------------------------------------
-    # SCALERS (CRITICAL FOR ONLINE USE)
-    # ------------------------------------------------------------
     scaler_x: list = field(default_factory=list)
     scaler_y: list = field(default_factory=list)
 
-
-
     def __post_init__(self):
-        """Check if initial parameter spaces are valid and round them to 4 decimal places for consistency in filenames."""
         for name in [
-            "ecc_ref_space_input",
-            "mean_ano_ref_space_input",
-            "mass_ratio_space_input",
-            "chi1_space_input",
-            "chi2_space_input",
+            "ecc_ref_space_sampl",
+            "mean_ano_ref_space_sampl",
+            "mass_ratio_space_sampl",
+            "chi1_space_sampl",
+            "chi2_space_sampl",
         ]:
             value = getattr(self, name)
             if value is not None:
                 setattr(self, name, np.round(np.asarray(value, dtype=float), 4))
     
     def update_results(self, **kwargs):
-        """Update the results fields of the GPRFitResults object with new values provided as keyword arguments. 
-        Only existing attributes will be updated; any keys that do not correspond to existing attributes will raise an error."""
         for key, value in kwargs.items():
             if not hasattr(self, key):
                 raise AttributeError(f"{type(self).__name__} has no attribute '{key}'")
@@ -138,18 +111,15 @@ class GPRFitResults(Warnings):
             
     @staticmethod
     def _range_block(name, values):
-        """Create block of [min_max_N] for each parameter space. Only include properties that are not None."""
         values = np.asarray(values, dtype=float)
         return f"{name}=[{values.min():g}_{values.max():g}_N={len(values)}]"
 
     @staticmethod
     def _scalar_block(name, value):
-        """Formats a scalar property into a string block for filenames. If the value is None, it returns an empty string."""
         return f"{name}={value:g}"
 
     @staticmethod
     def _kernel_to_string(kernel):
-        """Converts a kernel object to a string representation suitable for filenames by removing spaces and special characters."""
         text = str(kernel)
         text = text.replace(" ", "")
         text = text.replace("\n", "")
@@ -159,15 +129,14 @@ class GPRFitResults(Warnings):
         text = text.replace(")", "")
         return text
 
-    def name_blocks(self):
-        """Constructs a list of strings representing the properties of the GPRFitResults object for use in filenames."""
+    def name_blocks(self, include_extra=False):
         blocks = [
             self.property,
-            self._range_block("e", self.ecc_ref_space_input),
-            self._range_block("l", self.mean_ano_ref_space_input),
-            self._range_block("q", self.mass_ratio_space_input),
-            self._range_block("x1", self.chi1_space_input),
-            self._range_block("x2", self.chi2_space_input),
+            self._range_block("e", self.ecc_ref_space_sampl),
+            self._range_block("l", self.mean_ano_ref_space_sampl),
+            self._range_block("q", self.mass_ratio_space_sampl),
+            self._range_block("x1", self.chi1_space_sampl),
+            self._range_block("x2", self.chi2_space_sampl),
             self._scalar_block("fr", self.f_ref),
             self._scalar_block("fl", self.f_lower),
         ]
@@ -187,30 +156,53 @@ class GPRFitResults(Warnings):
         if self.luminosity_distance is not None:
             blocks.append("SI")
 
+        if self.refined:
+            blocks.append("refined")
+        if self.screened:
+            blocks.append("screened")
+
+        if include_extra:
+            if type(include_extra) is str:
+                blocks.append(include_extra)
+            else:
+                blocks.append(str(include_extra))
+
         return blocks
 
-    def filename(self, prefix="GPRFitResults", ext="pkl", directory=None):
-        """Constructs a filename based on the properties of the GPRFitResults object."""
-        name = f"{prefix}_{'_'.join(self.name_blocks())}.{ext}"
+    def filename(self, 
+                 prefix="GPRFitResults", 
+                 ext="pkl", 
+                 directory=None,
+                 include_extra=None
+                 ):
+        name = f"{prefix}_{'_'.join(self.name_blocks(include_extra=include_extra,))}.{ext}"
         if directory is not None:
             os.makedirs(directory, exist_ok=True)
             return f"{directory.rstrip('/')}/{name}"
         return name
     
-    def figname(self, prefix="fig", ext="png", directory=None):
-        # Ensure the directory exists, creating it if necessary and save
+    def figname(self, 
+                prefix="fig", 
+                ext="png", 
+                directory=None,
+                include_extra=None
+                ):
         if directory is not None:
             os.makedirs(directory, exist_ok=True)
-
-        figname = self.filename(prefix=prefix, ext=ext, directory=directory)
-
-        # Figure saving confirmation
+        figname = self.filename(
+            prefix=prefix, 
+            ext=ext, 
+            directory=directory,
+            include_extra=include_extra,
+        )
         print(self.colored_text(f"Figure is saved in {figname}", 'blue'))
-
         return figname
+    
+    def save_gpr_obj(self, 
+                     prefix="GPRFitResults", 
+                     directory="Straindata/GPRFitResults"
 
-    def save_gpr_obj(self, prefix="GPRFitResults", directory="Straindata/GPRFitResults"):
-        """Saves the GPRFitResults object to a file."""
+                     ):
         if directory is not None:
             os.makedirs(directory, exist_ok=True)
         filepath = self.filename(prefix=prefix, ext="pkl", directory=directory)
@@ -218,13 +210,16 @@ class GPRFitResults(Warnings):
         with open(filepath, "wb") as f:
             pickle.dump(self, f, protocol=pickle.HIGHEST_PROTOCOL)
 
-        # Figure saving confirmation
         print(self.colored_text(f'GPRFitResults saved to {filepath}', 'blue'))
+        
+        # [OPTIMIZED #2]: Force GC after large pickle dump
+        if MEMORY_PROFILE:
+            check_memory_usage(f"After save_gpr_obj: {filepath}")
+        gc.collect()
+        
         return filepath
-
+    
     def load_gpr_obj(self, prefix="GPRFitResults", directory="Straindata/GPRFitResults"):
-        """Loads the saved GPRFitResults object from a file."""
-
         filepath = self.filename(prefix=prefix, ext="pkl", directory=directory)
         with open(filepath, 'rb') as f:
             loaded_obj = pickle.load(f)
@@ -232,15 +227,10 @@ class GPRFitResults(Warnings):
         if not isinstance(loaded_obj, GPRFitResults):
             raise ValueError(f"Loaded object is not of type GPRFitResults. Got {type(loaded_obj)} instead.")
 
-        # Figure loading confirmation
         print(self.colored_text(f"GPRFitResults object loaded from {filepath}", 'blue'))
-
         return loaded_obj
     
     def save_offline_surrogate(self, prefix="Offline_GP", directory="Straindata/Offline_GP_Models"):
-        """
-        Only what is needed for ONLINE inference.
-        """
         if directory is not None:
             os.makedirs(directory, exist_ok=True)
         filepath = self.filename(prefix=prefix, ext="pkl", directory=directory)
@@ -249,25 +239,21 @@ class GPRFitResults(Warnings):
         bundle = {
             "property": self.property,
             "time": self.time,
-
-            # IMPORTANT: GP models OR kernels+training data
             "gp_models": self.gp_models,
             "kernels": self.kernels,
             "scaler_x": self.scaler_x,
             "scaler_y": self.scaler_y,
-
             "parameter_grid": self.parameter_grid,
         }
 
         with open(filepath, "wb") as f:
             pickle.dump(bundle, f, protocol=pickle.HIGHEST_PROTOCOL)
 
-    def load_offline_surrogate(self, 
-                               prefix="Offline_GP", 
-                               directory="Straindata/Offline_GP_Models"):
-        """
-        Load the surrogate bundle saved by save_offline_surrogate.
-        """
+        # [OPTIMIZED #2]: Clear memory after saving surrogate
+        del bundle
+        gc.collect()
+
+    def load_offline_surrogate(self, prefix="Offline_GP", directory="Straindata/Offline_GP_Models"):
         filepath = self.filename(prefix=prefix, ext="pkl", directory=directory)
         with open(filepath, "rb") as f:
             bundle = pickle.load(f)
@@ -278,6 +264,10 @@ class GPRFitResults(Warnings):
         self.scaler_x = bundle.get("scaler_x", None)
         self.scaler_y = bundle.get("scaler_y", None)
         self.parameter_grid = bundle.get("parameter_grid", None)
+        
+        # [OPTIMIZED #2]: Clear unused data
+        del bundle
+        gc.collect()
 
 
 class Generate_Offline_Surrogate(Generate_TrainingSet):
@@ -288,7 +278,11 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                  mass_ratio_parameterspace=np.linspace(1, 20, num=50),
                  chi1_parameterspace=np.linspace(-0.995, 0.995, num=50),
                  chi2_parameterspace=np.linspace(-0.995, 0.995, num=50),
-                 sampling_step_output=0.01, 
+                 sampling_val_ecc_ref=0.01, 
+                 sampling_val_mean_ano=0.1,
+                 sampling_val_mass_ratio=0.5,
+                 sampling_val_chi1=0.1,
+                 sampling_val_chi2=0.1,
                  N_basis_vecs_amp=None, 
                  N_basis_vecs_phase=None, 
                  min_greedy_error_amp=None, 
@@ -301,84 +295,63 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                  truncate_at_ISCO=True, 
                  truncate_at_tmin=True):
         
-        
+        # [OPTIMIZED #2]: Check memory before initialization
+        if MEMORY_PROFILE:
+            check_memory_usage("START Generate_Offline_Surrogate.__init__")
+
         if (N_basis_vecs_amp is None and N_basis_vecs_phase is None) and \
             (min_greedy_error_amp is None and min_greedy_error_phase is None):
                 print('Choose either settings for the amount of basis_vecs OR the minimum greedy error.')
                 sys.exit(1)
 
-        # Input refers to the dataset used to pick the training set, output refers to the parameterspace of the computed surrogate
-        # Check if property is valid and adjust settings accordingly
-        self.ecc_ref_space_input = self.allowed_eccentricity_warning(ecc_ref_parameterspace)
-        self.mass_ratio_space_input = self.allowed_mass_ratio_warning(mass_ratio_parameterspace)
-        self.mean_ano_ref_space_input = self.allowed_mean_anomaly_warning(mean_ano_parameterspace)
-        self.chi1_space_input = self.allowed_chispin_warning(chi1_parameterspace)
-        self.chi2_space_input = self.allowed_chispin_warning(chi2_parameterspace)
+        self.ecc_ref_space_sampl = self.allowed_eccentricity_warning(ecc_ref_parameterspace)
+        self.mass_ratio_space_sampl = self.allowed_mass_ratio_warning(mass_ratio_parameterspace)
+        self.mean_ano_ref_space_sampl = self.allowed_mean_anomaly_warning(mean_ano_parameterspace)
+        self.chi1_space_sampl = self.allowed_chispin_warning(chi1_parameterspace)
+        self.chi2_space_sampl = self.allowed_chispin_warning(chi2_parameterspace)
 
-        def output_space(
-                input_space, 
-                allowed_warning_func, 
-                sampling_step_output=sampling_step_output
-                ):
-            min_val, max_val = min(input_space), max(input_space)
+        def validation_space(sampl_space, allowed_warning_func, sampling_val_output):
+            min_val, max_val = min(sampl_space), max(sampl_space)
             if min_val == max_val:
-                return np.array([min_val])  # Single value case
+                return np.array([min_val])
             else:
-                n = int((max_val - min_val) / sampling_step_output) + 1
+                n = int((max_val - min_val) / sampling_val_output) + 1
                 return allowed_warning_func(
                     np.linspace(min_val, max_val, num=n).round(4)
                 )
-            
-        # output parameter space which is used for comparison to truth values in surrogate evaluation. 
-        self.ecc_ref_space_output = output_space(
-            ecc_ref_parameterspace, 
-            self.allowed_eccentricity_warning, 
-            sampling_step_output
-            )
+        # Validation spaces for each parameter
+        self.ecc_ref_space_val = validation_space(ecc_ref_parameterspace, self.allowed_eccentricity_warning, sampling_val_ecc_ref)
+        self.mean_ano_ref_space_val = validation_space(mean_ano_parameterspace, self.allowed_mean_anomaly_warning, sampling_val_mean_ano)
+        self.mass_ratio_space_val = validation_space(mass_ratio_parameterspace, self.allowed_mass_ratio_warning, sampling_val_mass_ratio)
+        self.chi1_space_val = validation_space(chi1_parameterspace, self.allowed_chispin_warning, sampling_val_chi1)
+        self.chi2_space_val = validation_space(chi2_parameterspace, self.allowed_chispin_warning, sampling_val_chi2)
         
-        self.mean_ano_ref_space_output = output_space(
-            mean_ano_parameterspace, 
-            self.allowed_mean_anomaly_warning, 
-            sampling_step_output
-            )
-
-        self.mass_ratio_space_output = output_space(
-            mass_ratio_parameterspace, 
-            self.allowed_mass_ratio_warning, 
-            sampling_step_output
-            )
-
-        self.chi1_space_output = output_space(
-            chi1_parameterspace, 
-            self.allowed_chispin_warning, 
-            sampling_step_output
-            )
-
-        self.chi2_space_output = output_space(
-            chi2_parameterspace, 
-            self.allowed_chispin_warning, 
-            sampling_step_output
-            )
-
-        self.training_set_selection = training_set_selection
-
-        self.surrogate_amp = None
-        self.surrogate_phase = None
-
-        self.gaussian_fit_amp = None
-        self.gaussian_fit_phase = None
-        self.indices_basis_amp = None
-        self.indices_basis_phase = None
-
+        # Large validation space warning
+        validation_space_samples = self.ecc_ref_space_val.size * self.mean_ano_ref_space_val.size * self.mass_ratio_space_val.size * self.chi1_space_val.size * self.chi2_space_val.size
+        if validation_space_samples > 1e6:
+            print(self.colored_text(f"Warning: The validation space has {validation_space_samples} samples, which may be computationally expensive and will ask for a large memory storage. \
+                  Consider increasing the sampling values to reduce the number of samples.", 'yellow'))
+        
+        # 
+        # self.training_set_selection = training_set_selection
+        # self.surrogate_amp = None
+        # self.surrogate_phase = None
+        # self.gaussian_fit_amp = None
+        # self.gaussian_fit_phase = None
+        # self.indices_basis_amp = None
+        # self.indices_basis_phase = None
         self.gpr_amp = None
         self.gpr_phase = None
 
+        self.gp_kernels = None
+        self.base_ls = None
+
         super().__init__(time_array=time_array, 
-                 ecc_ref_parameterspace=self.ecc_ref_space_input, 
-                 mean_ano_parameterspace=self.mean_ano_ref_space_input, 
-                 mass_ratio_parameterspace=self.mass_ratio_space_input,
-                 chi1_parameterspace=self.chi1_space_input,
-                 chi2_parameterspace=self.chi2_space_input,
+                 ecc_ref_parameterspace=self.ecc_ref_space_sampl, 
+                 mean_ano_parameterspace=self.mean_ano_ref_space_sampl, 
+                 mass_ratio_parameterspace=self.mass_ratio_space_sampl,
+                 chi1_parameterspace=self.chi1_space_sampl,
+                 chi2_parameterspace=self.chi2_space_sampl,
                  N_basis_vecs_amp=N_basis_vecs_amp, 
                  N_basis_vecs_phase=N_basis_vecs_phase, 
                  min_greedy_error_amp=min_greedy_error_amp, 
@@ -390,11 +363,11 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                  truncate_at_ISCO=truncate_at_ISCO, 
                  truncate_at_tmin=truncate_at_tmin)
         
+        # [OPTIMIZED #2]: Check memory after init
+        if MEMORY_PROFILE:
+            check_memory_usage("END Generate_Offline_Surrogate.__init__")
+
     def result_kwargs_gpr(self, property):
-        """Collect all parameters needed for saving results.
-        Stores both input and output parameter spaces.
-        Only property-dependent fields are switched."""
-        
         if property == "phase":
             N_basis_vecs = self.N_basis_vecs_phase
             min_greedy_error = self.min_greedy_error_phase
@@ -404,29 +377,21 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         else:
             raise ValueError("property must be 'phase' or 'amplitude'")
 
+
         return dict(
-            # property-specific
             property=property,
             N_basis_vecs=N_basis_vecs,
             min_greedy_error=min_greedy_error,
-
-            # parameter spaces (store BOTH input and output)
-            ecc_ref_space_input=getattr(self, "ecc_ref_space_input", None),
-            ecc_ref_space_output=getattr(self, "ecc_ref_space_output", None),
-
-            mean_ano_ref_space_input=getattr(self, "mean_ano_ref_space_input", None),
-            mean_ano_ref_space_output=getattr(self, "mean_ano_ref_space_output", None),
-
-            mass_ratio_space_input=getattr(self, "mass_ratio_space_input", None),
-            mass_ratio_space_output=getattr(self, "mass_ratio_space_output", None),
-
-            chi1_space_input=getattr(self, "chi1_space_input", None),
-            chi1_space_output=getattr(self, "chi1_space_output", None),
-
-            chi2_space_input=getattr(self, "chi2_space_input", None),
-            chi2_space_output=getattr(self, "chi2_space_output", None),
-
-            # waveform / global settings
+            ecc_ref_space_sampl=getattr(self, "ecc_ref_space_sampl", None),
+            ecc_ref_space_val=getattr(self, "ecc_ref_space_val", None),
+            mean_ano_ref_space_sampl=getattr(self, "mean_ano_ref_space_sampl", None),
+            mean_ano_ref_space_val=getattr(self, "mean_ano_ref_space_val", None),
+            mass_ratio_space_sampl=getattr(self, "mass_ratio_space_sampl", None),
+            mass_ratio_space_val=getattr(self, "mass_ratio_space_val", None),
+            chi1_space_sampl=getattr(self, "chi1_space_sampl", None),
+            chi1_space_val=getattr(self, "chi1_space_val", None),
+            chi2_space_sampl=getattr(self, "chi2_space_sampl", None),
+            chi2_space_val=getattr(self, "chi2_space_val", None),
             time=self.time,
             f_ref=self.f_ref,
             f_lower=self.f_lower,
@@ -436,6 +401,1575 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             truncate_at_tmin=self.truncate_at_tmin,
         )
 
+    def _get_gpr_obj(self, property):
+        """Helper method to get or create the GPRFitResults object for the specified property."""
+        if property == "amplitude":
+            if self.gpr_amp is None:
+                self.gpr_amp = GPRFitResults(**self.result_kwargs_gpr(property="amplitude"))
+            return self.gpr_amp
+        
+        elif property == "phase":
+            if self.gpr_phase is None:
+                self.gpr_phase = GPRFitResults(**self.result_kwargs_gpr(property="phase"))
+            return self.gpr_phase
+        
+        else:
+            raise ValueError(f"Unknown property: {property}")
+
+    def build_kernels(self, X_train_scaled):
+
+        if self.gp_kernels is None:
+            # ==============================================================
+            # ESTIMATE CHARACTERISTIC LENGTH SCALE
+            # ==============================================================
+            nn = NearestNeighbors(n_neighbors=2)
+            nn.fit(X_train_scaled)
+            distances, _ = nn.kneighbors(X_train_scaled)
+            median_nn_distance = np.median(distances[:, 1])
+            base_ls = median_nn_distance * 2
+
+            dim = X_train_scaled.shape[1]
+
+            # # ============================================================
+            # # KERNEL SEARCH PARAMETERS
+            # # ============================================================
+
+            # # ------------------------------------------------------------
+            # # Matern smoothness values.
+            # #
+            # # lower:
+            # #     rougher functions
+            # #
+            # # higher:
+            # #     smoother functions
+            # # ------------------------------------------------------------
+
+
+            # # ============================================================
+            # # 1. ISOTROPIC MATERN KERNELS
+            # # ============================================================
+
+            # # ------------------------------------------------------------
+            # # One single length scale shared across ALL dimensions.
+            # #
+            # # Simpler.
+            # # Faster.
+            # # Often insufficient in high dimensions.
+            # # ------------------------------------------------------------
+
+            smoothness_params = [1.0, 2.0, 2.5, 3.0, 3.5, 4.0]
+            kernels = []
+
+            for nu in smoothness_params:
+                kernels.append({
+                    "kernel": Matern(length_scale=base_ls, length_scale_bounds=(0.1 * base_ls, 10 * base_ls), nu=nu),
+                    "type": "isotropic",
+                    "nu": nu,
+                    "base_ls": base_ls
+                })
+
+            # # ============================================================
+            # # 2. ANISOTROPIC MATERN KERNELS
+            # # ============================================================
+
+            # # ------------------------------------------------------------
+            # # Separate length scale per dimension.
+            # #
+            # # MUCH more powerful for:
+            # #     [e, l, q, chi1, chi2]
+            # #
+            # # because every parameter may vary differently.
+            # # ------------------------------------------------------------
+
+            # for nu in smoothness_params:
+
+            #     kernel = Matern(
+            #         length_scale=np.ones(dim) * base_ls,
+            #         length_scale_bounds=(0.1 * base_ls, 10 * base_ls),
+            #         nu=nu
+            #     )
+
+            #     kernels.append({
+            #         "kernel": kernel,
+            #         "type": "anisotropic",
+            #         "nu": nu,
+            #         "base_ls": base_ls
+            #     })
+
+            # anisotropic
+            for nu in smoothness_params:
+                kernels.append({
+                    "kernel": Matern(length_scale=np.ones(dim) * base_ls, length_scale_bounds=(0.1 * base_ls, 10 * base_ls), nu=nu),
+                    "type": "anisotropic",
+                    "nu": nu,
+                    "base_ls": base_ls
+                })
+
+            # # ============================================================
+            # # 3. ADD WHITE NOISE TERMS
+            # # ============================================================
+
+            # # ------------------------------------------------------------
+            # # Models numerical noise / imperfect data.
+            # #
+            # # Prevents overfitting.
+            # # ------------------------------------------------------------
+
+            # noise augmentation
+            noise_levels = [1e-6]
+            extra = []
+            for entry in kernels:
+                for noise in noise_levels:
+                    extra.append({
+                        "kernel": entry["kernel"] + WhiteKernel(noise_level=noise, noise_level_bounds=(1e-10, 1e-1)),
+                        "type": entry["type"] + "_noise",
+                        "nu": entry["nu"],
+                        "base_ls": entry["base_ls"],
+                        "noise": noise
+                    })
+
+            kernels.extend(extra)
+            print(f"Generated {len(kernels)} kernels")
+
+            self.gp_kernels = kernels
+            self.base_ls = base_ls
+
+            # ---- free large scaled arrays that the report doesn't need inline ----
+            # (they're passed via aux; the caller decides whether to keep them)
+            del nn, distances
+            gc.collect()
+
+        return self.gp_kernels, self.base_ls
+    
+
+    # def build_piecewise_gp_mask(
+    #     self,
+    #     kernel_diagnostics,
+    #     X_train,
+    #     best_global_idx,
+    #     error_threshold=1e-8,
+    #     min_run_length=2,
+    # ):
+    #     if MEMORY_PROFILE:
+    #         check_memory_usage(f" _build_piecewise_gp_mask START")
+
+
+    #     order = np.argsort(X_train[:, 0])
+
+    #     X_sorted = X_train[order]       
+    #     # ---- per-point error matrix ----
+    #     all_point_errors = np.array([d["point_error"] for d in kernel_diagnostics])
+    #     errors_sorted = all_point_errors[:, order]
+
+    #     N = errors_sorted.shape[1]
+
+    #     # ---- per-point best kernel (oracle assignment) ----
+    #     best_per_point_idx = np.argmin(errors_sorted, axis=0)
+
+    #     # ---- global best kernel errors ----
+    #     best_global_errors = errors_sorted[best_global_idx]
+
+    #     # ---- oracle errors ----
+    #     per_point_errors = errors_sorted[best_per_point_idx, np.arange(N)]
+
+    #     # ---- only switch if the gain is large enough ----
+    #     gain = best_global_errors - per_point_errors
+
+    #     filtered_gain = np.where(
+    #         gain > error_threshold,
+    #         best_per_point_idx,
+    #         best_global_idx
+    #     )
+
+    #     # ---- FILTERED COPY FOR RUN-LENGTH CHECKING ----
+    #     filtered_check = filtered_gain.copy()
+
+    #     # ---- find continuous runs ----
+    #     change_points = np.r_[0, np.where(np.diff(filtered_gain) != 0)[0] + 1, N]
+    #     filtered_final = np.full(N, best_global_idx, dtype=int)
+
+    #     for start, end in zip(change_points[:-1], change_points[1:]):
+    #         run_length = end - start
+
+    #         if run_length >= min_run_length:
+    #             filtered_final[start:end] = filtered_check[start:end]
+    #         else:
+    #             # In case of no change, use the same kernel as the region before 
+    #             try:
+    #                 filtered_final[start:end] = filtered_final[start-1]
+    #             except:
+    #                 # In case of start at i=0
+    #                 filtered_final[start:end] = best_global_idx
+
+
+    #     # ---- EXTRACT REGIONS FROM FINAL ARRAY ----
+    #     final_change_points = np.r_[0, np.where(np.diff(filtered_final) != 0)[0] + 1, N]
+
+    #     kernel_regions = []
+
+    #     for start, end in zip(final_change_points[:-1], final_change_points[1:]):
+    #         if end <= start:
+    #             continue  # Skip empty intervals
+    #         region_kernel_idx = filtered_final[start]
+            
+    #         # Get actual data range from X_train
+    #         x_start = X_sorted[start]
+    #         x_end = X_sorted[end - 1]
+            
+    #         kernel_regions.append({
+    #             "kernel_idx": region_kernel_idx,
+    #             "x_interval": (x_start, x_end),
+    #             "start_index": start,
+    #             "end_index": end,
+    #             "point_error": piecewise_total_error,
+    #         })
+
+    #         # print(
+    #         #     f"{start:3d}-{end:3d} "
+    #         #     f"len={end-start:2d} "
+    #         #     f"{kernel_diagnostics[region_kernel_idx]['label']}"
+    #         # )
+
+    #     # ---- piecewise error ----
+    #     piecewise_errors = errors_sorted[
+    #         filtered_final,
+    #         np.arange(N)
+    #     ]
+
+    #     global_total_error = np.sum(best_global_errors)
+    #     piecewise_total_error = np.sum(piecewise_errors)
+
+    #     print("\n================ GLOBAL COMPARISON ================\n")
+    #     print(f"Global total error    : {global_total_error:.6e}")
+    #     print(f"Piecewise total error : {piecewise_total_error:.6e}")
+    #     print(f"Total improvement     : {(global_total_error-piecewise_total_error):.6e}")
+    #     print(f"Mean improvement/pt   : {np.mean(best_global_errors-piecewise_errors):.6e}")
+
+    #     del global_total_error, piecewise_total_error, best_global_errors
+
+    #     if MEMORY_PROFILE:
+    #         check_memory_usage(f" _build_piecewise_gp_mask END")
+
+    #     return kernel_regions
+    
+    def build_piecewise_gp_mask(
+        self,
+        kernel_diagnostics,
+        X_train,
+        best_global_idx,
+        error_threshold=1e-8,
+        min_run_length=2,
+    ):
+        if MEMORY_PROFILE:
+            check_memory_usage(f" _build_piecewise_gp_mask START")
+
+
+        order = np.argsort(X_train[:, 0])
+
+        X_sorted = X_train[order]       
+        # ---- per-point error matrix ----
+        all_point_errors = np.array([d["point_error"] for d in kernel_diagnostics])
+        errors_sorted = all_point_errors[:, order]
+
+        N = errors_sorted.shape[1]
+
+        # ---- per-point best kernel (oracle assignment) ----
+        best_per_point_idx = np.argmin(errors_sorted, axis=0)
+
+        # ---- global best kernel errors ----
+        best_global_errors = errors_sorted[best_global_idx]
+
+        # ---- errors per best idx ----
+        per_point_errors = errors_sorted[best_per_point_idx, np.arange(N)]
+
+        # ---- only switch if the gain is large enough ----
+        gain = best_global_errors - per_point_errors
+
+        filtered_gain = np.where(
+            gain > error_threshold,
+            best_per_point_idx,
+            best_global_idx
+        )
+
+        # ---- FILTERED COPY FOR RUN-LENGTH CHECKING ----
+        filtered_check = filtered_gain.copy()
+
+        # ---- find continuous runs ----
+        change_points = np.r_[0, np.where(np.diff(filtered_gain) != 0)[0] + 1, N]
+        filtered_final = np.full(N, best_global_idx, dtype=int)
+
+        for start, end in zip(change_points[:-1], change_points[1:]):
+            run_length = end - start
+
+            if run_length >= min_run_length:
+                filtered_final[start:end] = filtered_check[start:end]
+            else:
+                # In case of no change, use the same kernel as the region before 
+                try:
+                    filtered_final[start:end] = filtered_final[start-1]
+                except:
+                    # In case of start at i=0
+                    filtered_final[start:end] = best_global_idx
+
+
+        # ---- EXTRACT REGIONS FROM FINAL ARRAY ----
+        final_change_points = np.r_[0, np.where(np.diff(filtered_final) != 0)[0] + 1, N]
+
+        kernel_regions = []
+
+        for start, end in zip(final_change_points[:-1], final_change_points[1:]):
+            if end <= start:
+                continue  # Skip empty intervals
+            region_kernel_idx = filtered_final[start]
+            
+            # Get actual data range from X_train
+            x_start = X_sorted[start]
+            x_end = X_sorted[end - 1]
+            
+            kernel_regions.append({
+                "gp": kernel_diagnostics[region_kernel_idx]["gp"],
+                "kernel_idx": region_kernel_idx,
+                "kernel_label": kernel_diagnostics[region_kernel_idx]["label"],
+                "x_interval": (x_start, x_end),
+                "n_points": end - start,
+                "start_index": start,
+                "end_index": end,
+            })
+
+            # print(
+            #     f"{start:3d}-{end:3d} "
+            #     f"len={end-start:2d} "
+            #     f"{kernel_diagnostics[region_kernel_idx]['label']}"
+            # )
+
+        # ---- piecewise error ----
+        piecewise_errors = errors_sorted[
+            filtered_final,
+            np.arange(N)
+        ]
+
+        global_total_error = np.sum(best_global_errors)
+        piecewise_total_error = np.sum(piecewise_errors)
+
+        print("\n================ GLOBAL COMPARISON ================\n")
+        print(f"Global total error    : {global_total_error:.6e}")
+        print(f"Piecewise total error : {piecewise_total_error:.6e}")
+        print(f"Total improvement     : {(global_total_error-piecewise_total_error):.6e}")
+        print(f"Mean improvement/pt   : {np.mean(best_global_errors-piecewise_errors):.6e}")
+
+        # =====================================================
+        # ADD: LML, RMSE, and point_error statistics for piecewise GP
+        # =====================================================
+        
+        # RMSE: sqrt(mean(squared_errors))
+        piecewise_rmse = np.sqrt(np.mean(piecewise_errors ** 2))
+        
+        # LML: weighted average of component kernels' LML by region size
+        all_lmls = np.array([d["lml"] for d in kernel_diagnostics])
+        piecewise_lml = np.sum([
+            (final_change_points[i+1] - final_change_points[i]) / N * 
+            all_lmls[filtered_final[final_change_points[i]]]
+            for i in range(len(final_change_points) - 1)
+        ])
+        
+        # Point error: mean absolute error across all points
+        piecewise_point_error = np.mean(piecewise_errors)
+
+        piecewise_diagnostics = {
+            "piecewise_lml": piecewise_lml,
+            "piecewise_rmse": piecewise_rmse,
+            "piecewise_point_error": piecewise_point_error,
+        }
+
+        del global_total_error, piecewise_total_error, best_global_errors
+        del piecewise_lml, piecewise_point_error, piecewise_rmse
+
+        if MEMORY_PROFILE:
+            check_memory_usage(f" _build_piecewise_gp_mask END")
+
+        # Return enhanced dictionary with statistics
+
+        return kernel_regions, piecewise_diagnostics
+
+
+    def _train_gp_kernels(self, time_node, train_obj:TrainingSetResults, optimized_kernel=None,
+                        time_coupled=False, screening=True, refinement=True,
+                        ):
+        """val
+        Pure GP training.
+
+        Fits all candidate kernels for one empirical time node, computes raw
+        metrics (LML, RMSE), normalised scores, and returns the full diagnostics
+        list plus auxiliary objects needed by the report.
+
+        Returns
+        -------
+        kernel_diagnostics : list[dict]
+            One entry per successfully fitted kernel.
+        aux : dict
+            Scalers, scaled arrays, y_train, dim, best_idx, etc. — everything
+            the report function needs without re-computing.
+        """
+
+        # [OPTIMIZED #2]
+        if MEMORY_PROFILE:
+            check_memory_usage(f"_train_gp_kernels START node {time_node}")
+
+        # ==============================================================
+        # BUILD INPUT MATRICES
+        # ==============================================================
+        X_training_space = train_obj.parameter_grid
+
+        if time_coupled is False:
+            X_train = np.asarray(train_obj.parameter_grid)[train_obj.basis_indices]
+        else:
+            t_train = np.full(
+                (train_obj.parameter_grid.shape[0], 1),
+                self.time[train_obj.empirical_indices[time_node]]
+            )
+            X_train = np.hstack([
+                np.asarray(train_obj.parameter_grid)[train_obj.basis_indices],
+                t_train[train_obj.basis_indices]
+            ])
+            t_training_space = np.full(
+                (X_training_space.shape[0], 1),
+                self.time[train_obj.empirical_indices[time_node]]
+            )
+            X_training_space = np.hstack([X_training_space, t_training_space])
+
+        y_train = np.squeeze(train_obj.training_set.T[time_node])
+
+        # ==============================================================
+        # SCALE INPUTS
+        # ==============================================================
+        scaler_x = StandardScaler()
+        X_train_scaled = scaler_x.fit_transform(X_train)
+        
+        # Get sorting indices for both versions
+        order_raw = np.argsort(X_train[:, 0])
+        order_scaled = np.argsort(X_train_scaled[:, 0])
+
+        # They should be identical!
+        if np.array_equal(order_raw, order_scaled):
+            print("\n✓ Order preserved after scaling")
+        else:
+            print("\n✗ WARNING: Order changed after scaling!")
+            mismatches = np.where(order_raw != order_scaled)[0]
+            print(f"  First 5 mismatch indices: {mismatches[:5]}")
+
+
+        X_training_space_scaled = scaler_x.transform(X_training_space)
+
+        scaler_y = StandardScaler()
+        y_train_scaled = scaler_y.fit_transform(y_train.reshape(-1, 1)).flatten()
+
+        
+        kernels, base_ls = self.build_kernels(X_train_scaled=X_train_scaled)
+
+        if optimized_kernel is not None:
+            kernels.insert(0, {
+                "kernel": optimized_kernel[0],
+                "type": "warm_start",
+                "label": optimized_kernel[1]
+            })
+
+        # ==============================================================
+        # MODE SELECTION
+        # ==============================================================
+        if screening and not refinement:
+            mode = "screening"
+        elif refinement and not screening:
+            mode = "refinement"
+        else:
+            mode = "full"
+
+        # ==============================================================
+        # KERNEL SEARCH LOOP
+        # ==============================================================
+        kernel_diagnostics = []
+        lml_list = []
+        rmse_list = []
+
+        for entry in kernels:
+            try:
+                # ---- restart policy ----
+                if mode == "screening":
+                    n_restarts = 2
+                elif mode == "refinement":
+                    n_restarts = 8
+                else:
+                    n_restarts = 5
+
+                # ---- label ----
+                if entry["type"] == 'warm_start':
+                    kernel_label = entry["label"]
+                else:
+                    kernel_label = {
+                        "isotropic": "Iso",
+                        "anisotropic": "Aniso",
+                        "isotropic_noise": "Iso+W",
+                        "anisotropic_noise": "Aniso+W",
+                    }[entry["type"]]
+                    kernel_label += f" ν={entry['nu']}"
+                    if "noise" in entry:
+                        kernel_label += f", noise={entry['noise']:.0e}"
+
+                # ---- fit ----
+                t0 = time.perf_counter()
+                gp = GaussianProcessRegressor(
+                    kernel=entry["kernel"],
+                    n_restarts_optimizer=n_restarts,
+                    random_state=42
+                )
+                gp.fit(X_train_scaled, y_train_scaled)
+                kernel_fit_time = time.perf_counter() - t0
+
+                # ---- raw metrics ----
+                lml = gp.log_marginal_likelihood_value_
+                y_pred_train, std_train = gp.predict(X_train_scaled, return_std=True)
+                train_rmse = np.sqrt(np.mean((y_pred_train - y_train_scaled) ** 2))
+                point_error = np.abs(y_pred_train - y_train_scaled)
+
+                lml_list.append(lml)
+                rmse_list.append(train_rmse)
+
+                # ---- screening prune ----
+                if mode == "screening" and len(lml_list) > 5:
+                    if lml < np.mean(lml_list) - 5 * np.std(lml_list):
+                        continue
+                    if train_rmse > np.mean(rmse_list) + 3 * np.std(rmse_list):
+                        continue
+
+                # ---- full-grid predictions ----
+                y_pred_scaled, std_pred_scaled = gp.predict(
+                    X_training_space_scaled, return_std=True
+                )
+
+                y_pred_training_space = scaler_y.inverse_transform(
+                    y_pred_scaled.reshape(-1, 1)
+                ).flatten()
+                y_pred_training_space_std = std_pred_scaled * scaler_y.scale_[0]
+                
+
+                kernel_diagnostics.append({
+                    "time_node": time_node,
+                    "kernel": gp.kernel_,
+                    "lml": lml,
+                    "rmse": train_rmse,
+                    "point_error": point_error,
+                    "label": kernel_label,
+                    "fit_time": kernel_fit_time,
+                    "gp": gp,
+                    "y_train_pred": y_pred_train,
+                    "std_train": std_train,
+                    "y_pred": y_pred_training_space,
+                    "y_pred_std": y_pred_training_space_std,
+                })
+
+            except Exception as e:
+                print(self.colored_text(f"GPR failed for kernel {entry}: {e}", "red"))
+                traceback.print_exc()
+                continue
+
+        # ==============================================================
+        # COMPUTE NORMALISED SCORES
+        # ==============================================================
+        all_lmls = np.array([d["lml"] for d in kernel_diagnostics])
+        all_rmses = np.array([d["rmse"] for d in kernel_diagnostics])
+
+        mean_lml, std_lml = np.mean(all_lmls), np.std(all_lmls) + 1e-12
+        mean_rmse, std_rmse = np.mean(all_rmses), np.std(all_rmses) + 1e-12
+
+        for d in kernel_diagnostics:
+            lml_norm = (d["lml"] - mean_lml) / std_lml
+            rmse_norm = (d["rmse"] - mean_rmse) / std_rmse
+            d["score"] = lml_norm - 0.5 * rmse_norm
+
+        best_idx = int(np.argmax([d["score"] for d in kernel_diagnostics]))
+
+        # ---- clear screening lists ----
+        del lml_list, rmse_list, all_lmls, all_rmses
+        gc.collect()
+
+        # ==============================================================
+        # PACKAGE AUXILIARY DATA FOR THE REPORT
+        # ==============================================================
+        aux = {
+            "scaler_x": scaler_x,
+            "scaler_y": scaler_y,
+            "X_train_scaled": X_train_scaled,
+            "X_training_space_scaled": X_training_space_scaled,
+            "y_train": y_train,
+            "y_train_scaled": y_train_scaled,
+            "dim": X_train_scaled.shape[1],
+            "time_coupled": time_coupled,
+            "best_idx": best_idx,
+            "base_ls": base_ls,
+            "refined": refinement,
+            "screening": screening,
+        }
+
+        if MEMORY_PROFILE:
+            check_memory_usage(f"_train_gp_kernels END node {time_node} "
+                            f"({len(kernel_diagnostics)} kernels)")
+
+        return kernel_diagnostics, aux
+
+    # def _load_all_kernel_diagnostics(
+    #     self,
+    #     time_node,
+    #     n_nodes,
+    # ):
+    #     """
+    #     Load per-node kernel diagnostics pickle files from disk.
+        
+    #     Returns:
+    #         list: List of length n_nodes, each entry is the diagnostics dict for that node
+    #             If file not found for node i, that position is None
+    #     """
+    #     reports_dir ="Straindata/Gaussian_kernels/Reports"
+    #     os.makedirs("Straindata/Gaussian_kernels/Reports", exist_ok=True)
+
+
+    #     print(self.colored_text("-"*50, "blue"))
+    #     print(self.colored_text(f"Processing Time Node {time_node}/{n_nodes-1}", "white"))
+        
+    #     # =========================================================================
+    #     # LOAD PER-NODE KERNEL DIAGNOSTICS
+    #     # =========================================================================
+    #     node_diag_path = None
+    #     if os.path.exists(reports_dir):
+    #         prefix = f"kernel_diagnostics_T{time_node}"
+    #         for fname in os.listdir(reports_dir):
+    #             if fname.startswith(prefix) and fname.endswith(".pkl"):
+    #                 node_diag_path = os.path.join(reports_dir, fname)
+    #                 break
+        
+    #     if node_diag_path is None:
+    #         print(self.colored_text(f"⚠ Skipping node {time_node} - no diagnostics file found", "yellow"))
+    #         return  
+                        
+    #     with open(node_diag_path, "rb") as f:
+    #         kernel_diagnostics_loaded = pickle.load(f)
+        
+    #     # Reconstruct to match original format
+    #     kernel_diagnostics = []
+    #     for d in kernel_diagnostics_loaded:
+    #         kernel_diagnostics.append({
+    #             "time_node": d["time_node"],
+    #             "kernel_str": d["kernel_str"],
+    #             "label": d["kernel_type"],
+    #             "lml": d["lml"],
+    #             "rmse": d["rmse"],
+    #             "score": d["score"],
+    #             "fit_time": d["fit_time"],
+    #             "y_train_pred": np.array(d["y_train_pred"]),
+    #             "y_pred": np.array(d["y_pred"]),
+    #             "y_pred_std": np.array(d["y_pred_std"]),
+    #             "std_train": np.array(d["std_train"]),
+    #             "gp": None,  # Not in pickle file
+    #             "kernel": None,  # String only
+    #         })
+        
+    #     if len(kernel_diagnostics) == 0:
+    #         print(self.colored_text(f"⚠ Skipping node {time_node} - empty diagnostics file", "yellow"))
+    #         return
+                        
+    #     print(self.colored_text(f"Loaded {len(kernel_diagnostics)} kernels for node {time_node}", "green"))
+
+        
+    #     return kernel_diagnostics
+
+    def _load_all_kernel_diagnostics(self, 
+                                     train_obj:TrainingSetResults, 
+                                     time_node, 
+                                     n_nodes):
+        """
+        Load per-node kernel diagnostics pickle files from disk.
+        
+        Returns:
+            tuple: (kernel_diagnostics_list, aux_dict)
+                - kernel_diagnostics_list: List of kernel diagnostic dicts for that node
+                - aux_dict: Contains scaler_x, scaler_y, X_train_scaled, etc.
+                If file not found for node i, returns (None, None)
+        """
+        reports_dir = train_obj.filename(
+            prefix=f"kernel_diagnostics",
+            ext="",
+            directory="Straindata/Gaussian_kernels/Reports",
+            include_greedy=True,
+            include_extra=""
+        )[:-1]
+        print(reports_dir)
+
+
+        print(self.colored_text("-"*50, "blue"))
+        print(self.colored_text(f"Processing Time Node {time_node}/{n_nodes-1}", "white"))
+        
+        # =========================================================================
+        # LOAD PER-NODE KERNEL DIAGNOSTICS WITH AUX DATA
+        # =========================================================================
+        node_diag_path = None
+        if os.path.exists(reports_dir):
+            prefix = f"T{time_node}"
+            for fname in os.listdir(reports_dir):
+                if fname.startswith(prefix) and fname.endswith(".pkl"):
+                    node_diag_path = os.path.join(reports_dir, fname)
+                    break
+        
+        if node_diag_path is None:
+            print(self.colored_text(f"⚠ Skipping node {time_node} - no diagnostics file found", "yellow"))
+            return None, None
+                            
+        with open(node_diag_path, "rb") as f:
+            diagnostics_bundle = pickle.load(f)
+        
+        # Extract auxiliary data from bundle
+        aux = diagnostics_bundle.get("aux", {})
+        
+        # Get original kernel_diagnostics list directly
+        kernel_diagnostics = diagnostics_bundle.get("diagnostics", [])
+        
+        if len(kernel_diagnostics) == 0:
+            print(self.colored_text(f"⚠ Skipping node {time_node} - empty diagnostics file", "yellow"))
+            return None, None
+                            
+        print(self.colored_text(f"Loaded {len(kernel_diagnostics)} kernels for node {time_node} from {node_diag_path}", "blue"))
+
+        
+        return kernel_diagnostics, aux
+
+    # def _kernel_analysis_report(
+    #     self,
+    #     gpr_obj:GPRFitResults,
+    #     train_obj:TrainingSetResults,
+    #     time_node,
+    #     time_coupled=False,
+    #     n_best_pred=5,
+    #     n_q_slices=3,
+    # ):
+    #     """
+    #     Generate SEPARATE PDF reports for EACH time node.
+        
+    #     Each node gets its OWN PDF file containing:
+    #     - Page 1: Title & Node Statistics
+    #     - Page 2: Kernel Diagnostics (LML/RMSE/Scores/Fit Times)
+    #     - Page 3: Kernel Predictions Comparison (Best vs Others)
+    #     - Page 4: Parity Plot (True vs Pred)
+    #     - Page 5: Validation Heatmaps
+        
+    #     All reports stored in reports_dir/ subfolder named via gpr_obj filename logic.
+        
+    #     Prerequisites:
+    #     - gpr_obj.load_gpr_obj() already called
+    #     - train_obj.load() already called (optional but recommended)
+    #     - kernel_diagnostics_T*.pkl files exist for each node
+    #     """
+    #     reports_dir="Images/Gaussian_kernels/PerNodeReports"
+    #     os.makedirs(reports_dir, exist_ok=True)
+
+    #     # =========================================================================
+    #     # LOOP THROUGH ALL TIME NODES
+    #     # =========================================================================
+    #     successful_reports = 0
+    #     n_nodes = len(train_obj.empirical_indices)
+
+    #     try:
+    #         kernel_diagnostics = self._load_all_kernel_diagnostics(
+    #             time_node=time_node,
+    #             n_nodes=n_nodes
+    #         )
+
+    #         # =========================================================================
+    #         # GET BEST INFO FROM THIS NODE'S DIANOSTICS
+    #         # =========================================================================
+    #         best_idx = int(np.argmax([k["score"] for k in kernel_diagnostics]))
+    #         best_info = kernel_diagnostics[best_idx]
+            
+    #         # Get scalers from gpr_obj for this node
+    #         scaler_x = kernel_diagnostics[time_node]["scaler_x"]
+    #         scaler_y = kernel_diagnostics[time_node]["scaler_y"]
+    #         y_train = train_obj.training_set.T[time_node] if train_obj else None
+            
+    #         # =========================================================================
+    #         # DEFINE OUTPUT PATH FOR THIS NODE'S PDF
+    #         # =========================================================================
+    #         report_filename = gpr_obj.figname(
+    #             prefix=f"kernel_analysis_report_T{time_node}",
+    #             ext="pdf",
+    #             directory=reports_dir,
+    #             include_greedy=True,
+    #             include_extra=""
+    #         )
+            
+    #         pdf = PdfPages(report_filename)
+            
+    #         # =========================================================================
+    #         # PAGE 1: TITLE & NODE STATISTICS
+    #         # =========================================================================
+    #         fig_title, ax = plt.subplots(figsize=(10, 8))
+    #         ax.axis('off')
+    #         title_text = f'''KERNEL ANALYSIS REPORT - TIME NODE {time_node}
+    #         ========================================================
+
+    #         Property: {property}
+    #         Total Kernels Tested: {len(kernel_diagnostics)}
+
+    #         BEST KERNEL:
+    #         • Label: {best_info['label']}
+    #         • LML: {best_info['lml']:.4f}
+    #         • Train RMSE: {best_info['rmse']:.6e}
+    #         • Score: {best_info['score']:.4f}
+    #         • Fit Time: {best_info['fit_time']:.3f}s
+
+    #         MODEL STATS ACROSS ALL KERNELS:
+    #         • Best LML: {np.max([k["lml"] for k in kernel_diagnostics]):.4f}
+    #         • Worst LML: {np.min([k["lml"] for k in kernel_diagnostics]):.4f}
+    #         • Best RMSE: {np.min([k["rmse"] for k in kernel_diagnostics]):.6e}
+    #         • Mean Score: {np.mean([k["score"] for k in kernel_diagnostics]):.4f}
+
+    #         '''
+    #         ax.text(0.5, 0.5, title_text, fontsize=11, va='center', ha='center',
+    #                 bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.5))
+    #         plt.tight_layout()
+            
+    #         pdf.savefig(fig_title, bbox_inches="tight")
+    #         plt.close(fig_title)
+    #         gc.collect()
+            
+    #         # =========================================================================
+    #         # PAGE 2: KERNEL DIAGNOSTICS PLOTS
+    #         # =========================================================================
+    #         result = self._plot_kernel_diagnostics(
+    #             kernel_diagnostics=kernel_diagnostics,
+    #             train_obj=train_obj,
+    #             save_fig=False
+    #         )
+            
+    #         if result:
+    #             figs = result if isinstance(result, (tuple, list)) else [result]
+    #             for fig in figs:
+    #                 pdf.savefig(fig, bbox_inches="tight")
+    #                 plt.close(fig)
+            
+    #         gc.collect()
+            
+    #         # =========================================================================
+    #         # PAGE 3: KERNEL PREDICTIONS COMPARISON
+    #         # =========================================================================
+
+    #         result = self._plot_kernel_predictions(
+    #             kernel_diagnostics=kernel_diagnostics,
+    #             train_obj=train_obj,
+    #             scaler_y=scaler_y,
+    #             y_train=y_train,
+    #             n_best=n_best_pred,
+    #             save_fig=False
+    #         )
+            
+    #         if result:
+    #             figs = result if isinstance(result, (tuple, list)) else [result]
+    #             for fig in figs:
+    #                 pdf.savefig(fig, bbox_inches="tight")
+    #                 plt.close(fig)
+            
+    #         gc.collect()
+            
+    #         # =========================================================================
+    #         # PAGE 4: PARITY PLOT
+    #         # =========================================================================
+    #         best_result_dict = {
+    #             "gp": None,  # Not in pickle, skip or would need gp from gpr_obj
+    #             "scaler_x": scaler_x,
+    #             "scaler_y": scaler_y,
+    #             "train_prediction": scaler_y.inverse_transform(
+    #                 best_info["y_train_pred"].reshape(-1, 1)
+    #             ).flatten(),
+    #             "y_train": y_train,
+    #             "time_node": time_node,
+    #             "basis_indices": train_obj.basis_indices,
+    #             "label": best_info["label"],
+    #             "train_rmse": best_info["rmse"],
+    #             "lml": best_info["lml"],
+    #             "score": best_info["score"],
+    #         }
+            
+    #         result = self._plot_parity(
+    #             best_result_dict=best_result_dict,
+    #             train_obj=train_obj,
+    #             save_fig=False
+    #         )
+                
+    #         if result:
+    #             figs = result if isinstance(result, (tuple, list)) else [result]
+    #             for fig in figs:
+    #                 pdf.savefig(fig, bbox_inches="tight")
+    #                 plt.close(fig)
+            
+    #         gc.collect()
+            
+    #         # =========================================================================
+    #         # PAGE 5: VALIDATION HEATMAPS
+    #         # =========================================================================
+    #         result = self._plot_validation_heatmaps_kernels(
+    #             time_coupled=time_coupled,
+    #             kernel_diagnostics=kernel_diagnostics,
+    #             scaler_x=scaler_x,
+    #             scaler_y=scaler_y,
+    #             time_node=time_node,
+    #             train_obj=train_obj,
+    #             n_q_slices=n_q_slices,
+    #             top_k=3
+    #         )
+            
+    #         if result:
+    #             figs = result if isinstance(result, (tuple, list)) else [result]
+    #             for fig in figs:
+    #                 pdf.savefig(fig, bbox_inches="tight")
+    #                 plt.close(fig)
+        
+    #         gc.collect()
+            
+    #         # =========================================================================
+    #         # FINALIZE PDF
+    #         # =========================================================================
+
+    #         pdf.close()
+    #         plt.close('all')
+    #         gc.collect()
+            
+    #         print(self.colored_text(f"Report saved in: {os.path.basename(report_filename)}", "green"))
+    #         successful_reports += 1
+            
+    #     except Exception as e:
+    #         print(self.colored_text(f"Failed node diagnostics report for {time_node}: {e}", "red"))
+    #         traceback.print_exc()
+    #         return     
+        
+    #     # =========================================================================
+    #     # SUMMARY
+    #     # =========================================================================
+    #     print(self.colored_text("="*70, "cyan"))
+    #     print(self.colored_text(f"COMPLETED: {successful_reports}/{n_nodes} per-node reports generated", "green"))
+    #     print(self.colored_text(f"All reports saved to: {reports_dir}", "green"))
+    #     print(self.colored_text("="*70, "cyan"))
+        
+    #     return successful_reports
+
+    def _kernel_analysis_report(
+        self,
+        gpr_obj:GPRFitResults,
+        train_obj:TrainingSetResults,
+        time_node,
+        time_coupled=False,
+        n_best_pred=5,
+        n_q_slices=3,
+    ):
+        """
+        Generate SEPARATE PDF reports for EACH time node.
+        
+        Each node gets its OWN PDF file containing:
+        - Page 1: Title & Node Statistics
+        - Page 2: Kernel Diagnostics (LML/RMSE/Scores/Fit Times)
+        - Page 3: Kernel Predictions Comparison (Best vs Others)
+        - Page 4: Parity Plot (True vs Pred)
+        - Page 5: Validation Heatmaps
+        
+        All reports stored in reports_dir/ subfolder named via gpr_obj filename logic.
+        
+        Prerequisites:
+        - gpr_obj.load_gpr_obj() already called
+        - train_obj.load() already called (optional but recommended)
+        - kernel_diagnostics_T*.pkl files exist for each node (NOW CONTAINS AUX DATA!)
+        """
+        reports_dir="Images/Gaussian_kernels/PerNodeReports"
+        node_dir = train_obj.filename(
+            prefix="kernel_analysis_report", 
+            ext = "",
+            directory=reports_dir
+        )[:-1]
+
+        # =========================================================================
+        # LOOP THROUGH ALL TIME NODES
+        # =========================================================================
+        n_nodes = len(train_obj.empirical_indices)
+
+
+        # =========================================================================
+        # LOAD PER-NODE KERNEL DIAGNOSTICS WITH AUX DATA (CHANGED TO USE HELPER)
+        # =========================================================================
+        kernel_diagnostics, aux = self._load_all_kernel_diagnostics(
+            train_obj=train_obj,
+            time_node=time_node,
+            n_nodes=n_nodes,
+        )
+        # Load scalers from aux dictionary
+        scaler_x, scaler_y = aux["scaler_x"], aux["scaler_y"]  
+
+        if kernel_diagnostics is None:
+            print(self.colored_text(f"⚠ Skipping node {time_node} - load failed", "yellow"))
+            return
+        
+        y_train = train_obj.training_set.T[time_node] if train_obj else None
+            
+        # =========================================================================
+        # GET BEST INFO FROM THIS NODE'S DIANOSTICS
+        # =========================================================================
+        best_idx = int(np.argmax([k["score"] for k in kernel_diagnostics]))
+        best_info = kernel_diagnostics[best_idx]
+            
+        # =========================================================================
+        # DEFINE OUTPUT PATH FOR THIS NODE'S PDF
+        # =========================================================================
+        report_filename = gpr_obj.figname(
+            prefix=f"T{time_node}",
+            ext="pdf",
+            directory=node_dir,
+        )
+        
+        pdf = PdfPages(report_filename)
+        
+        # =========================================================================
+        # PAGE 1: TITLE & NODE STATISTICS
+        # =========================================================================
+        try:
+            fig_title, ax = plt.subplots(figsize=(10, 8))
+            ax.axis('off')
+            title_text = f'''KERNEL ANALYSIS REPORT - TIME NODE {time_node}
+            ========================================================
+
+            Property: {gpr_obj.property}
+            Total Kernels Tested: {len(kernel_diagnostics)}
+
+            BEST KERNEL:
+            • Label: {best_info['label']}
+            • LML: {best_info['lml']:.4f}
+            • Train RMSE: {best_info['rmse']:.6e}
+            • Score: {best_info['score']:.4f}
+            • Fit Time: {best_info['fit_time']:.3f}s
+            • Refined: {aux['refined']}
+            • Screening: {aux['screening']}
+
+            MODEL STATS ACROSS ALL KERNELS:
+            • Best LML: {np.max([k["lml"] for k in kernel_diagnostics]):.4f}
+            • Worst LML: {np.min([k["lml"] for k in kernel_diagnostics]):.4f}
+            • Best RMSE: {np.min([k["rmse"] for k in kernel_diagnostics]):.6e}
+            • Mean Score: {np.mean([k["score"] for k in kernel_diagnostics]):.4f}
+
+            '''
+            ax.text(0.5, 0.5, title_text, fontsize=11, va='center', ha='center',
+                    bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.5))
+            plt.tight_layout()
+            
+            pdf.savefig(fig_title, bbox_inches="tight")
+            plt.close(fig_title)
+            gc.collect()
+        except Exception as e:
+            print(self.colored_text(f"EXCEPTION in title page for node {time_node}: {e}", 'red'))
+            traceback.print_exc()
+            
+        # =========================================================================
+        # PAGE 2: KERNEL DIAGNOSTICS PLOTS
+        # =========================================================================
+        try:
+            result = self._plot_kernel_diagnostics(
+                kernel_diagnostics=kernel_diagnostics,
+                train_obj=train_obj,
+                save_fig=False
+            )
+            
+            if result:
+                figs = result if isinstance(result, (tuple, list)) else [result]
+                for fig in figs:
+                    pdf.savefig(fig, bbox_inches="tight")
+                    plt.close(fig)
+            
+            gc.collect()
+        except Exception as e:
+            print(self.colored_text(f"EXCEPTION in _plot_kernel_diagnostics for node {time_node}: {e}", 'red'))
+            traceback.print_exc()
+        # =========================================================================
+        # PAGE 3: KERNEL PREDICTIONS COMPARISON
+        # =========================================================================
+        try:
+            result = self._plot_kernel_predictions(
+                kernel_diagnostics=kernel_diagnostics,
+                train_obj=train_obj,
+                scaler_y=scaler_y,  # NOW FROM LOADED AUX
+                y_train=y_train,
+                n_best=n_best_pred,
+                save_fig=False
+            )
+            
+            if result:
+                figs = result if isinstance(result, (tuple, list)) else [result]
+                for fig in figs:
+                    pdf.savefig(fig, bbox_inches="tight")
+                    plt.close(fig)
+            
+            gc.collect()
+        except Exception as e:
+            print(self.colored_text(f"EXCEPTION in _plot_kernel_predictions for node {time_node}: {e}", 'red'))
+            traceback.print_exc()
+        # =========================================================================
+        # PAGE 4: PARITY PLOT
+        # =========================================================================
+        try:
+            best_result_dict = {
+                "gp": None,  # Not in pickle, skip or would need gp from gpr_obj
+                "scaler_x": scaler_x,  # NOW FROM LOADED AUX
+                "scaler_y": scaler_y,  # NOW FROM LOADED AUX
+                "train_prediction": scaler_y.inverse_transform(
+                    best_info["y_train_pred"].reshape(-1, 1)
+                ).flatten(),
+                "y_train": y_train,
+                "time_node": time_node,
+                "basis_indices": train_obj.basis_indices,
+                "label": best_info["label"],
+                "train_rmse": best_info["rmse"],
+                "lml": best_info["lml"],
+                "score": best_info["score"],
+            }
+            
+            result = self._plot_parity(
+                best_result_dict=best_result_dict,
+                train_obj=train_obj,
+                save_fig=False
+            )
+                    
+            if result:
+                figs = result if isinstance(result, (tuple, list)) else [result]
+                for fig in figs:
+                    pdf.savefig(fig, bbox_inches="tight")
+                    plt.close(fig)
+            
+            gc.collect()
+        except Exception as e:
+            print(self.colored_text(f"EXCEPTION in _plot_parity for node {time_node}: {e}", 'red'))
+            traceback.print_exc()
+        
+        # =========================================================================
+        # PAGE 5: VALIDATION HEATMAPS
+        # =========================================================================
+        try:
+            result = self._plot_validation_heatmaps_kernels(
+                time_coupled=time_coupled,
+                kernel_diagnostics=kernel_diagnostics,
+                scaler_x=scaler_x,  
+                scaler_y=scaler_y,  
+                time_node=time_node,
+                train_obj=train_obj,
+                n_q_slices=n_q_slices,
+                top_k=3
+            )
+            
+            if result:
+                figs = result if isinstance(result, (tuple, list)) else [result]
+                for fig in figs:
+                    pdf.savefig(fig, bbox_inches="tight")
+                    plt.close(fig)
+        
+            gc.collect()
+        except Exception as e:
+            print(self.colored_text(f"EXCEPTION in _plot_validation_heatmaps_kernels for node {time_node}: {e}", 'red'))
+            traceback.print_exc()
+        
+        # =========================================================================
+        # FINALIZE PDF
+        # =========================================================================
+
+        pdf.close()
+        
+        plt.close('all')
+        gc.collect()
+        
+        return reports_dir
+
+    # def _kernel_analysis_report(self, 
+    #                             kernel_diagnostics, 
+    #                             aux, 
+    #                             train_obj:TrainingSetResults,
+    #                             n_wfs_pred=5,
+    #                             save_dir="Images/Gaussian_kernels/Reports"):
+    #     """
+    #     Generate a comprehensive kernel analysis report for one time node.
+
+    #     Calls existing plotting functions with save_fig=False, captures their
+    #     returned figures (single or tuple), writes them to a single PDF,
+    #     and closes everything immediately.
+
+    #     Also saves a lightweight diagnostics pickle (metrics only, no arrays).
+    #     """
+
+    #     best_idx = aux["best_idx"]
+    #     best_info = kernel_diagnostics[best_idx]
+    #     time_node = best_info["time_node"]
+    #     scaler_x = aux["scaler_x"]
+    #     scaler_y = aux["scaler_y"]
+    #     y_train = aux["y_train"]
+    #     time_coupled = aux["time_coupled"]
+
+    #     os.makedirs(save_dir, exist_ok=True)
+    #     report_path = train_obj.figname(
+    #         prefix="kernel_report",
+    #         ext="pdf",
+    #         directory=save_dir,
+    #         include_greedy=True,
+    #         include_extra=f"node={time_node}"
+    #     )
+
+    #     # Load true residuals for prediction comparison & parity
+    #     train_obj.load_residuals()
+    #     y_true = train_obj.residuals[:, train_obj.empirical_indices[time_node]]
+
+    #     with PdfPages(report_path) as pdf:
+
+    #         # ============================================================
+    #         # FIG 1+2 — KERNEL DIAGNOSTICS (metrics panel + LML vs RMSE scatter)
+    #         # ============================================================
+    #         try:
+    #             result = self._plot_kernel_diagnostics(
+    #                 kernel_diagnostics=kernel_diagnostics,
+    #                 train_obj=train_obj,
+    #                 best_score=best_info["score"],
+    #                 save_fig=False,
+    #             )
+    #             self._handle_figure_result(result, pdf)
+    #             print(self.colored_text("Kernel diagnostics added to report", "blue"))
+    #         except Exception as e:
+    #             print(self.colored_text(f"Kernel diagnostics failed: {e}", "yellow"))
+    #             traceback.print_exc()
+
+    #         gc.collect()
+
+    #         # ============================================================
+    #         # FIG 3 — KERNEL PREDICTION COMPARISON (best vs worst)
+    #         # ============================================================
+    #         try:
+    #             result = self._plot_kernel_predictions(
+    #                 kernel_diagnostics=kernel_diagnostics,
+    #                 train_obj=train_obj,
+    #                 scaler_y=scaler_y,
+    #                 y_train=y_train,
+    #                 n_wfs=n_wfs_pred,
+    #                 save_fig=False,
+    #             )
+    #             self._handle_figure_result(result, pdf)
+    #             print(self.colored_text("Kernel predictions added to report", "blue"))
+    #         except Exception as e:
+    #             print(self.colored_text(f"Kernel predictions failed: {e}", "yellow"))
+    #             traceback.print_exc()
+
+    #         gc.collect()
+
+    #         # ============================================================
+    #         # FIG 4 — PARITY PLOT
+    #         # ============================================================
+    #         try:
+    #             result = self._plot_parity(
+    #                 best_result_dict={
+    #                     "gp": best_info["gp"],
+    #                     "scaler_x": scaler_x,
+    #                     "scaler_y": scaler_y,
+    #                     "train_prediction": scaler_y.inverse_transform(
+    #                         best_info["y_train_pred"].reshape(-1, 1)
+    #                     ).flatten(),
+    #                     "y_train": y_train,
+    #                     "time_node": time_node,
+    #                     "basis_indices": train_obj.basis_indices,
+    #                     "label": best_info["label"],
+    #                     "train_rmse": best_info["rmse"],
+    #                     "lml": best_info["lml"],
+    #                     "score": best_info["score"],
+    #                 },
+    #                 train_obj=train_obj,
+    #                 save_fig=False,
+    #             )
+    #             self._handle_figure_result(result, pdf)
+    #             print(self.colored_text("Parity plot added to report", "blue"))
+    #         except Exception as e:
+    #             print(self.colored_text(f"Parity plot failed: {e}", "yellow"))
+    #             traceback.print_exc()
+
+    #         gc.collect()
+
+    #         # ============================================================
+    #         # FIG 5 — VALIDATION HEATMAPS
+    #         # ============================================================
+    #         try:
+    #             result = self._plot_validation_heatmaps_kernels(
+    #                 time_coupled=time_coupled,
+    #                 kernel_diagnostics=kernel_diagnostics,
+    #                 scaler_x=scaler_x,
+    #                 scaler_y=scaler_y,
+    #                 train_obj=train_obj,
+    #                 time_node=time_node,
+    #                 n_q_slices=5,
+    #                 top_k=3,
+    #             )
+    #             self._handle_figure_result(result, pdf)
+    #             print(self.colored_text("Validation heatmaps added to report", "blue"))
+    #         except Exception as e:
+    #             print(self.colored_text(f"Heatmap generation skipped: {e}", "yellow"))
+    #             traceback.print_exc()
+
+    #         gc.collect()
+
+    #     print(self.colored_text(f"Kernel report PDF saved: {report_path}", "blue"))
+
+    #     # ================================================================
+    #     # SAVE LIGHTWEIGHT DIAGNOSTICS PICKLE
+    #     # ================================================================
+    #     diag_path = train_obj.filename(
+    #         prefix="kernel_diagnostics",
+    #         ext="pkl",
+    #         directory=save_dir,
+    #         include_greedy=True,
+    #         include_extra=f"node={time_node}"
+    #     )
+
+    #     # Only save scalar metrics — prediction arrays are in the PDF
+    #     diag_save = []
+    #     for d in kernel_diagnostics:
+    #         diag_save.append({
+    #             "time_node": d["time_node"],
+    #             "kernel_str": str(d["kernel"]),
+    #             "lml": d["lml"],
+    #             "rmse": d["rmse"],
+    #             "score": d["score"],
+    #             "label": d["label"],
+    #             "fit_time": d["fit_time"],
+    #         })
+
+    #     with open(diag_path, "wb") as f:
+    #         pickle.dump(diag_save, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+    #     print(self.colored_text(f"Kernel diagnostics saved: {diag_path}", "blue"))
+
+    #     # ================================================================
+    #     # CLEANUP
+    #     # ================================================================
+    #     del diag_save, y_true
+    #     gc.collect()
+
+        
+    #     if MEMORY_PROFILE:
+    #         check_memory_usage(f"After kernel report node {time_node}")
+
+    # def _gaussian_process_regression_t(self, 
+    #                                 time_node, 
+    #                                 train_obj:TrainingSetResults,
+    #                                 optimized_kernel=None,
+    #                                 time_coupled=False,
+    #                                 screening=True,
+    #                                 refinement=True,
+    #                                 save_diagnostics=True): 
+    #     """
+    #     Gaussian Process Regression for one empirical time node.
+        
+    #     Now ALSO saves per-node kernel_diagnostics as pickle file for later report regeneration.
+    #     """
+        
+    #     kernel_diagnostics, aux = self._train_gp_kernels(
+    #         time_node=time_node,
+    #         train_obj=train_obj,
+    #         optimized_kernel=optimized_kernel,
+    #         time_coupled=time_coupled,
+    #         screening=screening,
+    #         refinement=refinement,
+    #     )
+        
+    #     best_idx = aux["best_idx"]
+    #     best_info = kernel_diagnostics[best_idx]
+        
+    #     print(self.colored_text(
+    #         f"Best kernel = {best_info['kernel']}\n"
+    #         f"LML = {best_info['lml']:.4f}\n"
+    #         f"RMSE = {best_info['rmse']:.6e}\n"
+    #         f"Score = {best_info['score']:.4f}",
+    #         "green"
+    #     ))
+        
+    #     # Save kernel diagnostics
+    #     if save_diagnostics:
+    #         diag_path = train_obj.filename(
+    #             prefix=f"kernel_diagnostics_T{time_node}",
+    #             ext="pkl",
+    #             directory="Straindata/Gaussian_kernels/Reports",
+    #             include_greedy=True,
+    #             include_extra=""
+    #         )
+            
+    #         diagnostics = []
+    #         for d in kernel_diagnostics:
+    #             diagnostics.append({
+    #                 "time_node": d["time_node"],
+    #                 "kernel_str": str(d["kernel"]),
+    #                 "kernel_type": d["label"],
+    #                 "lml": d["lml"],
+    #                 "rmse": d["rmse"],
+    #                 "score": d["score"],
+    #                 "fit_time": d["fit_time"],
+    #                 # Keep prediction arrays too (needed for some plots)
+    #                 "y_train_pred": d["y_train_pred"].tolist(),  # Convert numpy to list
+    #                 "y_pred": d["y_pred"].tolist(),
+    #                 "y_pred_std": d["y_pred_std"].tolist(),
+    #                 "std_train": d["std_train"].tolist(),
+    #             })
+            
+    #         with open(diag_path, "wb") as f:
+    #             pickle.dump(diagnostics, f, protocol=pickle.HIGHEST_PROTOCOL)
+            
+    #         print(self.colored_text(f"✓ Kernel diagnostics saved for node {time_node}: {os.path.basename(diag_path)}", "cyan"))
+
+    #     result_dict = {
+    #         "gp":             best_info["gp"],
+    #         "kernel":         best_info["kernel"],
+    #         "label":          best_info["label"],
+    #         "scaler_x":       aux["scaler_x"],
+    #         "scaler_y":       aux["scaler_y"],
+    #         "lml":            best_info["lml"],
+    #         "train_rmse":     best_info["rmse"],
+    #         "score":          best_info["score"],
+    #         "time_node":      time_node,
+    #         "parameter_dim":  aux["dim"],
+    #         "time_coupled":   time_coupled,
+    #         "fit_time":       best_info["fit_time"],
+    #     }
+        
+    #     # Discard heavy data
+    #     del kernel_diagnostics, aux
+    #     gc.collect()
+        
+    #     if MEMORY_PROFILE:
+    #         check_memory_usage(f"_gaussian_process_regression_t DONE node {time_node}")
+        
+    #     return result_dict
+
+    def _gaussian_process_regression_t(self, 
+                                    time_node, 
+                                    train_obj:TrainingSetResults,
+                                    optimized_kernel=None,
+                                    time_coupled=False,
+                                    screening=True,
+                                    refinement=True,
+                                    piecewise_gp=False,
+                                    save_diagnostics=True): 
+        """
+        Gaussian Process Regression for one empirical time node.
+        
+        Now ALSO saves per-node kernel_diagnostics + aux as pickle file for later report regeneration.
+        """
+        
+        kernel_diagnostics, aux = self._train_gp_kernels(
+            time_node=time_node,
+            train_obj=train_obj,
+            optimized_kernel=optimized_kernel,
+            time_coupled=time_coupled,
+            screening=screening,
+            refinement=refinement,
+        )
+
+        
+        # Save kernel diagnostics AND aux together
+        if save_diagnostics:
+            diag_dir = train_obj.filename(
+                prefix=f"kernel_diagnostics",
+                ext="",
+                directory="Straindata/Gaussian_kernels/Reports",
+                include_greedy=True,
+                include_extra=""
+            )[:-1]
+
+            diag_path = train_obj.filename(
+                prefix=f"T{time_node}",
+                ext="pkl",
+                directory=diag_dir,
+                include_greedy=True,
+                include_extra=""
+            )
+            
+            diagnostics_bundle = {
+            "node_i": time_node,
+            "time_node": time_node,
+            "aux": aux,  # Full aux dict with scalers!
+            "diagnostics": kernel_diagnostics,  # Save entire list directly
+        }
+        
+        with open(diag_path, "wb") as f:
+            pickle.dump(diagnostics_bundle, f, protocol=pickle.HIGHEST_PROTOCOL)
+            print(self.colored_text(f"Kernel diagnostics saved for node {time_node}: {os.path.basename(diag_path)}", "blue"))
+
+        best_idx = aux["best_idx"]
+        best_info = kernel_diagnostics[best_idx]
+        
+        print(self.colored_text(
+            f"Best global kernel = {best_info['kernel']}\n"
+            f"LML = {best_info['lml']:.4f}\n"
+            f"RMSE = {best_info['rmse']:.6e}\n"
+            f"Score = {best_info['score']:.4f}",
+            "green"
+        ))
+
+        if piecewise_gp:
+
+            ############################################################
+            # Piecewise GP region detection 
+            ############################################################
+            piecewise_kernels, piecewise_diagnostics = self.build_piecewise_gp_mask(
+                kernel_diagnostics=kernel_diagnostics,
+                X_train=aux["X_train_scaled"],
+                best_global_idx=best_idx,
+            )
+
+            print(f"\nRegions: \n best global kernel: {kernel_diagnostics[best_idx]['label']}")
+            for region in piecewise_kernels:
+                start, end = region["x_interval"]
+                print(f"({start}, {end}) -> {region['kernel_label']}")
+                
+                piecewise_idxs = piecewise_kernels["kernel_idx"]
+                piecewise_kernels = kernel_diagnostics[piecewise_idxs]
+                
+                result_dict = {
+                    "piecewise:":     True,
+                    "gp":             piecewise_kernels["gp"],
+                    "kernel":         piecewise_kernels["kernel"],
+                    "label":          piecewise_kernels["label"],
+                    "scaler_x":       aux["scaler_x"],
+                    "scaler_y":       aux["scaler_y"],
+                    "train_rmse":     piecewise_kernels["point_error"],
+                    "time_node":      time_node,
+                    "parameter_dim":  aux["dim"],
+                    "time_coupled":   time_coupled,
+                    "fit_time":       best_info["fit_time"],
+            }
+                
+        else:
+            result_dict = {
+                "gp":             best_info["gp"],
+                "kernel":         best_info["kernel"],
+                "label":          best_info["label"],
+                "scaler_x":       aux["scaler_x"],
+                "scaler_y":       aux["scaler_y"],
+                "lml":            best_info["lml"],
+                "train_rmse":     best_info["rmse"],
+                "score":          best_info["score"],
+                "time_node":      time_node,
+                "parameter_dim":  aux["dim"],
+                "time_coupled":   time_coupled,
+                "fit_time":       best_info["fit_time"],
+            }
+        
+        # Discard heavy data
+        del kernel_diagnostics, aux
+        gc.collect()
+        
+        if MEMORY_PROFILE:
+            check_memory_usage(f"_gaussian_process_regression_t DONE node {time_node}")
+        
+        return result_dict
+
+    
     def _diagnose_gpr_issues(self, gaussian_process, X_train_scaled, y_train_scaled):
             issues = []
             
@@ -466,765 +2000,603 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             
             return issues
 
+    
+    # def fit_to_training_set(self, property, min_greedy_error=None, N_basis_vecs=None,
+    #                         time_coupled=False, save_fits_to_file=True,
+    #                         kernel_report=False,
+    #                         gpr_fit_report=False,
+    #                         no_file_load=False,
+    #                         screening=True, refinement=True,
+    #                         n_wfs_pred=5, n_q_slices=5,
+    #                         error_metric="rms",
+    #                         save_diagnostics=True
+    #                         ):
+    #     """
+    #     Fit GP models for all empirical time nodes.
 
-    def build_kernels(self, base_ls, dim):
+    #     Parameters
+    #     ----------
+    #     kernel_report : bool
+    #         Per-node kernel analysis: PDF + diagnostics pickle for EACH time node.
+    #     gpr_fit_report : bool
+    #         Overall fit report: single PDF with diagnostics, worst predictions,
+    #         and validation heatmaps covering ALL nodes at once.
+    #         Generated AFTER the main loop finishes.
+    #     report_dir : str
+    #         Directory for per-node kernel reports.
+    #     fit_report_dir : str
+    #         Directory for the overall GPR fit report PDF.
+    #     n_worst : int
+    #         Number of worst nodes to highlight in the fit report.
+    #     n_q_slices : int
+    #         Mass-ratio slice count for validation heatmaps.
+    #     error_metric : str
+    #         Error metric for heatmaps ("rms", "max", "mean", etc.).
+    #     """
 
-        # # ============================================================
-        # # KERNEL SEARCH PARAMETERS
-        # # ============================================================
+    #     # [OPTIMIZED #2]
+    #     if MEMORY_PROFILE:
+    #         check_memory_usage(f"fit_to_training_set START for {property}")
 
-        # # ------------------------------------------------------------
-        # # Matern smoothness values.
-        # #
-        # # lower:
-        # #     rougher functions
-        # #
-        # # higher:
-        # #     smoother functions
-        # # ------------------------------------------------------------
+    #     gpr_obj = self._get_gpr_obj(property)
+    #     train_obj = self._get_training_obj(property)
 
 
-        # # ============================================================
-        # # 1. ISOTROPIC MATERN KERNELS
-        # # ============================================================
+    #     if N_basis_vecs is None and min_greedy_error is None:
+    #         N_basis_vecs = self.resolve_property(N_basis_vecs, gpr_obj.N_basis_vecs)
+    #         min_greedy_error = self.resolve_property(min_greedy_error, gpr_obj.min_greedy_error)
+    #         if N_basis_vecs is None and min_greedy_error is None:
+    #             print('Choose either settings for the amount of basis_vecs OR the minimum greedy error.')
+    #             sys.exit(1)
 
-        # # ------------------------------------------------------------
-        # # One single length scale shared across ALL dimensions.
-        # #
-        # # Simpler.
-        # # Faster.
-        # # Often insufficient in high dimensions.
-        # # ------------------------------------------------------------
-        
-        smoothness_params = [1.0, 2.0, 2.5, 3.0, 3.5, 4.0]
-        kernels = []
+    #     try:
+    #         if no_file_load:
+    #             raise FileNotFoundError
+    #         gpr_obj = gpr_obj.load_gpr_obj()
+    #         train_obj = train_obj.load()
 
-        # isotropic
-        for nu in smoothness_params:
-            kernels.append({
-                "kernel": Matern(
-                    length_scale=base_ls,
-                    length_scale_bounds=(0.1 * base_ls, 10 * base_ls),
-                    nu=nu
-                ),
-                "type": "isotropic",
-                "nu": nu,
-                "base_ls": base_ls
-            })
+    #         if kernel_report:
+    #             for time_node in range(len(train_obj.empirical_indices)):
+    #                 self._kernel_analysis_report(
+    #                     gpr_obj=gpr_obj,
+    #                     train_obj=train_obj,
+    #                     kernel_diagnostics=None,  # Will load from disk
+    #                     time_node=time_node,
+    #                     time_coupled=time_coupled,
+    #                     n_best_pred=n_wfs_pred,
+    #                     n_q_slices=n_q_slices,
+    #                 )
 
-        # # ============================================================
-        # # 2. ANISOTROPIC MATERN KERNELS
-        # # ============================================================
 
-        # # ------------------------------------------------------------
-        # # Separate length scale per dimension.
-        # #
-        # # MUCH more powerful for:
-        # #     [e, l, q, chi1, chi2]
-        # #
-        # # because every parameter may vary differently.
-        # # ------------------------------------------------------------
+    #     except Exception as e:
+    #         print(e)
+    #         traceback.print_exc()
+    #         if train_obj.training_set is None:
+    #             try:
+    #                 train_obj = train_obj.load()
+    #             except Exception as e2:
+    #                 print(e2)
+    #                 train_obj = self.get_training_set_greedy(
+    #                     property=property,
+    #                     min_greedy_error=min_greedy_error,
+    #                     N_greedy_vecs=N_basis_vecs
+    #                 )
 
-        # for nu in smoothness_params:
+    #         print(f"Training set for {property} has {len(train_obj.basis_indices)} basis vectors")
 
-        #     kernel = Matern(
-        #         length_scale=np.ones(dim) * base_ls,
-        #         length_scale_bounds=(0.1 * base_ls, 10 * base_ls),
-        #         nu=nu
-        #     )
+    #         N_nodes = len(train_obj.empirical_indices)
+    #         gpr_obj.gp_models = []
+    #         gpr_obj.kernels = []
+    #         gpr_obj.labels = []
+    #         gpr_obj.scaler_x = []
+    #         gpr_obj.scaler_y = []
+    #         gpr_obj.best_lmls = np.zeros(N_nodes)
+    #         gpr_obj.best_train_rmses = np.zeros(N_nodes)
+    #         gpr_obj.best_scores = np.zeros(N_nodes)
+    #         gpr_obj.fit_times = np.zeros(N_nodes)
 
-        #     kernels.append({
-        #         "kernel": kernel,
-        #         "type": "anisotropic",
-        #         "nu": nu,
-        #         "base_ls": base_ls
-        #     })
+    #         print(f'Interpolate {property}...')
+    #         start2 = time.time()
+    #         optimized_kernel = None
 
-        # anisotropic
-        for nu in smoothness_params:
-            kernels.append({
-                "kernel": Matern(
-                    length_scale=np.ones(dim) * base_ls,
-                    length_scale_bounds=(0.1 * base_ls, 10 * base_ls),
-                    nu=nu
-                ),
-                "type": "anisotropic",
-                "nu": nu,
-                "base_ls": base_ls
-            })
+    #         for node_i in range(N_nodes):
+    #             # [OPTIMIZED #2]: Periodic memory checkpoint
+    #             if node_i % 10 == 0 and MEMORY_PROFILE:
+    #                 check_memory_usage(f"Processing node {node_i}/{N_nodes}")
 
-        # # ============================================================
-        # # 3. ADD WHITE NOISE TERMS
-        # # ============================================================
+    #             best_result = self._gaussian_process_regression_t(
+    #                 time_node=node_i,
+    #                 train_obj=train_obj,
+    #                 optimized_kernel=optimized_kernel,
+    #                 time_coupled=time_coupled,
+    #                 screening=screening,
+    #                 refinement=refinement,
+    #                 save_diagnostics=save_diagnostics
+    #             )
 
-        # # ------------------------------------------------------------
-        # # Models numerical noise / imperfect data.
-        # #
-        # # Prevents overfitting.
-        # # ------------------------------------------------------------
+    #             if kernel_report:
+    #                 self._kernel_analysis_report(
+    #                     gpr_obj=gpr_obj,
+    #                     train_obj=train_obj,
+    #                     time_node=node_i,
+    #                     time_coupled=time_coupled,
+    #                     n_best_pred=n_wfs_pred,
+    #                     n_q_slices=n_q_slices,
+    #                 )
 
-        # noise augmentation
-        noise_levels = [1e-6]
-        extra = []
+    #             # Extract warm-start BEFORE cleanup
+    #             optimized_kernel = [best_result["kernel"], best_result["label"]]
 
-        for entry in kernels:
-            for noise in noise_levels:
-                extra.append({
-                    "kernel": entry["kernel"] + WhiteKernel(
-                        noise_level=noise,
-                        noise_level_bounds=(1e-10, 1e-1)
-                    ),
-                    "type": entry["type"] + "_noise",
-                    "nu": entry["nu"],
-                    "base_ls": entry["base_ls"],
-                    "noise": noise
-                })
+    #             # Store results
+    #             gpr_obj.gp_models.append(best_result["gp"])
+    #             gpr_obj.kernels.append(best_result["kernel"])
+    #             gpr_obj.labels.append(best_result["label"])
+    #             gpr_obj.scaler_x.append(best_result["scaler_x"])
+    #             gpr_obj.scaler_y.append(best_result["scaler_y"])
+    #             gpr_obj.best_lmls[node_i] = best_result["lml"]
+    #             gpr_obj.best_train_rmses[node_i] = best_result["train_rmse"]
+    #             gpr_obj.best_scores[node_i] = best_result["score"]
+    #             gpr_obj.fit_times[node_i] = best_result["fit_time"]
 
-        kernels.extend(extra)
+    #             # [OPTIMIZED #2]: Free memory periodically
+    #             if node_i % 5 == 0:
+    #                 del best_result
+    #                 gc.collect()
 
-        print(f"Generated {len(kernels)} kernels")
+    #         end2 = time.time()
+    #         print(f'time full GPR = {end2 - start2}')
 
-        return kernels
+    #         if save_fits_to_file:
+    #             gpr_obj.save_gpr_obj()
 
-    def _gaussian_process_regression_t(
-        self,
-        time_node,
-        train_obj: TrainingSetResults,
-        optimized_kernel=None,
-        plot_kernel_predictions=False,
-        plot_kernel_diagnostics=False,
-        plot_kernel_heatmaps=False,
-        plot_parity=False,
-        save_fig_kernels=False,
-        time_coupled=False,
-        screening=True,
-        refinement=True
-    ):
+    #     # ================================================================
+    #     # OVERALL GPR FIT REPORT (after loop)
+    #     # ================================================================
+    #     if gpr_fit_report:
+    #         self._gpr_fit_report(
+    #             gpr_obj=gpr_obj,
+    #             train_obj=train_obj,
+    #             time_coupled=time_coupled,
+    #             n_wfs_pred=n_wfs_pred,
+    #             n_q_slices=n_q_slices,
+    #             error_metric=error_metric,
+    #         )
 
+    #     if MEMORY_PROFILE:
+    #         check_memory_usage(f"fit_to_training_set END for {property}")
+
+    #     return gpr_obj
+
+    def fit_to_training_set(self, property, min_greedy_error=None, N_basis_vecs=None,
+                            time_coupled=False, save_fits_to_file=True,
+                            kernel_report=False,
+                            gpr_fit_report=False,
+                            no_file_load=False,
+                            screening=True, refinement=True,
+                            n_wfs_pred=5, n_q_slices=5,
+                            error_metric="rms",
+                            save_diagnostics=True
+                            ):
         """
-        Gaussian Process Regression for one empirical time node.
+        Fit GP models for all empirical time nodes.
 
-        ------------------------------------------------------------------
-        WHAT THIS FUNCTION DOES
-        ------------------------------------------------------------------
-
-        We want to learn:
-
-            f(parameters) -> waveform quantity
-
-        where the waveform quantity is either:
-            - phase residual
-            - amplitude residual
-
-        at ONE empirical time node.
-
-        ------------------------------------------------------------
-        TWO MODES
-        ------------------------------------------------------------
-
-        1) time_coupled = False
-        --------------------------------
-        Each time node gets its own independent GP.
-
-        Input dimensions:
-            [e, l, q, chi1, chi2]
-
-        This is:
-            - simpler
-            - faster
-            - usually more stable
-            - easier to optimize
-
-        Recommended FIRST approach.
-
-
-        2) time_coupled = True
-        --------------------------------
-        Time is added as another GP dimension.
-
-        Input dimensions:
-            [e, l, q, chi1, chi2, t]
-
-        The GP then learns correlations across time.
-
-        Advantages:
-            - smoother evolution in time
-            - fewer discontinuities between nodes
-
-        Disadvantages:
-            - MUCH harder optimization
-            - higher dimensionality
-            - requires more training data
-            - more prone to over-smoothing
-
-        Recommended only after the uncoupled model works well.
-
-        ------------------------------------------------------------------
-        KERNEL SEARCH STRATEGY
-        ------------------------------------------------------------------
-
-        We test MANY kernels automatically.
-
-        We vary:
-            - kernel smoothness (nu)
-            - length scales
-            - isotropic vs anisotropic kernels
-            - noise levels
-
-        Then we select the BEST kernel using:
-
-            score = LML - alpha * train_rmse
-
-        because:
-
-            LML alone often prefers overly smooth kernels.
-
-        Adding RMSE penalizes kernels that fit poorly.
-
-        ------------------------------------------------------------------
-        IMPORTANT KERNEL CONCEPTS
-        ------------------------------------------------------------------
-
-        Matern kernel:
-            Controls smoothness of interpolation.
-
-        nu:
-            0.5  -> rough / jagged
-            1.5  -> moderately smooth
-            2.5  -> very smooth
-
-        length_scale:
-            Controls correlation distance.
-
-            small:
-                rapid variation
-
-            large:
-                smooth variation
-
-        isotropic:
-            one length scale for ALL dimensions
-
-        anisotropic:
-            separate length scale per dimension
-
-            VERY important in high dimensions because:
-                eccentricity may vary rapidly
-                while spin dependence may vary slowly
-
-        WhiteKernel:
-            models numerical noise.
-
-        ------------------------------------------------------------------
-        HOW TO TEST EFFICIENTLY
-        ------------------------------------------------------------------
-
-        STEP 1:
-            Start SIMPLE:
-
-                time_coupled = False
-
-                smoothness_params = [1.5]
-                ls_multipliers = [1.0]
-                noise_levels = [1e-6]
-
-        STEP 2:
-            Inspect:
-                - train_rmse
-                - plots
-                - prediction smoothness
-
-        STEP 3:
-            Add anisotropic kernels.
-
-            This is usually the BIGGEST improvement
-            for multidimensional waveform spaces.
-
-        STEP 4:
-            Add more:
-                smoothness_params
-                ls_multipliers
-
-        STEP 5:
-            ONLY THEN try:
-                time_coupled=True
-
-        ------------------------------------------------------------------
-        PRACTICAL ADVICE
-        ------------------------------------------------------------------
-
-        In high dimensions:
-
-            anisotropic kernels > isotropic kernels
-
-        almost always.
-
-        Also:
-
-            too many optimizer restarts
-            can dominate runtime.
-
-        Start with:
-            n_restarts_optimizer=5
-
-        before using:
-            20
-
-        ------------------------------------------------------------------
+        Parameters
+        ----------
+        kernel_report : bool
+            Per-node kernel analysis: PDF + diagnostics pickle for EACH time node.
+        gpr_fit_report : bool
+            Overall fit report: single PDF with diagnostics, worst predictions,
+            and validation heatmaps covering ALL nodes at once.
+            Generated AFTER the main loop finishes.
         """
 
+        # [OPTIMIZED #2]
+        if MEMORY_PROFILE:
+            check_memory_usage(f"fit_to_training_set START for {property}")
 
-        # ============================================================
-        # BUILD INPUT MATRICES
-        # ============================================================
+        gpr_obj = self._get_gpr_obj(property)
+        train_obj = self._get_training_obj(property)
+        print(1, train_obj.truncate_at_ISCO, train_obj.truncate_at_ISCO)
 
-        # X = np.array(
-        #         list(itertools.product(
-        #             gpr_obj.ecc_ref_space_output,
-        #             gpr_obj.mean_ano_ref_space_output,
-        #             gpr_obj.mass_ratio_space_output,
-        #             gpr_obj.chi1_space_output,
-        #             gpr_obj.chi2_space_output
-        #         )),
-        #         dtype=float
-        #     )
-        
-        # parameter space used for building the greedy training set 
+        gpr_obj.refined = refinement
+        gpr_obj.screened = screening
 
-        X_training_space = train_obj.parameter_grid
+        if N_basis_vecs is None and min_greedy_error is None:
+            N_basis_vecs = self.resolve_property(N_basis_vecs, gpr_obj.N_basis_vecs)
+            min_greedy_error = self.resolve_property(min_greedy_error, gpr_obj.min_greedy_error)
+            if N_basis_vecs is None and min_greedy_error is None:
+                print('Choose either settings for the amount of basis_vecs OR the minimum greedy error.')
+                sys.exit(1)
 
-        if time_coupled is False:
-            
-            # Training set input variables for this time node (subset of full grid)
-            X_train = np.asarray(train_obj.parameter_grid)[train_obj.basis_indices]
+        try:
+            if no_file_load:
+                raise FileNotFoundError
 
-        else:
-
-            # append time as extra dimension for time-coupled regression predictions
-            t_train = np.full((train_obj.parameter_grid.shape[0], 1), self.time[train_obj.empirical_indices[time_node]])
-
-            # training set input variables for this time node (subset of full grid)
-            X_train = np.hstack([
-                np.asarray(train_obj.parameter_grid)[train_obj.basis_indices],
-                t_train[train_obj.basis_indices]
-            ])
-
-            # append time as extra dimension for time-coupled regression predictions
-            t_training_space = np.full((X_training_space.shape[0], 1), self.time[train_obj.empirical_indices[time_node]])
-            
-            # full input matrix for time-coupled regression predictions (all grid points)
-            X_training_space = np.hstack([
-                X_training_space,
-                t_training_space
-            ])
+            gpr_obj = gpr_obj.load_gpr_obj()
+            train_obj = train_obj.load()
+            print(2, train_obj.truncate_at_ISCO, train_obj.truncate_at_ISCO)
 
 
+            if kernel_report:
+                for time_node in range(len(train_obj.empirical_indices)):
+                    self._kernel_analysis_report(
+                        gpr_obj=gpr_obj,
+                        train_obj=train_obj,
+                        time_node=time_node,
+                        time_coupled=time_coupled,
+                        n_best_pred=n_wfs_pred,
+                        n_q_slices=n_q_slices,
+                    )
 
-        # ============================================================
-        # TRAINING TARGETS
-        # ============================================================
-        # training set residuals of amplitude/phase at this time node (subset of full grid)
-        y_train = np.squeeze(train_obj.training_set.T[time_node])
 
-        # ============================================================
-        # SCALE INPUTS
-        # ============================================================
+        except Exception as e:
+            print(e)
+            traceback.print_exc()
+            if train_obj.training_set is None:
+                try:
+                    train_obj = train_obj.load()
+                except Exception as e2:
+                    print(e2)
+                    train_obj = self.get_training_set_greedy(
+                        property=property,
+                        min_greedy_error=min_greedy_error,
+                        N_greedy_vecs=N_basis_vecs
+                    )
 
-        # ------------------------------------------------------------
-        # WHY SCALE?
-        #
-        # GP kernels are VERY sensitive to feature scales.
-        #
-        # Example:
-        #
-        #     eccentricity ~ 0.01
-        #     q            ~ 10
-        #
-        # Without scaling:
-        #     q dominates distance calculations.
-        # ------------------------------------------------------------
-        scaler_x = StandardScaler()
-        X_train_scaled = scaler_x.fit_transform(X_train)
+            print(f"Training set for {property} has {len(train_obj.basis_indices)} basis vectors")
 
-        X_training_space_scaled = scaler_x.transform(X_training_space)
-        
-        scaler_y = StandardScaler()
-        y_train_scaled = scaler_y.fit_transform(
-            y_train.reshape(-1, 1)
-        ).flatten()
+            N_nodes = len(train_obj.empirical_indices)
+            gpr_obj.gp_models = []
+            gpr_obj.kernels = []
+            gpr_obj.labels = []
+            gpr_obj.scaler_x = []
+            gpr_obj.scaler_y = []
+            gpr_obj.best_lmls = np.zeros(N_nodes)
+            gpr_obj.best_train_rmses = np.zeros(N_nodes)
+            gpr_obj.best_scores = np.zeros(N_nodes)
+            gpr_obj.fit_times = np.zeros(N_nodes)
 
-        # ============================================================
-        # ESTIMATE CHARACTERISTIC LENGTH SCALE
-        # ============================================================
+            print(f'Interpolate {property}...')
+            start2 = time.time()
+            optimized_kernel = None
 
-        nn = NearestNeighbors(n_neighbors=2)
-        nn.fit(X_train_scaled)
+            for node_i in range(N_nodes):
+                # [OPTIMIZED #2]: Periodic memory checkpoint
+                if node_i % 10 == 0 and MEMORY_PROFILE:
+                    check_memory_usage(f"Processing node {node_i}/{N_nodes}")
 
-        distances, _ = nn.kneighbors(X_train_scaled)
+                best_result = self._gaussian_process_regression_t(
+                    time_node=node_i,
+                    train_obj=train_obj,
+                    optimized_kernel=optimized_kernel,
+                    time_coupled=time_coupled,
+                    screening=screening,
+                    refinement=refinement,
+                    save_diagnostics=save_diagnostics
+                )
 
-        median_nn_distance = np.median(distances[:, 1])
-        base_ls = median_nn_distance * 2
+                if kernel_report:
+                    self._kernel_analysis_report(
+                        gpr_obj=gpr_obj,
+                        train_obj=train_obj,
+                        time_node=node_i,
+                        time_coupled=time_coupled,
+                        n_best_pred=n_wfs_pred,
+                        n_q_slices=n_q_slices,
+                    )
 
-        print("base_ls =", base_ls)
+                # Extract warm-start BEFORE cleanup
+                optimized_kernel = [best_result["kernel"], best_result["label"]]
 
-        # ============================================================
-        # INPUT DIMENSION
-        # ============================================================
+                # Store results
+                gpr_obj.gp_models.append(best_result["gp"])
+                gpr_obj.kernels.append(best_result["kernel"])
+                gpr_obj.labels.append(best_result["label"])
+                gpr_obj.scaler_x.append(best_result["scaler_x"])
+                gpr_obj.scaler_y.append(best_result["scaler_y"])
+                gpr_obj.best_lmls[node_i] = best_result["lml"]
+                gpr_obj.best_train_rmses[node_i] = best_result["train_rmse"]
+                gpr_obj.best_scores[node_i] = best_result["score"]
+                gpr_obj.fit_times[node_i] = best_result["fit_time"]
 
-        dim = X_train_scaled.shape[1]
+                # [OPTIMIZED #2]: Free memory periodically
+                if node_i % 5 == 0:
+                    del best_result
+                    gc.collect()
 
-        # ============================================================
-        # KERNELS WITH WARM START
-        # ============================================================
+            del self.gp_kernels, self.base_ls
 
-        kernels = self.build_kernels(base_ls=base_ls, dim=dim)
+            end2 = time.time()
+            print(f'time full GPR = {end2 - start2}')
 
-        if optimized_kernel is not None:
+            if save_fits_to_file:
+                gpr_obj.save_gpr_obj()
 
-            k = optimized_kernel[0]
+        # ================================================================
+        # OVERALL GPR FIT REPORT (after loop)
+        # ================================================================
+        if gpr_fit_report:
+            self._gpr_fit_report(
+                gpr_obj=gpr_obj,
+                train_obj=train_obj,
+                time_coupled=time_coupled,
+                n_wfs_pred=n_wfs_pred,
+                n_q_slices=n_q_slices,
+                error_metric=error_metric,
+            )
 
-            kernels.insert(0, {
-                "kernel": k,
-                "type":"warm_start",
-                "label":optimized_kernel[1],
-            })
+        if MEMORY_PROFILE:
+            check_memory_usage(f"fit_to_training_set END for {property}")
 
-        # ============================================================
-        # STORAGE
-        # ============================================================
+        return gpr_obj
+    
+    def _gpr_fit_report(self, 
+                        gpr_obj:GPRFitResults, 
+                        train_obj:TrainingSetResults,
+                        time_coupled=False,
+                        n_wfs_pred=5,
+                        n_q_slices=5,
+                        error_metric="rms",
+                        ):
+        """Generate a comprehensive GPR fit report covering ALL time nodes."""
 
-        y_predict_kernels = []
-        y_predict_std_kernels = []
-        kernel_diagnostics = []
+        report_dir = "Images/Gaussian_kernels/FitReports"
+        os.makedirs(report_dir, exist_ok=True)
 
-        best_score = -np.inf
-        best_lml = -np.inf
-        best_train_rmse = np.inf
+        report_path = gpr_obj.figname(
+            prefix="gpr_fit_report",
+            ext="pdf",
+            directory=report_dir,
+        )
 
-        lml_list = []
-        rmse_list = []
+        if MEMORY_PROFILE:
+            check_memory_usage("_gpr_fit_report START")
 
-        # ============================================================
-        # MODE CONTROL
-        # ============================================================
+        with PdfPages(report_path) as pdf:
 
-        if screening and not refinement:
-            mode = "screening"
-        elif refinement and not screening:
-            mode = "refinement"
-        elif screening and refinement:
-            mode = "full"
-        else:
-            raise ValueError("Enable screening or refinement")
-
-        # ============================================================
-        # KERNEL SEARCH
-        # ============================================================
-
-        for i, entry in enumerate(kernels):
-
-            success = False
-
+            # ============================================================
+            # SECTION 1 — FIT DIAGNOSTICS ACROSS ALL NODES
+            # ============================================================
             try:
+                result = self._plot_fit_diagnostics(
+                    gpr_obj=gpr_obj,
+                    save_fig=False,
+                )
 
-                # ----------------------------------------------------
-                # restart policy
-                # ----------------------------------------------------
-                if mode == "screening":
-                    n_restarts = 2
-                elif mode == "refinement":
-                    n_restarts = 8
+                # HANDLE EITHER Single Figure OR Tuple/List of Figures
+                if result is not None:
+                    figs_to_save = result if isinstance(result, (tuple, list)) else [result]
+                    for fig in figs_to_save:
+                        pdf.savefig(fig, bbox_inches="tight")
+                        plt.close(fig)
                 else:
-                    n_restarts = 5
+                    # Fallback: capture any open figures the function created
+                    for fig_num in plt.get_fignums():
+                        fig = plt.figure(fig_num)
+                        pdf.savefig(fig, bbox_inches="tight")
+                        plt.close(fig)
 
-                # ----------------------------------------------------
-                # label
-                # ----------------------------------------------------
-                if entry["type"] == 'warm_start':
-                    kernel_label = entry["label"]
-                else:
-                    kernel_label = {
-                        "isotropic": "Iso",
-                        "anisotropic": "Aniso",
-                        "isotropic_noise": "Iso+W",
-                        "anisotropic_noise": "Aniso+W",
-                    }[entry["type"]]
-
-                    kernel_label += f" ν={entry['nu']}"
-                    if "noise" in entry:
-                        kernel_label += f", noise={entry['noise']:.0e}"
-
-                # ----------------------------------------------------
-                # timing
-                # ----------------------------------------------------
-                t0 = time.perf_counter()
-
-                gp = GaussianProcessRegressor(
-                    kernel=entry["kernel"],
-                    n_restarts_optimizer=n_restarts,
-                    random_state=42
-                )
-
-                gp.fit(X_train_scaled, y_train_scaled)
-
-                kernel_fit_time = time.perf_counter() - t0
-
-                # ----------------------------------------------------
-                # metrics
-                # ----------------------------------------------------
-                lml = gp.log_marginal_likelihood_value_
-
-                y_pred_train, std_train = gp.predict(
-                    X_train_scaled,
-                    return_std=True
-                )
-
-                train_rmse = np.sqrt(
-                    np.mean((y_pred_train - y_train_scaled) ** 2)
-                )
-
-                lml_list.append(lml)
-                rmse_list.append(train_rmse)
-
-                # ----------------------------------------------------
-                # screening prune
-                # ----------------------------------------------------
-                if mode == "screening" and len(lml_list) > 5:
-
-                    if lml < np.mean(lml_list) - 5 * np.std(lml_list):
-                        continue
-
-                    if train_rmse > np.mean(rmse_list) + 3 * np.std(rmse_list):
-                        continue
-
-                # ----------------------------------------------------
-                # prediction
-                # ----------------------------------------------------
-                y_pred_scaled, std_pred_scaled = gp.predict(
-                    X_training_space_scaled,
-                    return_std=True
-                )
-
-                y_pred_training_space = scaler_y.inverse_transform(
-                    y_pred_scaled.reshape(-1, 1)
-                ).flatten()
-
-                y_pred_training_space_std = std_pred_scaled * scaler_y.scale_[0]
-
-                y_predict_kernels.append(y_pred_training_space)
-                y_predict_std_kernels.append(y_pred_training_space_std)
-
-                success = True
-
+                print(self.colored_text("Fit diagnostics added to report", "blue"))
 
             except Exception as e:
-
-                print(
-                    self.colored_text(
-                        f"GPR failed for kernel {entry}: {e}",
-                        "red"
-                    )
-                )
-
+                print(self.colored_text(f"Fit diagnostics failed: {e}", "yellow"))
                 traceback.print_exc()
 
-                continue
-
+            gc.collect()
 
             # ============================================================
-            # ONLY STORE IF SUCCESSFUL
+            # SECTION 2 — FIT PREDICTIONS
             # ============================================================
-
-            if success:
-
-                kernel_diagnostics.append({
-                    # time node
-                    "time_node": time_node,
-
-                    # fitted kernel
-                    "kernel": gp.kernel_,
-
-                    # raw metrics
-                    "lml": lml,
-                    "rmse": train_rmse,
-
-                    # metadata
-                    "label": kernel_label,
-                    "fit_time": kernel_fit_time,
-
-                    # store objects needed later
-                    "gp": gp,
-
-                    # training predictions
-                    "y_train_pred": y_pred_train,
-                    "std_train": std_train,
-
-                    # full-grid predictions
-                    "y_pred": y_pred_training_space,
-                    "y_pred_std": y_pred_training_space_std,
-                })
-
-
-        # ============================================================
-        # COMPUTE FINAL SCORES
-        # ============================================================
-
-        all_lmls = np.array([
-            d["lml"] for d in kernel_diagnostics
-        ])
-
-        all_rmses = np.array([
-            d["rmse"] for d in kernel_diagnostics
-        ])
-
-        mean_lml = np.mean(all_lmls)
-        std_lml = np.std(all_lmls) + 1e-12
-
-        mean_rmse = np.mean(all_rmses)
-        std_rmse = np.std(all_rmses) + 1e-12
-
-        for d in kernel_diagnostics:
-
-            # Use Normalized LML - Normalized RMSE as final score
-            lml_normalized = (d["lml"] - mean_lml
-            ) / std_lml
-
-            rmse_normalized = (
-                d["rmse"] - mean_rmse
-            ) / std_rmse
-
-            d["score"] = (
-                lml_normalized
-                - 0.5 * rmse_normalized
-            )
-
-        best_idx = np.argmax(
-            [d["score"] for d in kernel_diagnostics]
-        )
-        
-
-        best_info = kernel_diagnostics[best_idx]
-
-        best_score = best_info["score"]
-        best_lml = best_info["lml"]
-        best_train_rmse = best_info["rmse"]
-
-        best_gaussian_process = best_info["gp"]
-        best_optimized_kernel = best_info["kernel"]
-
-        best_y_train_pred = scaler_y.inverse_transform(
-            best_info["y_train_pred"].reshape(-1, 1)
-        ).flatten()
-
-        best_y_train_std = (
-            best_info["std_train"]
-            * scaler_y.scale_[0]
-        )
-
-        best_y_predict = best_info["y_pred"]
-        best_y_predict_std = best_info["y_pred_std"]
-
-        # ============================================================
-        # FINAL REPORT
-        # ============================================================
-
-        print(
-            self.colored_text(
-                f"Best kernel = {best_optimized_kernel}\n"
-                f"LML = {best_lml:.4f}\n"
-                f"RMSE = {best_train_rmse:.6e}\n"
-                f"Score = {best_score:.4f}",
-                "green"
-            )
-        )
-
-        # ============================================================
-        # RESULT DICTIONARY (UNCHANGED STRUCTURE)
-        # ============================================================
-        result_dict = {
-            "gp": best_gaussian_process,
-            "kernel": best_optimized_kernel,
-            "label": best_info["label"],
-            "scaler_x": scaler_x,
-            "scaler_y": scaler_y,
-            "mean_interp_prediction": best_y_predict,
-            "confidence_95": np.array([
-                best_y_predict - 1.96 * best_y_predict_std,
-                best_y_predict + 1.96 * best_y_predict_std
-            ]),
-            "std_prediction": best_y_predict_std,
-            "y_train": y_train,
-            "train_prediction": best_y_train_pred,
-            "train_std": best_y_train_std,
-            "lml": best_lml,
-            "train_rmse": best_train_rmse,
-            "score": best_score,
-            "time_node": time_node,
-            "time_value": self.time[time_node],
-            "basis_indices": train_obj.basis_indices,
-            "parameter_dim": dim,
-            "time_coupled": time_coupled,
-            "fit_time": kernel_diagnostics[best_idx]['fit_time']
-        }
-
-
-        # ============================================================
-        # PLOT KERNEL OPTIMIZATION RESULTS
-        # ============================================================
-
-
-        if plot_kernel_diagnostics:
-            # Plot scores, rmse, lml, fit times for all kernels
-            self._plot_kernel_diagnostics(
-                kernel_diagnostics,
-                train_obj=train_obj,
-                best_score=best_score,
-                save_fig=save_fig_kernels,
-            )
-
-        if plot_kernel_heatmaps:
-            # Plot error heatmaps for top k kernels
-            self._plot_validation_heatmaps_kernels(
-                time_coupled=time_coupled,
-                kernel_diagnostics=kernel_diagnostics,
-                scaler_x=scaler_x,
-                scaler_y=scaler_y,
-                train_obj=train_obj,
-                time_node=time_node,
-                n_q_slices=5,
-                top_k=3,
-            )
-
-        if plot_kernel_predictions:
-            self._plot_kernel_predictions(
-                kernel_diagnostics=kernel_diagnostics,
-                train_obj=train_obj,
-                scaler_y=scaler_y,
-                y_train=y_train,
-                save_kernel_predictions=save_fig_kernels,
-            )
-
-        if plot_parity:
-            self._plot_parity(
-                best_result_dict=result_dict,
-                train_obj=train_obj,
-                save_fig=save_fig_kernels
+            try:
+                result = self._plot_fit_predictions(
+                    gpr_obj=gpr_obj,
+                    train_obj=train_obj,
+                    n_wfs=n_wfs_pred,
+                    save_fig=False,
                 )
 
-        # ============================================================
-        # RETURN
-        # ============================================================
+                if result is not None:
+                    figs_to_save = result if isinstance(result, (tuple, list)) else [result]
+                    for fig in figs_to_save:
+                        pdf.savefig(fig, bbox_inches="tight")
+                        plt.close(fig)
+                else:
+                    for fig_num in plt.get_fignums():
+                        fig = plt.figure(fig_num)
+                        pdf.savefig(fig, bbox_inches="tight")
+                        plt.close(fig)
 
-        return result_dict
+                print(self.colored_text("Fit predictions added to report", "blue"))
+
+            except Exception as e:
+                print(self.colored_text(f"Fit predictions plot failed: {e}", "yellow"))
+                traceback.print_exc()
+
+            gc.collect()
+
+            # ============================================================
+            # SECTION 3 — VALIDATION HEATMAPS
+            # ============================================================
+            try:
+                result = self._plot_validation_heatmaps(
+                    time_coupled=time_coupled,
+                    gpr_obj=gpr_obj,
+                    train_obj=train_obj,
+                    n_q_slices=n_q_slices,
+                    error_metric=error_metric,
+                    save_fig=False,
+                )
+
+                if result is not None:
+                    figs_to_save = result if isinstance(result, (tuple, list)) else [result]
+                    for fig in figs_to_save:
+                        pdf.savefig(fig, bbox_inches="tight")
+                        plt.close(fig)
+                else:
+                    for fig_num in plt.get_fignums():
+                        fig = plt.figure(fig_num)
+                        pdf.savefig(fig, bbox_inches="tight")
+                        plt.close(fig)
+
+                print(self.colored_text("Validation heatmaps added to report", "blue"))
+
+            except Exception as e:
+                print(self.colored_text(f"Validation heatmaps failed: {e}", "yellow"))
+                traceback.print_exc()
+
+            gc.collect()
+
+        # ================================================================
+        # ENSURE ALL FIGURES ARE CLOSED
+        # ================================================================
+        plt.close("all")
+        gc.collect()
+
+        print(self.colored_text(f"GPR fit report saved: {report_path}", "blue"))
+
+        if MEMORY_PROFILE:
+            check_memory_usage("_gpr_fit_report END")
+
+#################################################################################
+# PLOTTING FUNCTIONS #
+#################################################################################
+
+    def _handle_figure_result(self, result, pdf):
+        """
+        Utility to handle plotting function returns (single or multiple figures).
+        Saves all to PDF and closes them immediately to keep memory flat.
+        
+        Parameters
+        ----------
+        result : Figure | tuple|list | None
+            Return value from a plotting function - may be single figure, 
+            tuple/list of figures, or None.
+        pdf : PdfPages object
+            The PDF Pages writer to which figures should be saved.
+        
+        Returns
+        -------
+        bool
+            True if at least one figure was processed successfully.
+        """
+        if result is None:
+            # No explicit figures returned — fallback to capturing any open figures
+            fig_nums = plt.get_fignums().copy()
+            for fig_num in fig_nums:
+                try:
+                    fig = plt.figure(fig_num)
+                    pdf.savefig(fig, bbox_inches="tight")
+                    plt.close(fig)
+                except Exception as e:
+                    print(self.colored_text(
+                        f"Failed to capture fallback figure #{fig_num}: {e}", "yellow"
+                    ))
+                    continue
+            return len(fig_nums) > 0
+        
+        # Result might be single figure or tuple/list of figures
+        figs_to_save = result if isinstance(result, (tuple, list)) else [result]
+        
+        success_count = 0
+        for fig in figs_to_save:
+            try:
+                pdf.savefig(fig, bbox_inches="tight")
+                plt.close(fig)
+                success_count += 1
+            except Exception as e:
+                print(self.colored_text(f"Failed to save/close figure: {e}", "yellow"))
+                continue
+        
+        return success_count > 0
+
+    def _plot_kernel_diagnostics(self, 
+                                 kernel_diagnostics, 
+                                 train_obj:TrainingSetResults, 
+                                 save_fig=False
+                                 ):
+        """Plot kernel diagnostics with automatic figure cleanup"""
+        
+        labels = [k["label"] for k in kernel_diagnostics]
+        x = np.arange(len(labels))
+
+        lmls = np.array([k["lml"] for k in kernel_diagnostics])
+        rmses = np.array([k["rmse"] for k in kernel_diagnostics])
+        scores = np.array([k["score"] for k in kernel_diagnostics])
+        kernel_fit_times = np.array([k["fit_time"] for k in kernel_diagnostics])
+
+        n_plots = 4
+        fig_kernel_scores, axes = plt.subplots(n_plots, 1, figsize=(14, 4.5 * n_plots), sharex=True, constrained_layout=True)
+
+        ax = axes[0]
+        ax.plot(x, lmls, marker="o", color="tab:blue")
+        ax.set_ylabel("Log Marginal Likelihood")
+        ax.axhline(np.mean(lmls), linestyle="--", color="gray", label="mean")
+        ax.axhline(np.max(lmls), linestyle=":", color="green", label="best")
+        ax.legend()
+
+        ax = axes[1]
+        ax.plot(x, rmses, marker="o", color="tab:orange")
+        ax.set_ylabel("Train RMSE")
+        ax.axhline(np.mean(rmses), linestyle="--", color="gray", label="mean")
+        ax.axhline(np.min(rmses), linestyle=":", color="green", label="best")
+        ax.legend()
+
+        ax = axes[2]
+        ax.plot(x, scores, marker="o", color="tab:purple")
+        ax.set_ylabel("Score")
+        ax.axhline(np.mean(scores), linestyle="--", color="gray", label="mean")
+        ax.axhline(np.max(scores), linestyle=":", color="green", label="best")
+        ax.legend()
+
+        ax = axes[3]
+        ax.plot(x, kernel_fit_times, marker="o", color="tab:red")
+        ax.set_ylabel("Fit time (s)")
+        ax.set_yscale("log")
+        ax.legend()
+
+        axes[-1].set_xticks(x)
+        axes[-1].set_xticklabels(labels, rotation=45, ha="right")
+        plt.tight_layout()
+
+        fig_lml_rmse, ax = plt.subplots(figsize=(7, 6))
+        sc = ax.scatter(lmls, rmses, c=scores, cmap="viridis", s=80, edgecolor="k")
+        ax.set_xlabel("Log Marginal Likelihood")
+        ax.set_ylabel("Train RMSE")
+        plt.colorbar(sc, ax=ax).set_label("Score")
+        plt.tight_layout()
+
+        if save_fig:
+            figname = train_obj.figname(
+                prefix="kernel_diagnostics", 
+                ext="pdf", 
+                directory="Images/Gaussian_kernels/Diagnostics", 
+                include_greedy=True, 
+                include_extra=f"node={kernel_diagnostics[0]['time_node']}"
+                )
+            with PdfPages(figname) as pdf:
+                pdf.savefig(fig_kernel_scores, bbox_inches="tight")
+                pdf.savefig(fig_lml_rmse, bbox_inches="tight")
+            
+            # Close figures after saving
+            plt.close(fig_kernel_scores)
+            plt.close(fig_lml_rmse)
+            gc.collect()
+            
+            return None  # Caller doesn't need them—they went to file
+        
+        else:
+            # Caller wants to handle figures themselves (e.g., embed in report PDF)
+            return fig_kernel_scores, fig_lml_rmse  # Don't close—caller decides when
 
 
     def _plot_kernel_predictions(self,
         kernel_diagnostics,
-        train_obj,
+        train_obj:TrainingSetResults,
         scaler_y,
         y_train,
-        n_worst=5,
-        save_kernel_predictions=False,
+        n_best=5,
+        save_fig=False,
+        method='global', # OR piecewise
     ):
         """
         Plots kernel comparison for GP models and computes best/worst kernels.
@@ -1249,8 +2621,8 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             Training targets in original scale.
         time_node : int / str
             Identifier for the current time node.
-        n_worst : int
-            Number of worst kernels to display.
+        n_best : int
+            Number of best kernels to display.
 
         Returns
         -------
@@ -1272,8 +2644,8 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
 
         best_idx = int(np.argmax(scores))
 
-        worst_indices = np.argsort(scores)[:n_worst]
-        worst_indices = worst_indices[np.argsort(scores[worst_indices])]
+        best_indices = np.argsort(scores)[:n_best]
+        best_indices = best_indices[np.argsort(scores[best_indices])]
 
         best_info = kernel_diagnostics[best_idx]
 
@@ -1304,8 +2676,8 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         # ============================================================
         fig_kernel_predictions, (ax1, ax2) = plt.subplots(
             2, 1,
-            figsize=(12, 8),
-            gridspec_kw={"height_ratios": [3, 1]},
+            figsize=(12, 10),
+            gridspec_kw={"height_ratios": [3, 2]},
             sharex=True
         )
 
@@ -1335,9 +2707,9 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         )
 
         # ============================================================
-        # WORST MODELS
+        # BEST MODELS
         # ============================================================
-        for rank, idx in enumerate(worst_indices):
+        for rank, idx in enumerate(best_indices):
             y_pred = kernel_diagnostics[idx]["y_pred"]
             y_std = kernel_diagnostics[idx]["y_pred_std"]
             info = kernel_diagnostics[idx]
@@ -1347,7 +2719,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                 y_pred,
                 linewidth=1,
                 alpha=0.6,
-                label=f"Worst {rank+1}: {info['label']} | score={info['score']:.2e}"
+                label=f"Best {rank+1}: {info['label']} | score={info['score']:.2e}"
             )
 
             ax1.fill_between(
@@ -1358,7 +2730,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             )
 
             error = y_pred - y_true_training_space
-            ax2.plot(x_axis, error, label=f"Worst {rank+1}: {info['label']}")
+            ax2.plot(x_axis, error, label=f"Best {rank+1}: {info['label']}")
 
         # ============================================================
         # BEST MODEL
@@ -1406,229 +2778,18 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
 
         plt.tight_layout()
 
-        if save_kernel_predictions:
-            figname = train_obj.figname(prefix="gp_kernel_comparison",
-                                directory="Images/Gaussian_kernels/Kernel_comparison",
-                                include_extra=f"T{time_node}")
-            fig_kernel_predictions.savefig(figname, dpi=300)
-
-        return fig_kernel_predictions, best_info
-
-    def _plot_kernel_diagnostics(
-        self,
-        kernel_diagnostics,
-        train_obj: TrainingSetResults,
-        best_score=None,
-        save_fig=False
-    ):
-        """
-        KERNEL DIAGNOSTICS PLOTTING MODES
-
-        This function can display kernel performance in two different ways:
-
-        ----------------------------------------------------------------------
-        1. RAW MODE ("raw")
-        ----------------------------------------------------------------------
-
-        In raw mode, the plot shows the actual values produced by the model:
-
-        - Log Marginal Likelihood (LML)
-        - Train RMSE (prediction error)
-        - Score (combined selection metric)
-
-        These values are shown exactly as computed by the Gaussian Process.
-
-        What this means:
-        - LML is the true model evidence from the GP
-        - RMSE is the actual prediction error on training data
-        - Score is computed directly from these raw values
-
-        Use this mode when:
-        - You want physical or numerical interpretation
-        - You are debugging model behavior
-        - You want to understand absolute performance
-
-        ----------------------------------------------------------------------
-
-        2. Z-SCORE MODE ("zscore")
-        ----------------------------------------------------------------------
-
-        In z-score mode, values are transformed into a standardized scale
-        so they can be compared fairly across different magnitudes.
-
-        A z-score means:
-            how far a value is from the average, measured in standard deviations.
-
-        For example:
-            z = 0   → exactly average performance
-            z = +2  → much better than average
-            z = -2  → much worse than average
-
-        In this mode:
-
-        - LML is converted into lml_z
-        - RMSE is converted into rmse_z
-        - Score is computed using these normalized values
-
-        This makes different metrics comparable on the same scale.
-
-        Use this mode when:
-        - You are selecting the best kernel
-        - You want fair comparison between metrics with different units
-        - You care about ranking rather than physical meaning
-
-        ----------------------------------------------------------------------
-
-        SUMMARY
-        ----------------------------------------------------------------------
-
-        - "raw" mode = actual physical / numerical values
-        - "zscore" mode = normalized values showing relative performance
-        """
-
-        labels = [k["label"] for k in kernel_diagnostics]
-
-        x = np.arange(len(labels))
-
-        # ============================================================
-        # SELECT DATA MODE
-        # ============================================================
-
-        lmls = np.array([k["lml"] for k in kernel_diagnostics])
-        rmses = np.array([k["rmse"] for k in kernel_diagnostics])
-        scores = np.array([k["score"] for k in kernel_diagnostics])
-
-        lml_label = "Log Marginal Likelihood"
-        rmse_label = "Train RMSE"
-        score_label = "Score (Norm[LML] - 0.5 * Norm[RMSE])"
-                
-        kernel_fit_times = np.array([k["fit_time"] for k in kernel_diagnostics])
-
-        n_plots = 4
-
-        fig_kernel_scores, axes = plt.subplots(
-            n_plots,
-            1,
-            figsize=(14, 4.5 * n_plots),
-            sharex=True,
-            constrained_layout=True
-        )
-
-        # ============================================================
-        # 1. LML
-        # ============================================================
-        ax = axes[0]
-        ax.plot(x, lmls, marker="o", color="tab:blue")
-        ax.set_ylabel(lml_label)
-        ax.set_title(f"Kernel diagnostics T{kernel_diagnostics[0]['time_node']}")
-
-        ax.axhline(np.mean(lmls), linestyle="--", color="gray", label="mean")
-        ax.axhline(np.max(lmls), linestyle=":", color="green", label="best")
-
-        ax.legend()
-
-        # ============================================================
-        # 2. RMSE
-        # ============================================================
-        ax = axes[1]
-        ax.plot(x, rmses, marker="o", color="tab:orange")
-        ax.set_ylabel(rmse_label)
-
-        ax.axhline(np.mean(rmses), linestyle="--", color="gray", label="mean")
-        ax.axhline(np.min(rmses), linestyle=":", color="green", label="best")
-
-        ax.legend()
-
-        # ============================================================
-        # 3. SCORE
-        # ============================================================
-        ax = axes[2]
-        ax.plot(x, scores, marker="o", color="tab:purple")
-        ax.set_ylabel(score_label)
-
-        ax.axhline(np.mean(scores), linestyle="--", color="gray", label="mean")
-        ax.axhline(np.max(scores), linestyle=":", color="green", label="best")
-
-        if best_score is not None:
-            ax.axhline(best_score, linestyle="--", color="black", label="selected best")
-
-        ax.legend()
-
-        # ============================================================
-        # 4. FIT TIME
-        # ============================================================
-        ax = axes[3]
-
-        times = kernel_fit_times
-
-        ax.plot(x, times, marker="o", color="tab:red")
-        ax.set_ylabel("Fit time (s)")
-        ax.set_xlabel("Kernel")
-
-        ax.set_yscale("log")
-
-        ax.axhline(np.median(times), linestyle="--", color="gray", label="median")
-        ax.axhline(np.min(times), linestyle=":", color="green", label="fastest")
-
-        ax.legend()
-
-        # ============================================================
-        # X LABELS
-        # ============================================================
-        axes[-1].set_xticks(x)
-        axes[-1].set_xticklabels(labels, rotation=45, ha="right")
-
-        plt.tight_layout()
-
-
-        # ============================================================
-        # LML vs RMSE
-        # ============================================================
-
-        fig_lml_rmse, ax = plt.subplots(figsize=(7, 6))
-
-        sc = ax.scatter(
-            lmls,
-            rmses,
-            c=scores,
-            cmap="viridis",
-            s=80,
-            edgecolor="k"
-        )
-
-        ax.set_xlabel("Log Marginal Likelihood")
-        ax.set_ylabel("Train RMSE")
-        ax.set_title(
-            f"LML vs RMSE (T{kernel_diagnostics[0]['time_node']})"
-        )
-
-        cbar = plt.colorbar(sc, ax=ax)
-        cbar.set_label("Score")
-
-        plt.tight_layout()
-
-
         if save_fig:
+            figname = train_obj.figname(prefix="gp_kernel_comparison", directory="Images/Gaussian_kernels/Kernel_comparison", include_extra=f"T{time_node}")
+            fig_kernel_predictions.savefig(figname, dpi=300)
+        
+            # [OPTIMIZED #5]: Close figure
+            plt.close(fig_kernel_predictions)
+            gc.collect()
 
-            figname = train_obj.figname(
-                prefix="kernel_diagnostics",
-                ext="pdf",
-                directory="Images/Gaussian_kernels/Diagnostics",
-                include_greedy=True,
-                include_extra=f"node={kernel_diagnostics[0]['time_node']}"
-            )
-
-            with PdfPages(figname) as pdf:
-
-                # ============================================================
-                # 1. MAIN DIAGNOSTICS (existing multi-panel figure)
-                # ============================================================
-                pdf.savefig(fig_kernel_scores, bbox_inches="tight")
-
-                # ============================================================
-                # 2. LML vs RMSE
-                # ============================================================
-                pdf.savefig(fig_lml_rmse, bbox_inches="tight")
+        else:
+            return fig_kernel_predictions
+            
+    
 
 
     def _plot_validation_heatmaps_kernels(
@@ -1640,7 +2801,8 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         time_node,
         train_obj: TrainingSetResults,
         n_q_slices=3,
-        top_k=2
+        top_k=2,
+        save_fig=False,
     ):
         """
         Heatmaps of relative prediction error for best kernels.
@@ -1771,7 +2933,6 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
 
         for k in best_kernels:
             gp = k["gp"]
-
             y_pred_scaled, _ = gp.predict(X_scaled, return_std=True)
 
             y_pred = scaler_y.inverse_transform(
@@ -1868,16 +3029,18 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         # ============================================================
         fig.tight_layout()
 
-        plt.show()
+        if save_fig:
+            pdf.savefig(fig, bbox_inches="tight")
+            plt.close(fig)
+            pdf.close()
 
-        pdf.savefig(fig, bbox_inches="tight")
-        plt.close(fig)
-        pdf.close()
-
-        print(self.colored_text(
-            f"Saved kernel error PDF → {filepath}",
-            "blue"
-        ))
+            print(self.colored_text(
+                f"Saved kernel error PDF → {filepath}",
+                "blue"
+            ))
+        else:
+            plt.close(fig)
+            return fig
 
     def _plot_parity(self,
                     best_result_dict,
@@ -1956,417 +3119,10 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                             directory="Images/Gaussian_kernels/Parity_check",
                             include_extra=f"T{best_result_dict['time_node']}")
             fig_parity.savefig(figname, dpi=300)
-
-
-    def _get_gpr_obj(self, property):
-        """Helper method to get or create the GPRFitResults object for the specified property."""
-        if property == "amplitude":
-            if self.gpr_amp is None:
-                self.gpr_amp = GPRFitResults(**self.result_kwargs_gpr(property="amplitude"))
-            return self.gpr_amp
-        
-        elif property == "phase":
-            if self.gpr_phase is None:
-                self.gpr_phase = GPRFitResults(**self.result_kwargs_gpr(property="phase"))
-            return self.gpr_phase
-        
         else:
-            raise ValueError(f"Unknown property: {property}")
-        
-        
+            return fig_parity
 
-    def fit_to_training_set(self, 
-                            property, 
-                            min_greedy_error=None, N_basis_vecs=None, 
-                            time_coupled=False, 
-                            save_fits_to_file=True, 
-                            plot_kernel_diagnostics=False, plot_kernel_predictions=False, plot_kernel_heatmaps=False, plot_parity=False,
-                            plot_worst_predictions=False, n_worst_pred=5,
-                            plot_residuals_ecc_evolve=False,
-                            plot_residuals_time_evolve=False, 
-                            plot_validation_heatmaps=False, n_q_slices_heatmap=3, error_metric_heatmap='mismatch', # 'mismatch' or 'difference'
-                            plot_fit_diagnostics=False,
-                            save_figs=False,
-                            no_file_load=False
-                            ):
-
-        # training object for the chosen property (phase or amplitude)
-        gpr_obj = self._get_gpr_obj(property)
-        train_obj = self._get_training_obj(property)
-
-        # Resolve the number of basis vectors and minimum greedy error based on the training set object if not provided as arguments
-        if N_basis_vecs is None and min_greedy_error is None:
-            N_basis_vecs = self.resolve_property(N_basis_vecs, gpr_obj.N_basis_vecs)
-            min_greedy_error = self.resolve_property(min_greedy_error, gpr_obj.min_greedy_error)
-
-            if N_basis_vecs is None and min_greedy_error is None:
-                print('Choose either settings for the amount of basis_vecs OR the minimum greedy error.')
-                sys.exit(1)
-
-        try:
-            if no_file_load is True:
-                raise FileNotFoundError
-          
-            gpr_obj = gpr_obj.load_gpr_obj()
-            train_obj = train_obj.load()
-
-        except Exception as e:
-            print(e)
-            traceback.print_exc()
-
-            if train_obj.training_set is None:
-                try:
-                    train_obj = train_obj.load()
-                except Exception as e:
-                    print(e)
-                    traceback.print_exc()
-                    # Generate the training set of greedy parameters at empirical nodes
-                    train_obj = self.get_training_set_greedy(
-                        property=property, 
-                        min_greedy_error=min_greedy_error, 
-                        N_greedy_vecs=N_basis_vecs)
-            
-            print(f"Training set for {property} has {len(train_obj.basis_indices)} basis vectors and {len(train_obj.empirical_indices)} empirical nodes.")
-
-            # Create empty arrays to save fitvalues
-            N_nodes = len(train_obj.empirical_indices)
-
-            gpr_obj.gp_models = []
-            gpr_obj.kernels = []
-
-            gpr_obj.best_lmls = np.zeros(N_nodes)
-            gpr_obj.best_train_rmses = np.zeros(N_nodes)
-            gpr_obj.best_scores = np.zeros(N_nodes)
-            gpr_obj.fit_times = np.zeros(N_nodes)
-            
-            print(f'Interpolate {property}...')
-
-            start2 = time.time()
-            optimized_kernel = None
-
-            for node_i in range(N_nodes):
-
-                best_result = self._gaussian_process_regression_t(
-                    time_node=node_i,
-                    train_obj=train_obj,
-                    optimized_kernel=optimized_kernel,
-                    plot_kernel_diagnostics=plot_kernel_diagnostics,
-                    plot_kernel_predictions=plot_kernel_predictions,
-                    plot_kernel_heatmaps=plot_kernel_heatmaps,
-                    plot_parity=plot_parity,
-                    save_fig_kernels=save_figs,
-                    time_coupled=time_coupled
-                )
-
-                # --------------------------------------------
-                # Store GP information
-                # --------------------------------------------
-
-                gpr_obj.gp_models.append(
-                    best_result["gp"]
-                )
-
-                gpr_obj.kernels.append(
-                    best_result["kernel"]
-                )
-
-                gpr_obj.labels.append(
-                    best_result["label"]
-                )
-
-                gpr_obj.scaler_x.append(
-                    best_result["scaler_x"]
-                )
-                
-                gpr_obj.scaler_y.append(
-                    best_result["scaler_y"]
-                )
-
-                # --------------------------------------------
-                # Diagnostics
-                # --------------------------------------------
-                # Log-Marginal likelihood
-                gpr_obj.best_lmls[node_i] = (
-                    best_result["lml"]
-                )
-
-                gpr_obj.best_train_rmses[node_i] = (
-                    best_result["train_rmse"]
-                )
-
-                gpr_obj.best_scores[node_i] = (
-                    best_result["score"]
-                )
-
-                gpr_obj.fit_times[node_i] = (
-                    best_result["fit_time"]
-                )
-
-                # --------------------------------------------
-                # Warm-start next empirical node
-                # --------------------------------------------
-                optimized_kernel = [best_result["kernel"], best_result["label"]]
-
-            end2 = time.time()
-            print(f'time full GPR = {end2 - start2}')
-
-            # If save_fits_to_file is True, save the GPR fits to a file
-            if save_fits_to_file:
-                # Save the GPR fits to a file
-                gpr_obj.save_gpr_obj()
-
-        # If plot_fits is True, plot the GPR fits
-        if plot_worst_predictions:
-            self._plot_fit_predictions(
-                gpr_obj=gpr_obj,
-                train_obj=train_obj,
-                n_worst=n_worst_pred,
-                save_fig=save_figs
-            )
-
-        if plot_validation_heatmaps:
-            self._plot_validation_heatmaps(
-                time_coupled=time_coupled,
-                gpr_obj=gpr_obj,
-                train_obj=train_obj,
-                n_q_slices=n_q_slices_heatmap,
-                error_metric=error_metric_heatmap,
-                save_fig=save_figs,
-                )
-            
-        if plot_fit_diagnostics:
-            self._plot_fit_diagnostics(
-                gpr_obj=gpr_obj,
-                save_fig=save_figs,
-            )
-        
-        
-        # If plot_residuals_ecc_evolve or plot_residuals_time_evolve is True, plot the residuals
-        if (plot_residuals_ecc_evolve is True) or (plot_residuals_time_evolve is True):
-            # Plot residuals
-            self._plot_residuals(
-                train_obj=train_obj, 
-                plot_eccentric_evolv=plot_residuals_ecc_evolve, 
-                save_fig_eccentric_evolve=save_figs, 
-                plot_time_evolve=plot_residuals_time_evolve, 
-                save_fig_time_evolve=save_figs
-                )
-
-        return gpr_obj
     
-
-    def fit_to_training_set_GPR_opt(self, 
-                                    property, 
-                                    N_basis_vecs=None, 
-                                    save_fits_to_file=True, 
-                                    plot_kernels=False, save_fig_kernels=False,
-                                    plot_GPR_fits=False, save_fig_GPR_fits=False, 
-                                    plot_residuals_ecc_evolve=False, save_fig_ecc_evolve=False, 
-                                    plot_residuals_time_evolve=False, save_fig_time_evolve=False,
-                                    plot_greedy_vecs=False, save_fig_greedy_vecs=False, 
-                                    plot_greedy_error=False, save_fig_greedy_error=False, 
-                                    plot_emp_nodes_at_ecc=False, save_fig_emp_nodes=False, 
-                                    plot_training_set=False, save_fig_training_set=False,
-                                    save_fits_to_file_iter = False
-                                    ):
-        
-
-        # Get first 3 points to produce a start for GPR
-        train_obj = self.get_training_set_greedy(property, N_greedy_vecs=3, emp_nodes_of_full_dataset=True, plot_greedy_error=plot_greedy_error, save_fig_greedy_error=save_fig_greedy_error, plot_emp_nodes_at_ecc=plot_emp_nodes_at_ecc, save_fig_emp_nodes=save_fig_emp_nodes, plot_training_set=plot_training_set, save_fig_training_set=save_fig_training_set, 
-                        save_dataset_to_file=True, plot_greedy_vecs=plot_greedy_vecs, save_fig_greedy_vecs=save_fig_greedy_vecs)
-
-
-        while len(train_obj.basis_indices) <= N_basis_vecs:
-
-            # Update the length of the basis for every iteration
-
-            train_obj.Nb = len(train_obj.residual_basis)
-
-
-            # Save fits only for last iteration 
-            if len(train_obj.basis_indices) == N_basis_vecs:
-                save_fits_to_file_iter = save_fits_to_file
-
-            # Fit the basis vecs with GPR and save fits file at last iteration
-            gpr_obj = self.fit_to_training_set(
-                property, 
-                N_basis_vecs=len(train_obj.basis_indices), 
-                training_set=train_obj.residual_basis, 
-                no_file_load=True, 
-                save_fits_to_file=save_fits_to_file_iter, 
-                save_fig_kernels=save_fig_kernels, plot_kernels=plot_kernels, 
-                plot_GPR_fits=plot_GPR_fits, save_fig_GPR_fits=save_fig_GPR_fits, 
-                plot_residuals_ecc_evolve=plot_residuals_ecc_evolve, save_fig_ecc_evolve=save_fig_ecc_evolve, 
-                plot_residuals_time_evolve=plot_residuals_time_evolve, save_fig_time_evolve=save_fig_time_evolve)
-
-            # Load in property residuals of full parameter space dataset
-            try:
-                filename = f'Straindata/Residuals/residuals_{property}_f_lower={self.f_lower}_f_ref={self.f_ref}_e=[{min(self.ecc_ref_space_output)}_{max(self.ecc_ref_space_output)}_N={len(self.ecc_ref_space_output)}].npz'
-                with np.load(filename) as data:
-                    residual_parameterspace_output = data['residual']
-                    self.time = data['time']
-
-            except Exception as e:
-                print(e)
-                traceback.print_exc()
-                train_obj_output = TrainingSetResults(**self.result_kwargs_training(property=property, ecc_ref_space=self.ecc_ref_space_output))
-                residual_parameterspace_output = self.generate_property_dataset(train_obj_output, save_dataset_to_file=True)
-
-            # Calculate the relative errors of GPR fits vs property dataset
-            combined_gaussian_error = np.zeros(len(self.ecc_ref_space_output))
-            for i in range(len(gpr_obj.mean_predictions)):
-                combined_gaussian_error += abs(residual_parameterspace_output[:, self.empirical_nodes_idx[i]] - gpr_obj.mean_predictions.T[:, i])
-
-            # Add new training set point at the place of worst fit error
-            worst_relative_GPR_error_idx = np.argmax(combined_gaussian_error)
-
-            # Add time-domain vec of worst fit parameter to the residual basis
-            opt_residual_basis_vector = residual_parameterspace_output[worst_relative_GPR_error_idx]
-            self.residual_reduced_basis = np.vstack([self.residual_reduced_basis, opt_residual_basis_vector])
-
-            # Update the best pick parameters 
-            self.indices_basis = np.append(list(self.indices_basis), worst_relative_GPR_error_idx)
-            self.best_rep_parameters = np.append(list(self.best_rep_parameters), self.ecc_ref_space_output[worst_relative_GPR_error_idx])
-
-            #Generate the training set at empirical nodes for next GPR iteration
-            residual_training_set = self.residual_reduced_basis[:, self.empirical_nodes_idx]
-
-        return gpr_obj
-
-
-    def _plot_GPR_fits(self, 
-                       train_obj:TrainingSetResults, 
-                       gpr_obj:GPRFitResults, 
-                       save_fig_fits=False
-                       ):
-
-        if gpr_obj.mean_predictions is None:
-            try:
-                gpr_obj = gpr_obj.load_gpr_obj()
-            except Exception as e:
-                print(e, '\n Make sure to run fit_to_training_set() before plotting')
-                traceback.print_exc()
-
-        if train_obj.training_set is None:
-            try:
-                train_obj = train_obj.load()
-            except Exception as e:
-                print(e, '\n Make sure to run fit_to_training_set before plotting')
-                traceback.print_exc()
-
-        train_output_param_space = TrainingSetResults(**self.result_kwargs_training(property=train_obj.property, ecc_ref_space=self.ecc_ref_space_output))
-        train_output_param_space = self.generate_property_dataset(train_obj=train_output_param_space, save_residuals=True, save_polarizations=True)
-
-        best_rep_parameters = train_obj.ecc_ref_space[train_obj.basis_indices]
-
-        fig_residual_training_fit, axs = plt.subplots(
-            3, 1,
-            figsize=(11, 6),
-            gridspec_kw={"height_ratios": [3, 1, 1], "hspace": 0.2}
-        )
-
-        axs[1].sharex(axs[0])
-
-        # Increase only the gap between axs[1] and axs[2]
-        pos = axs[2].get_position()
-        axs[2].set_position([
-            pos.x0,
-            pos.y0 - 0.04,   # move down; tune this
-            pos.width,
-            pos.height
-        ])
-        # # Create a colormap from Viridis
-        # color_palette = sns.color_palette("tab10", as_cmap=True)
-        # # Number of distinct colors needed
-        # num_colors = len(gpr_obj.mean_predictions)  # Replace with the actual number of datasets (e.g., len(gaussian_fit))
-        # # Evenly sample the colormap
-        # colors = [color_palette(i / (num_colors - 1)) for i in range(num_colors)]
-
-        # Define custom legend elements for training points and true phase/amplitude
-        custom_legend_elements = [
-            Line2D([0], [0], linestyle='dashed', color='black', linewidth=1, label=f'true {train_obj.property}'),
-            Line2D([0], [0], marker='o', linestyle='None', color='black', label='training Points')
-        ]
-
-        # Create a list to hold dynamic handles and labels
-        dynamic_handles = []
-        dynamic_labels = []
-
-        # Sort gaussian fits by worst likelihood 
-        lml_array = np.array(gpr_obj.best_lmls).flatten()
-        sorted_lml_fits = np.argsort(lml_array)[::-1] # Highest to lowest
-
-        # Plotting data
-        combined_rel_error = np.zeros(len(self.ecc_ref_space_output))
-        # Plot 10 worst fits based on highest log-marginal likelihood
-        for i in sorted_lml_fits[:10]:
-            ##################################################
-            # GPR Fit
-            ##################################################
-            # Plot mean predictions of GPR fit at empirical nodes
-            line_fit, = axs[0].plot(self.ecc_ref_space_output, gpr_obj.mean_predictions.T[:, i], linewidth=0.6)
-            
-            # Scatter plot for training points
-            axs[0].scatter(best_rep_parameters, train_obj.training_set[:, i], s=6)
-
-            # Plot residuals (true phase/amplitude at empirical nodes)
-            axs[0].plot(self.ecc_ref_space_output, train_output_param_space.residuals[:, train_obj.empirical_indices[i]], 
-                        linestyle='dashed', linewidth=0.6)
-            
-
-            # Collect handles and labels for the dynamic fits
-            dynamic_handles.append(line_fit)
-            dynamic_labels.append(f't={int(self.time[train_obj.empirical_indices[i]])} [M]')
-
-            ###################################################
-            # Relative error
-            ###################################################
-            # Plot relative error of GPR fit vs true property at empirical nodes
-            relative_error = abs(train_output_param_space.residuals[:, train_obj.empirical_indices[i]] - gpr_obj.mean_predictions.T[:, i])
-            combined_rel_error += relative_error
-
-            axs[1].plot(self.ecc_ref_space_output, 
-                        relative_error, 
-                        linewidth=0.6)
-            
-            ################################################
-            # Empirical nodes
-            ################################################
-            axs[2].scatter(self.time[train_obj.empirical_indices], np.zeros(len(train_obj.empirical_indices)), s=3, label='Empirical nodes')
-
-        # Combine custom and dynamic legend elements
-        combined_handles = custom_legend_elements + dynamic_handles
-        combined_labels = [handle.get_label() for handle in custom_legend_elements] + dynamic_labels
-
-        # Add the combined legend to the top-left subplot
-        axs[0].legend(combined_handles, combined_labels, ncol=2)
-
-        # Set labels and titles
-        if train_obj.property == 'phase':
-            axs[0].set_ylabel('$\Delta \phi$')
-            # axs[0].set_title(f'GPRfit $\phi$; greedy error = {min_greedy_error},N={len(self.indices_basis)}')
-        else:
-            axs[0].set_ylabel('$\Delta$ A')
-            # axs[0].set_title(f'GPRfit A; greedy error = {min_greedy_error}, N={len(self.indices_basis)}')
-        axs[0].grid()
-
-        axs[1].set_xlabel('eccentricity')
-        if train_obj.property == 'phase':
-            axs[1].set_ylabel('|$\Delta \phi_{S} - \Delta \phi|$')
-        else:
-            axs[1].set_ylabel('|$\Delta A_{S} - \Delta A|$')
-        axs[1].grid()
-
-        axs[2].set_xlabel('time [M]')
-
-        plt.setp(axs[0].get_xticklabels(), visible=False)
-        plt.tight_layout()
-
-        # Save the figure if requested
-        if save_fig_fits is True:
-            figname = gpr_obj.figname(prefix="GPR_fits", ext="png", directory="Images/Gaussian_fits")
-            fig_residual_training_fit.savefig(figname)
-
     def mismatch(self, h1, h2):
         h1_n = h1 / np.linalg.norm(h1)
         h2_n = h2 / np.linalg.norm(h2)
@@ -2382,11 +3138,14 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         train_obj_truth_space = TrainingSetResults(
             **self.result_kwargs_training(
                 property=property,
-                ecc_ref_space=self.ecc_ref_space_output,
-                mean_ano_ref_space=self.mean_ano_ref_space_output,
-                mass_ratio_space=self.mass_ratio_space_output,
-                chi1_space=self.chi1_space_output,
-                chi2_space=self.chi2_space_output,
+                time=self.time,
+                ecc_ref_space=self.ecc_ref_space_val,
+                mean_ano_ref_space=self.mean_ano_ref_space_val,
+                mass_ratio_space=self.mass_ratio_space_val,
+                chi1_space=self.chi1_space_val,
+                chi2_space=self.chi2_space_val,
+                truncate_at_ISCO=False,
+                truncate_at_tmin=False,
             )
         )
         
@@ -2625,8 +3384,6 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                 )
                 ax.set_title(f"T{gp_id}: k={gpr_obj.labels[gp_id]}, q={qv:.3g}")
 
-                import matplotlib.ticker as mticker
-
                 ax.xaxis.set_major_locator(mticker.MaxNLocator(4))
                 ax.xaxis.set_major_formatter(mticker.ScalarFormatter(useMathText=True))
                 ax.ticklabel_format(style='sci', axis='x', scilimits=(-3, 3))
@@ -2671,12 +3428,15 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             pdf.close()
 
             print(self.colored_text(f"Saved kernel error PDF → {filepath}", "blue"))
-
+        else:
+            return fig
+    
     def _plot_fit_predictions(self,
         gpr_obj:GPRFitResults,
         train_obj:TrainingSetResults,
-        n_worst=5,
+        n_wfs=5,
         save_fig=False,
+        method='global_best', # OR "piecewise_best"
         ):
         """
         Plots kernel comparison for GP models and computes best/worst kernels.
@@ -2727,21 +3487,26 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         # ============================================================
         # PLOT SETUP
         # ============================================================
-        fig_worst_predictions, (ax1, ax2, ax3) = plt.subplots(
-            3, 1,
-            figsize=(12, 8),
-            gridspec_kw={"height_ratios": [3, 1, 1]},
+        fig_worst_predictions, (ax1, ax2, ax3, ax4, ax5, ax6) = plt.subplots(
+            6, 1,
+            figsize=(12, 12),
+            gridspec_kw={"height_ratios": [3, 1, 1, 3, 1, 1]},
             sharex=True
         )
 
         # Plot colors
-        colors = plt.cm.tab10(np.linspace(0, 1, n_worst))
-        # Pick n_worst based on lowest score
-        worst_gp_indices = np.argsort(gpr_obj.best_scores)[-n_worst:][::-1]
+        colors = plt.cm.tab10(np.linspace(0, 1, n_wfs*2))
+        # Pick n_wfs based on lowest score
+        sorted_indices = np.argsort(gpr_obj.best_scores)
+        best_gp_indices = sorted_indices[:n_wfs]
+        worst_gp_indices = sorted_indices[-n_wfs:][::-1]
+        indices_to_plot = np.concatenate([best_gp_indices, worst_gp_indices])
+        print(indices_to_plot, best_gp_indices, worst_gp_indices)
 
-        for i, time_node in enumerate(worst_gp_indices):
+        for idx, time_node in enumerate(indices_to_plot):
+            print(f"Plotting T{time_node}, {idx}")
 
-            color = colors[i]
+            color = colors[idx]
 
             y_pred = err_results["y_pred"][time_node]
             y_true = err_results["y_true"][time_node]
@@ -2757,7 +3522,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             param_names = ["e", "l", "q", "x1", "x2"]
             param_fmts  = [".3f", ".2f", ".1f", ".2f", ".2f"]
 
-            values = [X_val[:, i] for i in range(X_val.shape[1])]
+            values = [X_val[:, j] for j in range(X_val.shape[1])]
             vary = [len(np.unique(v)) > 1 for v in values]
 
             varying_params = []
@@ -2784,46 +3549,90 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
 
 
             x_axis = np.arange(len(y_pred))
+
+            if time_node in worst_gp_indices:
+                print(f"Plotting worst kernel T{time_node}, {idx}")
+                # Truth (only first gets generic legend entry)
+                ax1.plot(
+                    x_axis,
+                    y_true,
+                    color=color,
+                    linestyle="--",
+                    linewidth=2
+                )
+
+                # Prediction
+                ax1.plot(
+                    x_axis,
+                    y_pred,
+                    color=color,
+                    linewidth=1.5
+                )
+
+                # Invisible line to create one legend entry per parameter set
+                ax1.plot(
+                    [],
+                    [],
+                    color=color,
+                    linewidth=4,
+                    label=x_label,
+                )
+
+                ax2.plot(
+                    x_axis,
+                    error_diff,
+                    color=color,
+                    linewidth=2,
+                )
+
+                ax3.plot(
+                    x_axis,
+                    mismatch,
+                    color=color,
+                    linewidth=2,
+                )
             
-            # Truth (only first gets generic legend entry)
-            ax1.plot(
-                x_axis,
-                y_true,
-                color=color,
-                linestyle="--",
-                linewidth=2
-            )
+            if time_node in best_gp_indices:
+                print(f"Plotting best kernel T{time_node}, {idx}")
+                # Truth (only first gets generic legend entry)
+                ax4.plot(
+                    x_axis,
+                    y_true,
+                    color=color,
+                    linestyle="--",
+                    linewidth=2
+                )
 
-            # Prediction
-            ax1.plot(
-                x_axis,
-                y_pred,
-                color=color,
-                linewidth=1.5
-            )
+                # Prediction
+                ax4.plot(
+                    x_axis,
+                    y_pred,
+                    color=color,
+                    linewidth=1.5
+                )
 
-            # Invisible line to create one legend entry per parameter set
-            ax1.plot(
-                [],
-                [],
-                color=color,
-                linewidth=4,
-                label=x_label,
-            )
+                # Invisible line to create one legend entry per parameter set
+                ax4.plot(
+                    [],
+                    [],
+                    color=color,
+                    linewidth=4,
+                    label=x_label,
+                )
 
-            ax2.plot(
-                x_axis,
-                error_diff,
-                color=color,
-                linewidth=2,
-            )
+                ax5.plot(
+                    x_axis,
+                    error_diff,
+                    color=color,
+                    linewidth=2,
+                )
 
-            ax3.plot(
-                x_axis,
-                mismatch,
-                color=color,
-                linewidth=2,
-            )
+                ax6.plot(
+                    x_axis,
+                    mismatch,
+                    color=color,
+                    linewidth=2,
+                )
         # ============================================================
         # FINAL LABELS
         # ============================================================
@@ -2834,7 +3643,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
             color="black",
             linestyle="--",
             linewidth=2,
-            label="Truth",
+            label="Truth ",
         )
 
         ax1.plot(
@@ -2870,7 +3679,11 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         ax2.set_xlabel("Parameter grid index")
 
         ax1.set_title(
-            f"Worst {n_worst} predictions and their true residuals{fixed_title}"
+            f"Worst {n_wfs} predictions and their true residuals{fixed_title}"
+        )
+
+        ax4.set_title(
+            f"Best {n_wfs} predictions and their true residuals{fixed_title}"
         )
 
         ax1.legend()
@@ -2880,246 +3693,13 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         plt.tight_layout()
 
         if save_fig:
-            figname = train_obj.figname(prefix=f"worst_{n_worst}_gp",
+            figname = train_obj.figname(prefix=f"worst_{n_wfs}_gp",
                                 directory="Images/Fit_Diagnostics/Worst_predictions",
             )
             fig_worst_predictions.savefig(figname, dpi=300)
-
-
-
-    # def _plot_validation_heatmaps(self,
-    #                             time_coupled,
-    #                             gpr_obj:GPRFitResults,
-    #                             n_q_slices=3,
-    #                             ):
-    #     """
-    #     Heatmaps of relative prediction error for best kernels.
-
-    #     Layout:
-    #     - rows = q-slices
-    #     - columns = kernels
-    #     - 1 colorbar per row (no overlap)
-    #     """
-
-    #     # ============================================================
-    #     # VALIDATION DATA
-    #     # ============================================================
-    #     # Validation parameter space
-    #     train_obj_truth_space = TrainingSetResults(
-    #         **self.result_kwargs_training(
-    #             property = gpr_obj.property,
-    #             ecc_ref_space=self.ecc_ref_space_output,
-    #             mean_ano_ref_space=self.mean_ano_ref_space_output,
-    #             mass_ratio_space=self.mass_ratio_space_output,)
-    #     )
-    #     X_val = train_obj_truth_space.parameter_grid
-
-    #     for time_node in range(len(train_obj.empirical_indices)):
-    #         # append time as extra dimension for time-coupled regression predictions
-    #         t = np.full((X_val.shape[0], 1), self.time[train_obj.empirical_indices[time_node]])
-            
-        
-    #     if time_coupled:
-    #         # full input matrix for time-coupled regression predictions (all grid points)
-    #         X_val = np.hstack([
-    #             X_val,
-    #             t
-    #         ])
-        
-        
-    #     # ------------------------------------------------------------
-    #     # TRUTH ON FULL REQUESTED GRID
-    #     # ------------------------------------------------------------
-
-    #     try:
-    #         train_obj_truth_space.load_residuals()
-    #     except Exception as e:
-    #         print(f"Error loading residuals for full space: {e}")
-    #         self._calculate_residuals(
-    #             train_obj=train_obj_truth_space,
-    #             truncate_at_ISCO=gpr_obj.truncate_at_ISCO,
-    #             truncate_at_tmin=gpr_obj.truncate_at_tmin,
-    #         )
-
-    #     ecc = X_val[:, 0]
-    #     l = X_val[:, 1]
-    #     q = X_val[:, 2]
-
-    #     eps = 1e-12
-
-    #     # ============================================================
-    #     # BEST KERNELS
-    #     # ============================================================
-    #     best_indices = np.argsort(
-    #         gpr_obj.best_scores
-    #     )
-
-    #     # best_kernels = [kernel_diagnostics[i] for i in best_indices]
-
-    #     # ============================================================
-    #     # Q SLICES
-    #     # ============================================================
-    #     q_vals = np.unique(q)
-    #     if n_q_slices > len(q_vals):
-    #         n_q_slices = len(q_vals)
-    #     q_indices = np.linspace(0, len(q_vals) - 1, n_q_slices).astype(int)
-    #     q_slices = q_vals[q_indices]
-
-    #     print(f"Selected q slices: {q_slices}")
-
-    #     # ============================================================
-    #     # OUTPUT FILE
-    #     # ============================================================
-    #     filepath = gpr_obj.filename(
-    #         prefix="kernel_error_heatmaps",
-    #         ext="pdf",
-    #         directory="Images/Fit_Diagnostics/Heatmaps",
-    #         include_greedy=True,
-    #     )
-
-    #     os.makedirs(os.path.dirname(filepath), exist_ok=True)
-
-    #     pdf = PdfPages(filepath)
-
-    #     n_fits = len(gpr_obj.gp_models)
-    #     n_q = len(q_slices)
-
-    #     # ============================================================
-    #     # FIGURE + GRID SPEC
-    #     # ============================================================
-    #     fig = plt.figure(
-    #         figsize=(5 * n_q + 1.2, 4 * n_q)
-    #     )
-
-    #     gs = gridspec.GridSpec(
-    #         n_fits,
-    #         n_q + 1,  # extra column for colorbar
-    #         width_ratios=[1] * n_q + [0.05],
-    #         wspace=0.25,
-    #         hspace=0.35
-    #     )
-
-    #     axes = np.empty((n_fits, n_q), dtype=object)
-    #     cbar_axes = []
-
-    #     for qi in range(n_q):
-    #         for gp_id in range(n_fits):
-    #             axes[gp_id, qi] = fig.add_subplot(gs[gp_id, qi])
-
-    #         cbar_axes.append(fig.add_subplot(gs[gp_id, -1]))
-
-    #     # ============================================================
-    #     # LOOP OVER Q SLICES
-    #     # ============================================================
-    #     all_errors_global = []
-
-    #     for qi, qv in enumerate(q_slices):
-
-    #         mask_q = np.isclose(q, qv)
-
-    #         # --------------------------------------------------------
-    #         # compute row normalization (shared across kernels)
-    #         # --------------------------------------------------------
-    #         all_errors = []
-
-    #         truth_residuals = train_obj_truth_space.residuals
-    #         for i, gp in enumerate(gpr_obj.gp_models):
-    #             X_scaled = gpr_obj.scaler_x[i].transform(X_val)
-        
-    #             y_true = truth_residuals[:, train_obj.empirical_indices[i]]
-
-    #             y_pred_scaled, _ = gp.predict(
-    #                         X_scaled,
-    #                         return_std=True
-    #                     )
-
-    #             y_pred = gpr_obj.scaler_y[i].inverse_transform(
-    #                         y_pred_scaled.reshape(-1, 1)
-    #                     ).flatten()
-                
-    #             rel_error = (y_pred - y_true) / (np.abs(y_true) + eps)
-    #             all_errors.append(rel_error)
-    #             all_errors_global.append(rel_error)
-
-    #         all_errors_global = np.concatenate(all_errors_global)
-
-    #         norm = Normalize(
-    #             vmin=np.nanmin(all_errors_global),
-    #             vmax=np.nanmax(all_errors_global)
-    #         )
-
-    #         # --------------------------------------------------------
-    #         # LOOP KERNELS
-    #         # --------------------------------------------------------
-    #         for gp_id in range(n_fits):
-
-    #             ax = axes[gp_id, qi]
-
-    #             rel_error = all_errors[gp_id]
-    #             err_vals = rel_error[mask_q]
-                
-    #             e_vals = ecc[mask_q]
-    #             l_vals = l[mask_q]
-                
-
-    #             e_unique = np.unique(e_vals)
-    #             l_unique = np.unique(l_vals)
-
-    #             Z = np.full((len(e_unique), len(l_unique)), np.nan)
-
-    #             for i in range(len(e_vals)):
-    #                 ei = np.where(e_unique == e_vals[i])[0][0]
-    #                 li = np.where(l_unique == l_vals[i])[0][0]
-    #                 Z[ei, li] = err_vals[i]
-
-    #             im = ax.imshow(
-    #                 Z,
-    #                 aspect="auto",
-    #                 origin="lower",
-    #                 norm=norm,
-    #                 extent=[
-    #                     l_unique.min() if len(l_unique) > 1 else l_unique.min() - 1e-3,
-    #                     l_unique.max() if len(l_unique) > 1 else l_unique.max() + 1e-3,
-    #                     e_unique.min() if len(e_unique) > 1 else e_unique.min() - 1e-3,
-    #                     e_unique.max() if len(e_unique) > 1 else e_unique.max() + 1e-3
-    #                 ],
-    #             )
-
-    #             ax.set_title(f"k={gpr_obj.labels[gp_id]}, q={qv:.3g}")
-
-    #             ax.xaxis.set_major_formatter(mticker.FormatStrFormatter('%.2f'))
-    #             ax.yaxis.set_major_formatter(mticker.FormatStrFormatter('%.2f'))
-
-    #             if qi == n_q - 1:
-    #                 ax.set_xlabel("l")
-    #             else:
-    #                 ax.set_xticklabels([])
-
-    #             if gp_id == 0:
-    #                 ax.set_ylabel("e")
-    #             else:
-    #                 ax.set_yticklabels([])
-
-    #         # ========================================================
-    #         # COLORBAR (PER ROW, NO OVERLAP)
-    #         # ========================================================
-    #         cbar = fig.colorbar(
-    #             axes[qi, 0].images[0],
-    #             cax=cbar_axes[qi]
-    #         )
-    #         cbar.set_label("Relative error")
-
-    #     # ============================================================
-    #     # FINALIZE
-    #     # ============================================================
-    #     fig.tight_layout()
-
-    #     pdf.savefig(fig, bbox_inches="tight")
-    #     plt.close(fig)
-    #     pdf.close()
-
-    #     print(self.colored_text(f"Saved kernel error PDF → {filepath}", "blue"))
-
+        else:
+            return fig_worst_predictions
+    
 
     def _plot_fit_diagnostics(
         self,
@@ -3190,7 +3770,7 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
         - "raw" mode = actual physical / numerical values
         - "zscore" mode = normalized values showing relative performance
         """
-        n = len(gpr_obj.labels)
+
         labels = []
         for i, l in enumerate(gpr_obj.labels):
             labels.append(f"{l} (T{i})")
@@ -3326,74 +3906,23 @@ class Generate_Offline_Surrogate(Generate_TrainingSet):
                 # 2. KERNEL SELECTION FREQUENCY
                 # ============================================================
                 pdf.savefig(fig_kernel_freq, bbox_inches="tight")
-                
-
         
+        else:
+            return fig_kernel_freq, fig_kernel_scores
 
-
-    def compute_B_matrix(self, train_obj:TrainingSetResults, save_matrix_to_file=True):
-        """
-        Computes the B matrix for all empirical nodes and basis functions.
-        
-        e_matrix: Array of shape (m, time_samples) representing the reduced basis functions evaluated at different time samples.
-        V_inv: Inverse of the interpolation matrix of shape (m, m).
-        
-        Returns:
-        B_matrix: Array of shape (m, time_samples) where each row represents B_j(t) for j=1,2,...,m
-        """
-        filename = train_obj.filename(prefix='B_matrix', directory='Straindata/B_matrix')
-
-        try:
-            load_B_matrix = np.load(filename)
-            B_matrix = load_B_matrix['B_matrix']
-            print(f'B_matrix {property} load succeeded: {filename}', B_matrix.shape)
-
-            load_B_matrix.close()
-
-        except Exception as e:
-            print(e)
-            traceback.print_exc()
-            
-            m, time_length = train_obj.residual_basis.shape
-            B_matrix = np.zeros((m, time_length))
-
-            V = np.zeros((m, m))
-            for j in range(m):
-                for i in range(m):
-                    # print(i, j)
-                    V[j][i] = train_obj.residual_basis[i][train_obj.empirical_indices[j]]
-
-            V_inv = np.linalg.pinv(V)
-
-            
-            # Compute each B_j(t) for j = 1, 2, ..., m
-            for j in range(m):
-                # Compute B_j(t) as a linear combination of all e_i(t) with weights from V_inv[:, j]
-                for i in range(m):
-                    B_matrix[j] += train_obj.residual_basis[i] * V_inv[i, j]
-            
-        
-            if save_matrix_to_file:
-
-                # Ensure the directory exists, creating it if necessary and save
-                # os.makedirs('Straindata/B_matrix', exist_ok=True)
-                np.savez(filename, B_matrix=B_matrix)
-                # print('B_matrix fits saved in Straindata/B_matrix/' + filename)
-
-        return B_matrix
-    
 
 sampling_frequency = 2048 # or 4096
 duration = 4 # seconds
 time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
 
 gt = Generate_Offline_Surrogate(time_array=time_array, 
-                                ecc_ref_parameterspace=np.linspace(0.001, 0.1, num=10),
-                                mean_ano_parameterspace=[0, np.pi],
-                                mass_ratio_parameterspace=[1, 2],
+                                ecc_ref_parameterspace=np.linspace(0.001, 0.3, num=50),
+                                mean_ano_parameterspace=[0],
+                                mass_ratio_parameterspace=[1, 2, 3],
                                 chi1_parameterspace=[0],
                                 chi2_parameterspace=[0],
-                                sampling_step_output=0.01,
+                                sampling_val_ecc_ref=0.01,
+                                sampling_val_mass_ratio=0.5,
                                 min_greedy_error_amp=1e-6,
                                 min_greedy_error_phase=1e-6,
                                 # N_basis_vecs_amp=60,
@@ -3440,34 +3969,13 @@ gt = Generate_Offline_Surrogate(time_array=time_array,
 #     )
 
 # plt.show()
-gt.fit_to_training_set('amplitude', 
-                    #    min_greedy_error=1e-8, 
-                       save_fits_to_file=True, 
-                       plot_kernel_heatmaps=True,
-                    #    plot_kernel_predictions=True,
+gt.fit_to_training_set('amplitude',
                        time_coupled=False,
-                    #    plot_validation_heatmaps=True, n_q_slices_heatmap=1, error_metric_heatmap='difference',
-                    #    plot_worst_predictions=True, n_worst_pred=15, 
-                    #    plot_fit_diagnostics=True, 
-                       save_figs=True,
-                    #    plot_residuals_ecc_evolve=True, save_fig_ecc_evolve=True, 
-                    #    plot_residuals_time_evolve=True, save_fig_time_evolve=True,
+                       save_fits_to_file=False,
+                       kernel_report=True,
+                       gpr_fit_report=True,
+                       screening=True,
+                       refinement=True,
+                       error_metric='mismatch',
+                       n_wfs_pred=5,
                     )
-# plt.show()
-# gt.fit_to_training_set('phase', 
-#                     #    min_greedy_error=1e-8, 
-#                        save_fits_to_file=False, 
-#                        plot_kernel_errors=True,
-#                        plot_kernel_predictions=True,
-#                        save_fig_kernels=True,
-#                        time_coupled=True,
-#                     #    plot_GPR_fits=True, save_fig_GPR_fits=True, 
-#                     #    plot_residuals_ecc_evolve=True, save_fig_ecc_evolve=True, 
-#                     #    plot_residuals_time_evolve=True, save_fig_time_evolve=True,
-#                     )
-plt.close('all')
-
-    # gt.fit_to_training_set('amplitude', min_greedy_error=1e-6, save_fits_to_file=True, plot_GPR_fits=True, save_fig_GPR_fits=True, plot_residuals_ecc_evolve=True, save_fig_ecc_evolve=True, plot_residuals_time_evolve=True, save_fig_time_evolve=True)
-
-# plt.show()
-# # gt.fit_to_training_set('amplitude', N_basis_vecs=21, save_fits_to_file=True)
