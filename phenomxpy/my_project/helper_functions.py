@@ -187,6 +187,67 @@ class Warnings:
                     print(f"first bad time index: {first_bad_time_idx}")
                     print(f"bad time: {time_array[first_bad_time_idx]}")
     
+    def check_gwe_domain(self, tref_out):
+        # ------------------------------------------------------------------
+        # Check that gw_eccentricity returns a time interval covering self.time
+        # ------------------------------------------------------------------
+        tol = 1e-10
+
+        t_start_self = self.time[0]
+        t_end_self   = self.time[-1]
+
+        t_start_gwe = tref_out[0]
+        t_end_gwe   = tref_out[-1]
+
+        messages = []
+
+        if t_start_gwe > t_start_self + tol:
+            messages.append(
+                f"Beginning of waveform missing:\n"
+                f"  self.time starts at {t_start_self:.6f}\n"
+                f"  gw_eccentricity starts at {t_start_gwe:.6f}\n"
+                f"  Removing interval [{t_start_self:.6f}, {t_start_gwe:.6f}] "
+                f"({t_start_gwe - t_start_self:.3f} M)"
+            )
+
+        if t_end_gwe < t_end_self - tol:
+            messages.append(
+                f"End of waveform missing:\n"
+                f"  self.time ends at {t_end_self:.6f}\n"
+                f"  gw_eccentricity ends at {t_end_gwe:.6f}\n"
+                f"  Removing interval [{t_end_gwe:.6f}, {t_end_self:.6f}] "
+                f"({t_end_self - t_end_gwe:.3f} M)"
+            )
+
+        # Create mask on the ORIGINAL self.time grid
+        time_mask = (self.time >= t_start_gwe) & (self.time <= t_end_gwe)
+
+        print(
+            self.colored_text(
+                f"self.time adjusted to match feasibility range of "
+                f"gw_eccentricity output.\n"
+                f"NEW TIME-DOMAIN: [{self.time[time_mask][0]}, "
+                f"{self.time[time_mask][-1]}]",
+                "yellow"
+            )
+        )
+
+        # Trim self.time
+        self.time = self.time[time_mask]
+
+        if messages:
+            print(
+                self.colored_text(
+                    "WARNING: gw_eccentricity does not cover the requested "
+                    "self.time domain.\n\n"
+                    + "\n\n".join(messages)
+                    + "\n\nself.time and all waveform arrays should be trimmed "
+                    "using this mask.",
+                    "yellow"
+                )
+            )
+            
+        
     
 class Automated_Settings:
 

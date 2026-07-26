@@ -4,7 +4,7 @@
 # =====================================================================
 
 
-from generate_PhenomTE import *
+from generate_PhenomTE_bmfix import *
 
 import itertools
 import h5py
@@ -38,6 +38,7 @@ class TrainingSetResults(Warnings):
     mass_ratio_space: Any = None
     chi1_space: Any = None
     chi2_space: Any = None
+
     parameter_grid: Any = None
     time: Any = None
 
@@ -1107,12 +1108,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         # shared parameter slicing definition
         # ------------------------------------------------------------
 
-        # columns:
-        # 0 = ecc
-        # 1 = mean anomaly
-        # 2 = q
-        # 3 = chi1
-        # 4 = chi2
         parameter_effects = [
             {
                 "key": "ecc",
@@ -1239,7 +1234,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                 )
                 fig.savefig(figname)
             
-            plt.close(fig)
+            # plt.close(fig)
             gc.collect()
 
         # ------------------------------------------------------------
@@ -2693,13 +2688,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         )
 
 
-    def _get_regression_parameter_matrix(self):
-        """
-        Build parameter matrix X with one row per waveform.
-        For your current class this is just eccentricity.
-        """
-        X = np.asarray(self.ecc_ref_space, dtype=float).reshape(-1, 1)
-        return X
 
     def test_GPR_quality(
         self,
@@ -2718,7 +2706,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         fig_dir="flow_diagnostic_figures",
     ):
         U = np.asarray(U, dtype=float)
-        X = self._get_regression_parameter_matrix()
+        X = np.asarray(self.ecc_ref_space, dtype=float).reshape(-1, 1)
 
         if U.shape[0] != X.shape[0]:
             raise ValueError(
@@ -3808,22 +3796,22 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
 
         return train_obj
 
-# # Sampling parameters
-# sampling_frequency = 2048 # or 4096
-# duration = 4 # seconds
-# time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
+# Sampling parameters
+sampling_frequency = 2048 # or 4096
+duration = 4 # seconds
+time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # time in seconds
 
-# gt = Generate_TrainingSet(time_array=time_array,
-#                           ecc_ref_parameterspace=np.linspace(0.001, 0.3, num=2),
-#                           mean_ano_parameterspace=np.linspace(0, 2*np.pi, num=2),
-#                           mass_ratio_parameterspace=np.linspace(1, 20, num=2),
-#                           chi1_parameterspace=np.linspace(-0.9, 0.9, num=2),
-#                           chi2_parameterspace=np.linspace(-0.9, 0.9, num=2),
-#                           min_greedy_error_amp=1e-6,
-#                           min_greedy_error_phase=1e-6,
-#                           truncate_at_tmin=True,
-#                           truncate_at_ISCO=True,
-#                           f_lower=10)
+gt = Generate_TrainingSet(time_array=time_array,
+                          ecc_ref_parameterspace=np.linspace(0.001, 0.3, num=2),
+                          mean_ano_parameterspace=np.linspace(0, 2*np.pi, num=2),
+                          mass_ratio_parameterspace=np.linspace(1, 20, num=2),
+                          chi1_parameterspace=np.linspace(-0.9, 0.9, num=2),
+                          chi2_parameterspace=np.linspace(-0.9, 0.9, num=2),
+                          min_greedy_error_amp=1e-6,
+                          min_greedy_error_phase=1e-6,
+                          truncate_at_tmin=True,
+                          truncate_at_ISCO=True,
+                          f_lower=10)
 
 # tr_obj_p = gt._get_training_obj('phase')
 # tr_obj_a = gt._get_training_obj('amplitude')
@@ -3931,23 +3919,25 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
 # gt._calculate_residuals(train_obj_p)
 
 
-# train_obj_a = gt._get_training_obj('amplitude')
-# gt._calculate_residuals(train_obj_a)
-# # gt.get_greedy_parameters(train_obj, N_greedy_vecs=50, plot_greedy_error=True)
+train_obj_a = gt._get_training_obj('amplitude')
+gt._calculate_residuals(train_obj_a,
+                        plot_polarizations=True,
+                        plot_residuals_eccentric_evolve=True,
+                        plot_residuals_time_evolve=True)
+# gt.get_greedy_parameters(train_obj, N_greedy_vecs=50, plot_greedy_error=True)
 # gt.get_greedy_parameters(train_obj_a, min_greedy_error=1e-6, plot_greedy_error=True, plot_basis_indices=True)
-# gt._generate_polarisation_data(train_obj)
+# gt._generate_polarisation_data(train_obj_a)
 
 
-# gt.get_training_set_greedy(property="amplitude", 
-#                             plot_interpolation_matrix=True, save_fig_interpolation_matrix=True,
-#                             plot_proj_vs_eim_error=True, save_fig_proj_vs_eim_error=True,
-#                             plot_greedy_vecs=True, save_fig_greedy_vecs=True,
-#                             plot_residuals_time=True, save_fig_residuals_time=True,
-#                             plot_emp_nodes_on_basis=True, save_fig_emp_nodes_on_basis=True,
-#                             plot_training_set=True, save_fig_training_set=True,
-#                             plot_residuals_eccentric=True, save_fig_residuals_eccentric=True,
-#                             plot_greedy_error=True,save_fig_greedy_error=True
-#                         )
+gt.get_training_set_greedy(property="amplitude", 
+                            plot_interpolation_matrix=True, save_fig_interpolation_matrix=True,
+                            plot_proj_vs_eim_error=True, save_fig_proj_vs_eim_error=True,
+                            plot_residuals_time=True, save_fig_residuals_time=True,
+                            plot_emp_nodes_on_basis=True, save_fig_emp_nodes_on_basis=True,
+                            plot_training_set=True, save_fig_training_set=True,
+                            plot_residuals_eccentric=True, save_fig_residuals_eccentric=True,
+                            plot_greedy_error=True,save_fig_greedy_error=True
+                        )
 
 # gt.get_training_set_greedy(property="phase", 
 #                             plot_interpolation_matrix=True, save_fig_interpolation_matrix=True,
@@ -3961,5 +3951,5 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
 #                             plot_basis_indices=True, save_fig_basis_indices=True,
 #                             )
 
-# plt.show()
-# plt.close("all")
+plt.show()
+plt.close("all")

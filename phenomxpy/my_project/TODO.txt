@@ -678,3 +678,35 @@ If you want to caluclate a score with a lml and rmse it would be better to norma
 NOTES:
 - X_train unordered screws up the warm_start?
 - Kernels calculated 
+
+
+23/06/2026:
+PROBLEM:
+dimensions between self.time and the interpolated property don match because it only runs the l_to_t_domian when the self.l_to_t_mapping is None. 
+However since this is never None after the first run, this never gets computed again. If the waveform gets a different length the self.time and property get different lengths.
+To prevent this I need the mappings to be calculated again at every residual calculation, but the mean anomaly mapping can be used for amplitude and phase. 
+These can be saved as an array in a general file and loaded for the other property (first for phase for example, than for amplitude). based on this the property still needs to be interpolated on the new domain using this mapping dict.
+
+Things to do next time:
+
+FIRST:
+MAKE SURE GW_ECCENTRICITY GIVES THE SAME SELF.TIME BACK SO ADD SOME EXTRA PADDING FOR ECC AND CIRC
+1. Make an array with the mappings in the calculate_residuals() funct. 
+2. Save the array because of the large datastructure and erase it from memory.
+3. Load the file if needed if exists. 
+4. Make sure that loaded mapping can be used in the l_to_t_domain funct.
+5. Make a funct that can change back with that same mapping from l_to_t_domain. 
+
+EXTRA PROBLEM:
+- The l to t mapping needs to work for every time-domain. 
+- Might be easier to make sure that gw_eccentricty gives you the same self.time as output, because otherwise the interpolation will also need to be adjusted to go back from l to t again on a new time-grid. 
+
+
+26/07/2026:
+PROBLEM WITH MASKS:
+-gwecc_object['tref_out'] cuts some cycles before the merger, so it cuts a part of self.time
+
+I thought of a new problem with the mean anoamly parametrization. Since the mean anomaly can only be calculated up until a few cycles before merger, I will not be able to do full IMR re-parameterization. New technique:
+- Use mean anomaly parametrization up until few cycles before merger.
+- Use GP or NN to predict the MR region (which will hopefully all be very circular like)
+- Stitch the twop regions together by looking at the phase phase transition as matching parameter for stitching

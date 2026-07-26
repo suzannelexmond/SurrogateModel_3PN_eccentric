@@ -43,15 +43,16 @@ class TrainingSetResults(Warnings):
     property: str = "phase"
 
     ecc_ref_space: Any = None
-    mean_ano_ref_space: Any = None
     mass_ratio_space: Any = None
     chi1_space: Any = None
     chi2_space: Any = None
 
     parameter_grid: Any = None
     time: Any = None
+    mean_anomaly: Any = None
+    l_to_t_mapping: Any = None
 
-    parametrization = 'time'
+    parametrization = 'mean_anomaly'
 
     N_basis_vecs: Optional[int] = None
     min_greedy_error: Optional[float] = None
@@ -86,7 +87,6 @@ class TrainingSetResults(Warnings):
 
     def __post_init__(self):
         self.ecc_ref_space = np.round(np.asarray(self.ecc_ref_space, dtype=float), 4)
-        self.mean_ano_ref_space = np.round(np.asarray(self.mean_ano_ref_space, dtype=float), 4)
         self.mass_ratio_space = np.round(np.asarray(self.mass_ratio_space, dtype=float), 4)
         self.chi1_space = np.round(np.asarray(self.chi1_space, dtype=float), 4)
         self.chi2_space = np.round(np.asarray(self.chi2_space, dtype=float), 4)
@@ -115,9 +115,8 @@ class TrainingSetResults(Warnings):
             blocks = []
 
         blocks.extend([
-            't',
+            'l',
             self._range_block("e", self.ecc_ref_space),
-            self._range_block("l", self.mean_ano_ref_space),
             self._range_block("q", self.mass_ratio_space),
             self._range_block("x1", self.chi1_space),
             self._range_block("x2", self.chi2_space),
@@ -184,18 +183,18 @@ class TrainingSetResults(Warnings):
             meta.attrs["inclination"] = self.inclination
 
             f.create_dataset("ecc_ref_space", data=self.ecc_ref_space)
-            f.create_dataset("mean_ano_ref_space", data=self.mean_ano_ref_space)
             f.create_dataset("mass_ratio_space", data=self.mass_ratio_space)
             f.create_dataset("chi1_space", data=self.chi1_space)
             f.create_dataset("chi2_space", data=self.chi2_space)
 
             f.create_dataset("parameter_grid", data=self.parameter_grid)
-            f.create_dataset("time", data=self.time)
+            f.create_dataset("mean_anomaly", data=self.mean_anomaly)
+            f.create_dataset("l_to_t_mapping", data=self.l_to_t_mapping)
 
-            f.create_dataset("basis_indices", data=self.basis_indices)
-            f.create_dataset("empirical_indices", data=self.empirical_indices)
-            f.create_dataset("leaf_basis_indices", data=self.leaf_basis_indices)
-            f.create_dataset("leaf_nodes_indices", data=self.leaf_nodes_indices)
+            self.basis_indices = list(f["basis_indices"][:])
+            self.empirical_indices = list(f["empirical_indices"][:])
+            self.leaf_basis_indices = list(f["leaf_basis_indices"][:])
+            self.leaf_nodes_indices = list(f["leaf_nodes_indices"][:])
             f.create_dataset("training_set", data=self.training_set)
 
             meta.attrs["residuals_file"] = getattr(self, "residuals_file", "")
@@ -229,16 +228,15 @@ class TrainingSetResults(Warnings):
             self.phiRef = f["meta"].attrs["phiRef"]
             self.inclination = f["meta"].attrs["inclination"]
             self.ecc_ref_space = f["ecc_ref_space"][:]
-            self.mean_ano_ref_space = f["mean_ano_ref_space"][:]
             self.mass_ratio_space = f["mass_ratio_space"][:]
             self.chi1_space = f["chi1_space"][:]
             self.chi2_space = f["chi2_space"][:]
             self.parameter_grid = f["parameter_grid"][:]
-            self.time = f["time"][:]
-            self.basis_indices = list(f["basis_indices"][:])
-            self.empirical_indices = list(f["empirical_indices"][:])
-            self.leaf_basis_indices = list(f["leaf_basis_indices"][:])
-            self.leaf_nodes_indices = list(f["leaf_nodes_indices"][:])
+            self.mean_anomaly = f["mean_anomaly"][:]
+            self.basis_indices = f["basis_indices"][:]
+            self.empirical_indices = f["empirical_indices"][:]
+            self.leaf_basis_indices = f["leaf_basis_indices"][:]
+            self.leaf_nodes_indices = f["leaf_nodes_indices"][:]
             self.training_set = f["training_set"][:]
 
             self.residuals_file = f["meta"].attrs.get("residuals_file", "")
@@ -271,7 +269,8 @@ class TrainingSetResults(Warnings):
         if not os.path.exists(filepath):
             with h5py.File(filepath, "w") as f:
                 f.create_dataset("residuals", data=self.residuals, compression="gzip", chunks=True)
-                f.create_dataset("time", data=self.time)
+                f.create_dataset("l_to_t_mapping", data=self.l_to_t_mapping)
+                f.create_dataset("mean_anomaly", data=self.mean_anomaly)
 
         print(self.colored_text(f"Residuals saved: {filepath}", "blue"))
 
@@ -290,7 +289,8 @@ class TrainingSetResults(Warnings):
             with h5py.File(filepath, "r") as f:
                 # Read into numpy array explicitly to allow file close
                 self.residuals = np.array(f["residuals"])
-                self.time = np.array(f["time"])
+                self.l_to_t_mapping = np.array(f["l_to_t_mapping"])
+                self.mean_anomaly = np.array(f["mean_anomaly"])
             print(self.colored_text(f"Residual dataset loaded: {filepath}", 'blue'))
             
         return self
@@ -436,7 +436,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
     def __init__(self, 
                  time_array, 
                  ecc_ref_parameterspace=np.linspace(0.0, 0.3, num=100), 
-                 mean_ano_parameterspace=np.linspace(0.0, 2*np.pi, num=100), 
                  mass_ratio_parameterspace=np.linspace(1, 20, num=100),
                  chi1_parameterspace=np.linspace(-0.995, 0.995, num=100),
                  chi2_parameterspace=np.linspace(-0.995, 0.995, num=100),
@@ -456,7 +455,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
             check_memory_usage("START Generate_TrainingSet.__init__")
 
         self.ecc_ref_space = self.allowed_eccentricity_warning(ecc_ref_parameterspace)
-        self.mean_ano_ref_space = self.allowed_eccentricity_warning(mean_ano_parameterspace)
         self.mass_ratio_space = self.allowed_mass_ratio_warning(mass_ratio_parameterspace)
         self.chi1_space = self.allowed_chispin_warning(chi1_parameterspace)
         self.chi2_space = self.allowed_chispin_warning(chi2_parameterspace)
@@ -465,7 +463,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         self.parameter_grid = np.array(
             list(itertools.product(
                 self.ecc_ref_space,
-                self.mean_ano_ref_space,
                 self.mass_ratio_space,
                 self.chi1_space,
                 self.chi2_space
@@ -489,7 +486,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         # Inherit parameters from all previously defined classes
         super().__init__(time_array=time_array, 
                          ecc_ref=None, 
-                         mean_anomaly_ref=None,
+                         mean_anomaly_ref=0.,
                          total_mass=None, 
                          mass_ratio=None, 
                          luminosity_distance=None, 
@@ -502,16 +499,15 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                          truncate_at_ISCO=truncate_at_ISCO, 
                          truncate_at_tmin=truncate_at_tmin,
                          geometric_units=True,
-                         parametrization='time'
+                         parametrization='mean_anomaly'
                          )
-        
 
         # [OPTIMIZED #2]: Memory checkpoint after init
         if MEMORY_PROFILE:
             check_memory_usage("END Generate_TrainingSet.__init__")
 
-    def result_kwargs_training(self, property, ecc_ref_space=None, mean_ano_ref_space=None,
-                               mass_ratio_space=None, chi1_space=None, chi2_space=None, time=None,
+    def result_kwargs_training(self, property, time=None,
+                               ecc_ref_space=None, mass_ratio_space=None, chi1_space=None, chi2_space=None, 
                                N_basis_vecs_phase=None, N_basis_vecs_amp=None, min_greedy_error_phase=None,
                                min_greedy_error_amp=None, f_ref=None, f_lower=None, phiRef=None,
                                inclination=None, truncate_at_ISCO=None, truncate_at_tmin=None):
@@ -520,13 +516,12 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         
         # Initial parameters of the binary BBH system
         ecc_ref_space = self.resolve_property(prop=ecc_ref_space, default=self.ecc_ref_space)
-        mean_ano_ref_space = self.resolve_property(prop=mean_ano_ref_space, default=self.mean_ano_ref_space)
         mass_ratio_space = self.resolve_property(prop=mass_ratio_space, default=self.mass_ratio_space)
         chi1_space = self.resolve_property(prop=chi1_space, default=self.chi1_space)
         chi2_space = self.resolve_property(prop=chi2_space, default=self.chi2_space)
 
         # [OPTIMIZED #4]: Clear temporary product iterator
-        param_list = list(itertools.product(ecc_ref_space, mean_ano_ref_space, mass_ratio_space, chi1_space, chi2_space))
+        param_list = list(itertools.product(ecc_ref_space, mass_ratio_space, chi1_space, chi2_space))
         parameter_grid = np.array(param_list, dtype=float)
         del param_list
         gc.collect()
@@ -556,7 +551,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
             raise ValueError("property must be 'phase' or 'amplitude'")
 
         return dict(
-            property=property, ecc_ref_space=ecc_ref_space, mean_ano_ref_space=mean_ano_ref_space,
+            property=property, ecc_ref_space=ecc_ref_space,
             mass_ratio_space=mass_ratio_space, chi1_space=chi1_space, chi2_space=chi2_space,
             parameter_grid=parameter_grid, time=time, 
             N_basis_vecs=N_basis_vecs, min_greedy_error=min_greedy_error, 
@@ -614,7 +609,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
             check_memory_usage("START generate_property_dataset")
 
         train_obj.ecc_ref_space = self.resolve_property(prop=ecc_ref_list, default=train_obj.ecc_ref_space)
-        train_obj.mean_ano_ref_space = self.resolve_property(prop=mean_ano_ref_list, default=train_obj.mean_ano_ref_space)
         train_obj.mass_ratio_space = self.resolve_property(prop=mass_ratios_list, default=train_obj.mass_ratio_space)
         train_obj.chi1_space = self.resolve_property(prop=chi1_list, default=train_obj.chi1_space)
         train_obj.chi2_space = self.resolve_property(prop=chi2_list, default=train_obj.chi2_space)
@@ -623,7 +617,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
 
         try:
             train_obj = train_obj.load_residuals()
-            self.time = train_obj.time
             
             if plot_residuals_eccentric_evolve or plot_residuals_time_evolve:
                 self._plot_residuals(train_obj, 
@@ -651,52 +644,187 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         
         return train_obj
 
+    # def _calculate_residuals(self, train_obj:TrainingSetResults, truncate_at_ISCO=None, truncate_at_tmin=None, 
+    #                          save_residuals=True, save_polarizations=True, plot_polarizations=False, 
+    #                          save_fig_polarizations=False, plot_residuals_param_evolve=False, 
+    #                          save_fig_l_evolve=False, plot_residuals_l_evolve=False, save_fig_param_evolve=False):
+    #     """
+    #     Calculate residuals for a property given polarisation data.
+
+    #     Parameters:
+    #     ----------
+    #     ecc_list : list of floats
+    #         List of minimum eccentricities.
+    #     hp_dataset : ndarray
+    #         Plus polarisation data.
+    #     hc_dataset : ndarray
+    #         Cross polarisation data.
+    #     property : str
+    #         Specifies which property to calculate ('phase' or 'amplitude').
+
+    #     Returns:
+    #     -------
+    #     residual_dataset : ndarray
+    #         Array of residuals for each eccentricity.
+            
+    #     """
+
+    #     start = time.time()
+    #     truncate_at_ISCO = self.resolve_property(prop=truncate_at_ISCO, default=self.truncate_at_ISCO)
+    #     truncate_at_tmin = self.resolve_property(prop=truncate_at_tmin, default=self.truncate_at_tmin)
+        
+    #     def calculate_residual_wrapper(hp, hc, ecc, q, chi1, chi2):
+    #         if not np.any(ecc):
+    #             if train_obj.property == "phase":
+    #                 return self.phase_circ
+    #             elif train_obj.property == "amplitude":
+    #                 return self.amp_circ
+    #         else:
+    #             self.ecc_ref, self.mass_ratio, self.chi1, self.chi2 = ecc, q, chi1, chi2
+    #             residual_dict = self.calculate_residual(hp=hp, hc=hc, property=train_obj.property, mean_ano_ref=None)
+
+    #             train_obj.mean_anomaly = residual_dict['L_grid']
+    #             train_obj.time = residual_dict['t_out']
+    #             train_obj.l_to_t_mapping = residual_dict['mapping_dict']
+
+    #             return residual_dict['residual_in_L'], train_obj.time
+
+    #     try:
+    #         """ Try loading residuals from previous pre-computation """
+    #         if plot_polarizations:
+    #             train_obj = train_obj.load_polarizations()
+    #             train_obj = train_obj.load_residuals()
+    #         else:
+    #             train_obj = train_obj.load_residuals()
+    #         self.time = train_obj.time
+
+    #     except Exception as e:
+    #         """No pre-computed residuals found. Attempting to load polarisations to prevent re-computation of waveforms."""
+    #         print(e)
+    #         traceback.print_exc()
+    #         n_params = len(train_obj.parameter_grid)
+            
+    #         try:
+    #             """ Try loading polarisations to prevent re-computation """
+    #             train_obj = train_obj.load_polarizations()
+    #             self.time = train_obj.time
+    #             hp_flat = train_obj.hp_dataset.reshape(len(train_obj.parameter_grid), len(train_obj.time))
+    #             hc_flat = train_obj.hc_dataset.reshape(len(train_obj.parameter_grid), len(train_obj.time))
+    #             residuals_flat = np.empty_like(hp_flat)
+
+    #             for idx, (ecc, q, chi1, chi2) in enumerate(train_obj.parameter_grid):
+    #                 residual = calculate_residual_wrapper(hp=hp_flat[idx], hc=hc_flat[idx], ecc=ecc, q=q, chi1=chi1, chi2=chi2)
+    #                 residuals_flat[idx] = residual
+    #                 # Delete large intermediates immediately
+    #                 del residual
+    #                 gc.collect()
+    #                 if idx % 50 == 0 and MEMORY_PROFILE:
+    #                     check_memory_usage(f"Loading polarizations progress: {idx}/{n_params}")
+                
+    #             train_obj.residuals = residuals_flat
+                
+    #         except Exception as e2:
+    #             """No pre-computed polarisations and residuals found. Compute all from scratch."""
+                
+    #             print(e2)
+    #             traceback.print_exc()
+                
+    #             # Start with longest time_array. Will be shortened iteratively to the shortest time_array.
+    #             current_time = self.time.copy()
+                
+    #             # Polarisation datasets
+    #             hp_flat = np.empty((n_params, len(current_time)))
+    #             hc_flat = np.empty_like(hp_flat)
+    #             residuals_flat = np.empty_like(hp_flat)
+
+    #             # Simulate all polarizations and calculate residuals for every parameter combination in the parameter grid.
+    #             # Main processing loop with periodic memory checkpoints
+    #             for idx, (ecc, q, chi1, chi2) in enumerate(train_obj.parameter_grid):
+    #                 hp, hc, time_array = self.simulate_waveform(time_array=current_time, ecc_ref=ecc, mass_ratio=q, chi1=chi1, chi2=chi2, truncate_at_ISCO=truncate_at_ISCO, truncate_at_tmin=truncate_at_tmin, update_results=True, show_truncation_warnings=False)
+
+    #                 # Calculate circular waveform for the same parameters, but with ecc=0, to use as reference for the residual calculation
+    #                 residual, t_out = calculate_residual_wrapper(hp=hp, hc=hc, ecc=ecc, q=q, chi1=chi1, chi2=chi2)
+                    
+    #                 # Update mask: keep only the part of base_time covered by this waveform
+    #                 current_mask = (current_time >= t_out[0]) & (current_time <= t_out[-1])
+    #                 current_time = t_out
+    #                 start_idx = np.where(current_mask)[0][0]
+    #                 end_idx = np.where(current_mask)[0][-1] + 1
+    #                 active_n_t = len(current_time)
+
+    #                 if active_n_t != hp_flat.shape[1]:
+    #                     hp_flat = hp_flat[:, start_idx:end_idx]
+    #                     hc_flat = hc_flat[:, start_idx:end_idx]
+    #                     residuals_flat = residuals_flat[:, start_idx:end_idx]
+                    
+    #                 hp_flat[idx] = hp
+    #                 hc_flat[idx] = hc
+    #                 residuals_flat[idx] = residual
+                    
+    #                 # Immediate cleanup of simulated waveforms
+    #                 del hp, hc, time_array, residual, t_out
+    #                 gc.collect()
+                    
+    #                 # [OPTIMIZED #2]: Periodic memory checkpoint
+    #                 if idx % 20 == 0 and MEMORY_PROFILE:
+    #                     check_memory_usage(f"Generating residuals: {idx}/{n_params}")
+
+    #             train_obj.hp_dataset = hp_flat
+    #             train_obj.hc_dataset = hc_flat
+    #             train_obj.residuals = residuals_flat
+    #             train_obj.time = current_time
+    #             self.time = current_time
+
+    #             print(self.colored_text(f"All residuals generated in {(time.time() - start)/60:.2f} minutes.", 'green'))
+
+    #             if save_polarizations:
+    #                 train_obj.save_polarizations(prefix="polarisation", directory="Straindata/Polarisations", free_memory=False)
+            
+    #         if save_residuals:
+    #             train_obj.save_residuals(prefix="residuals", directory="Straindata/Residuals", free_memory=False)
+
+    #     if plot_polarizations:
+    #         self._plot_polarizations(train_obj, save_fig_polarizations)
+
+    #     if (plot_residuals_param_evolve is True) or (plot_residuals_l_evolve is True):
+    #         self._plot_residuals(train_obj, plot_residuals_param_evolve, save_fig_param_evolve, plot_residuals_l_evolve, save_fig_l_evolve)
+
+    #     if MEMORY_PROFILE:
+    #         check_memory_usage("END _calculate_residuals")
+            
+    #     print(self.colored_text(f"Dataset shape: {train_obj.residuals.shape}, N={train_obj.parameter_grid.size}", 'green'))
+    #     return train_obj.residuals
+    
     def _calculate_residuals(self, train_obj:TrainingSetResults, truncate_at_ISCO=None, truncate_at_tmin=None, 
-                             save_residuals=True, save_polarizations=True, plot_polarizations=False, 
-                             save_fig_polarizations=False, plot_residuals_eccentric_evolve=False, 
-                             save_fig_time_evolve=False, plot_residuals_time_evolve=False, save_fig_eccentric_evolve=False):
+                            save_residuals=True, save_polarizations=True, plot_polarizations=False, 
+                            save_fig_polarizations=False, plot_residuals_param_evolve=False, 
+                            save_fig_l_evolve=False, plot_residuals_l_evolve=False, save_fig_param_evolve=False):
         """
         Calculate residuals for a property given polarisation data.
-
-        Parameters:
-        ----------
-        ecc_list : list of floats
-            List of minimum eccentricities.
-        hp_dataset : ndarray
-            Plus polarisation data.
-        hc_dataset : ndarray
-            Cross polarisation data.
-        property : str
-            Specifies which property to calculate ('phase' or 'amplitude').
-
-        Returns:
-        -------
-        residual_dataset : ndarray
-            Array of residuals for each eccentricity.
-            
         """
 
         start = time.time()
         truncate_at_ISCO = self.resolve_property(prop=truncate_at_ISCO, default=self.truncate_at_ISCO)
         truncate_at_tmin = self.resolve_property(prop=truncate_at_tmin, default=self.truncate_at_tmin)
         
-        def calculate_residual_wrapper(hp, hc, ecc, l, q, chi1, chi2):
+        def calculate_residual_wrapper(hp, hc, ecc, q, chi1, chi2):
             if not np.any(ecc):
                 if train_obj.property == "phase":
-                    return self.phase_circ
+                    return self.phase_circ, self.time, np.ones(len(self.time), dtype=bool)  # Full mask for circular
                 elif train_obj.property == "amplitude":
-                    return self.amp_circ
+                    return self.amp_circ, self.time, np.ones(len(self.time), dtype=bool)
             else:
-                residual = self.calculate_residual(hp=hp, 
-                                                   hc=hc, 
-                                                   property=train_obj.property, 
-                                                   mean_ano_ref=l,
-                                                   ecc_ref=ecc, 
-                                                   mass_ratio=q, 
-                                                   chi1=chi1, 
-                                                   chi2=chi2
-                                                   )
-                return residual
+                self.ecc_ref, self.mass_ratio, self.chi1, self.chi2 = ecc, q, chi1, chi2
+                residual_dict = self.calculate_residual(hp=hp, hc=hc, property=train_obj.property, mean_ano_ref=None)
+
+                train_obj.mean_anomaly = residual_dict['L_grid']
+                train_obj.time = residual_dict['t_out']
+                train_obj.l_to_t_mapping = residual_dict['mapping_dict']
+
+                # FIX: Create a LOCAL mask based on residual length, not original time array
+                t_mask = np.ones(len(residual_dict['residual_in_L']), dtype=bool)
+
+                return residual_dict['residual_in_L'], train_obj.time, t_mask
 
         try:
             """ Try loading residuals from previous pre-computation """
@@ -719,16 +847,39 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                 self.time = train_obj.time
                 hp_flat = train_obj.hp_dataset.reshape(len(train_obj.parameter_grid), len(train_obj.time))
                 hc_flat = train_obj.hc_dataset.reshape(len(train_obj.parameter_grid), len(train_obj.time))
-                residuals_flat = np.empty_like(hp_flat)
-                for idx, (ecc, l, q, chi1, chi2) in enumerate(train_obj.parameter_grid):
-                    residual = calculate_residual_wrapper(hp_flat[idx], hc_flat[idx], ecc, l, q, chi1, chi2)
-                    residuals_flat[idx] = residual
-                    # Delete large intermediates immediately
-                    del residual
+
+                # Collect residuals as list — each entry may have different length
+                residual_list = []
+
+                for idx, (ecc, q, chi1, chi2) in enumerate(train_obj.parameter_grid):
+                    residual, t_out, t_mask = calculate_residual_wrapper(
+                        ecc=ecc, q=q, chi1=chi1, chi2=chi2
+                    )
+
+                    residual_list.append(residual)
+
+                    del residual, t_out, t_mask
                     gc.collect()
                     if idx % 50 == 0 and MEMORY_PROFILE:
                         check_memory_usage(f"Loading polarizations progress: {idx}/{n_params}")
-                
+
+                # Find the shortest residual length
+                min_len = min(len(r) for r in residual_list)
+                print(f"Shortest residual length: {min_len} (from {len(residual_list)} waveforms)")
+
+                # Truncate all residuals to the shortest length, then stack
+                residuals_flat = np.array([r[:min_len] for r in residual_list])
+
+                # Also truncate hp_flat, hc_flat, and time to match
+                hp_flat = hp_flat[:, :min_len]
+                hc_flat = hc_flat[:, :min_len]
+                train_obj.time = train_obj.time[:min_len]
+                self.time = train_obj.time
+
+                # Update the polarisation dataset with trimmed versions
+                train_obj.hp_dataset = hp_flat
+                train_obj.hc_dataset = hc_flat
+
                 train_obj.residuals = residuals_flat
                 
             except Exception as e2:
@@ -747,30 +898,55 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
 
                 # Simulate all polarizations and calculate residuals for every parameter combination in the parameter grid.
                 # Main processing loop with periodic memory checkpoints
-                for idx, (ecc, l, q, chi1, chi2) in enumerate(train_obj.parameter_grid):
-                    hp, hc, time_array = self.simulate_waveform(time_array=current_time, ecc_ref=ecc, mean_ano_ref=l, mass_ratio=q, chi1=chi1, chi2=chi2, truncate_at_ISCO=truncate_at_ISCO, truncate_at_tmin=truncate_at_tmin, update_results=True, show_truncation_warnings=False)
-
-                    # Update mask: keep only the part of base_time covered by this waveform
-                    current_mask = (current_time >= time_array[0]) & (current_time <= time_array[-1])
-                    current_time = time_array
-                    start_idx = np.where(current_mask)[0][0]
-                    end_idx = np.where(current_mask)[0][-1] + 1
-                    active_n_t = len(current_time)
+                for idx, (ecc, q, chi1, chi2) in enumerate(train_obj.parameter_grid):
+                    hp_ecc, hc_ecc, hp_circ, hc_circ, time_array = self.simulate_waveform_l(
+                        time_array=current_time, 
+                        ecc_ref=ecc, 
+                        mass_ratio=q, 
+                        chi1=chi1, 
+                        chi2=chi2, 
+                        truncate_at_ISCO=truncate_at_ISCO, 
+                        truncate_at_tmin=truncate_at_tmin, 
+                        update_results=True, 
+                        show_truncation_warnings=True
+                    )
 
                     # Calculate circular waveform for the same parameters, but with ecc=0, to use as reference for the residual calculation
-                    residual = calculate_residual_wrapper(hp, hc, ecc, l, q, chi1, chi2)
-
+                    residual, t_out, t_mask = calculate_residual_wrapper(
+                        hp=hp, hc=hc, ecc=ecc, q=q, chi1=chi1, chi2=chi2
+                    )
+                    
+                    # ============================================
+                    # Find overlap between current_time and t_out
+                    # ============================================
+                    # t_out could be shorter at both front AND back
+                    overlap_mask = (current_time >= t_out[0]) & (current_time <= t_out[-1])
+                    overlap_indices = np.where(overlap_mask)[0]
+                    
+                    if len(overlap_indices) == 0:
+                        raise ValueError(f"No time overlap between current_time and t_out for idx={idx}")
+                    
+                    start_idx = overlap_indices[0]
+                    end_idx = overlap_indices[-1] + 1  # +1 for slicing
+                    active_n_t = len(overlap_indices)  # Should equal len(t_out) == len(hp_cut)
+                    
+                    # Shrink current_time to the overlapping region
+                    current_time = current_time[start_idx:end_idx]
+                    
+                    # Shrink all flat arrays to match the new current_time length
                     if active_n_t != hp_flat.shape[1]:
                         hp_flat = hp_flat[:, start_idx:end_idx]
                         hc_flat = hc_flat[:, start_idx:end_idx]
                         residuals_flat = residuals_flat[:, start_idx:end_idx]
                     
-                    hp_flat[idx] = hp
-                    hc_flat[idx] = hc
+                    # FIX: t_mask is now sized correctly for the CURRENT hp length
+                    # Since t_mask is all True and matches residual length, just use residual length directly
+                    hp_flat[idx] = self.hp_ecc 
+                    hc_flat[idx] = self.hc_ecc
                     residuals_flat[idx] = residual
                     
                     # Immediate cleanup of simulated waveforms
-                    del hp, hc, time_array, residual
+                    del hp, hc, time_array, residual, t_out, overlap_mask, overlap_indices
                     gc.collect()
                     
                     # [OPTIMIZED #2]: Periodic memory checkpoint
@@ -794,15 +970,15 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         if plot_polarizations:
             self._plot_polarizations(train_obj, save_fig_polarizations)
 
-        if (plot_residuals_eccentric_evolve is True) or (plot_residuals_time_evolve is True):
-            self._plot_residuals(train_obj, plot_residuals_eccentric_evolve, save_fig_eccentric_evolve, plot_residuals_time_evolve, save_fig_time_evolve)
+        if (plot_residuals_param_evolve is True) or (plot_residuals_l_evolve is True):
+            self._plot_residuals(train_obj, plot_residuals_param_evolve, save_fig_param_evolve, plot_residuals_l_evolve, save_fig_l_evolve)
 
         if MEMORY_PROFILE:
             check_memory_usage("END _calculate_residuals")
             
         print(self.colored_text(f"Dataset shape: {train_obj.residuals.shape}, N={train_obj.parameter_grid.size}", 'green'))
         return train_obj.residuals
-    
+
     def get_greedy_parameters(self, 
                             train_obj:TrainingSetResults, 
                             min_greedy_error=None, N_greedy_vecs=None, 
@@ -888,11 +1064,12 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
         reduced_basis_object.fit(training_set = train_obj.residuals,
             parameters = self.parameter_grid,
             physical_points = self.time
-            )    
-        train_obj.basis_indices = []
-        train_obj.leaf_basis_indices = []
+            )
+        # print(train_obj.basis_indices, type(train_obj.basis_indices))
         train_obj.orthonormal_basis = []
         train_obj.greedy_errors = []
+        train_obj.empirical_indices = []
+        train_obj.leaf_nodes_indices = []
 
         for leaf in reduced_basis_object.tree.leaves:
             # flat list of all indices
@@ -908,7 +1085,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
             train_obj.greedy_errors.extend(np.asarray(leaf.errors).ravel())
         
         print(self.colored_text(f'Basis calculated using {len(reduced_basis_object.tree.leaves)} discretized space(s).', 'green'))
-        # print(0, train_obj.basis_indices, train_obj.leaf_basis_indices, train_obj.orthonormal_basis)
         
         # Save large data to file to avoid memory issues
         if save_greedy_errors:
@@ -1377,11 +1553,11 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
 
         train_obj.load_residuals()
 
-        residuals = np.asarray(train_obj.residuals)   # (N, T)
-        time = np.asarray(train_obj.time)
-        params = np.asarray(train_obj.parameter_grid)
+        residuals = train_obj.residuals   # (N, T)
+        mean_anomaly = train_obj.mean_anomaly
+        params = train_obj.parameter_grid
 
-        n_t = len(time)
+        n_l = len(mean_anomaly)
 
         if train_obj.property == "phase":
             ylabel = r"$\Delta \phi_{22}$ [radians]"
@@ -1392,7 +1568,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
 
         COL = {
             "ecc": 0,
-            "mean_ano": 1,
             "q": 2,
             "chi1": 3,
             "chi2": 4,
@@ -1400,7 +1575,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
 
         names = {
             "ecc": "eccentricity",
-            "mean_ano": "mean anomaly",
             "q": "mass ratio",
             "chi1": r"$\chi_1$",
             "chi2": r"$\chi_2$",
@@ -1408,7 +1582,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
 
         symbols = {
             "ecc": "e",
-            "mean_ano": "l",
             "q": "q",
             "chi1": r"$\chi_1$",
             "chi2": r"$\chi_2$",
@@ -1440,8 +1613,6 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                 if k != vary_key:
                     if k == "ecc":
                         parts.append(f"e={params[base_idx, c]:.4g}")
-                    elif k == "mean_ano":
-                        parts.append(f"l={params[base_idx, c]:.4g}")
                     elif k == "q":
                         parts.append(f"q={params[base_idx, c]:.4g}")
                     elif k == "chi1":
@@ -1503,7 +1674,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                     global_idx = idx[i]
 
                     ax.plot(
-                        time,
+                        mean_anomaly,
                         residuals[global_idx],
                         linewidth=0.9,
                         linestyle="-",
@@ -1512,18 +1683,18 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
 
                 ax.set_ylabel(ylabel)
                 ax.set_title(
-                    f"Varying {names[effect['key']]} over time\n"
+                    f"Varying {names[effect['key']]} over mean anomaly\n"
                     f"{fixed_text(effect['key'])}",
                     fontsize=10
                 )
                 ax.grid(True)
                 ax.legend()
 
-            axes[-1].set_xlabel("t [M]")
+            axes[-1].set_xlabel("l [rad]")
 
             if save_fig_time_evolve:
                 fig.savefig(train_obj.figname(
-                    prefix="Residuals_time_evolve",
+                    prefix="Residuals_l_evolve",
                     directory="Images/Residuals"
                 ))
 
@@ -1542,7 +1713,7 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                 gridspec_kw={"hspace": 0.6}
             )
 
-            time_idx = five_indices(n_t)
+            l_idx = five_indices(n_l)
 
             if len(parameter_effects) == 1:
                 axes = [axes]
@@ -1552,13 +1723,13 @@ class Generate_TrainingSet(Waveform_Properties, Simulate_Waveform):
                 idx = effect["idx"]
                 col = effect["col"]
 
-                for t in time_idx:
+                for l in l_idx:
                     ax.plot(
                         params[idx, col],
-                        residuals[idx, t],
+                        residuals[idx, l],
                         linewidth=0.9,
                         linestyle="-",
-                        label=f"t/M = {time[t]:.4g}"
+                        label=f"l = {mean_anomaly[l]:.4g}"
                     )
 
                 ax.set_title(
@@ -2174,7 +2345,6 @@ time_array = np.linspace(-duration, 0, int(sampling_frequency * duration))  # ti
 
 gt = Generate_TrainingSet(time_array=time_array,
                           ecc_ref_parameterspace=np.linspace(0.001, 0.3, num=2),
-                          mean_ano_parameterspace=np.linspace(0, 2*np.pi, num=2),
                           mass_ratio_parameterspace=np.linspace(1, 20, num=2),
                           chi1_parameterspace=np.linspace(-0.9, 0.9, num=2),
                           chi2_parameterspace=np.linspace(-0.9, 0.9, num=2),
@@ -2187,29 +2357,35 @@ gt = Generate_TrainingSet(time_array=time_array,
 train_obj_a = gt._get_training_obj('amplitude')
 gt._calculate_residuals(train_obj_a,
                         plot_polarizations=True,
-                        plot_residuals_eccentric_evolve=True,
-                        plot_residuals_time_evolve=True)
+                        plot_residuals_param_evolve=True,
+                        plot_residuals_l_evolve=True)
 
-gt.get_training_set_greedy(property="amplitude", 
-                            plot_interpolation_matrix=True, save_fig_interpolation_matrix=True,
-                            plot_proj_vs_eim_error=True, save_fig_proj_vs_eim_error=True,
-                            plot_residuals_time=True, save_fig_residuals_time=True,
-                            plot_emp_nodes_on_basis=True, save_fig_emp_nodes_on_basis=True,
-                            plot_training_set=True, save_fig_training_set=True,
-                            plot_residuals_eccentric=True, save_fig_residuals_eccentric=True,
-                            plot_greedy_error=True,save_fig_greedy_error=True
-                        )
+train_obj_p = gt._get_training_obj('phase')
+gt._calculate_residuals(train_obj_p,
+                        plot_polarizations=True,
+                        plot_residuals_param_evolve=True,
+                        plot_residuals_l_evolve=True)
 
-gt.get_training_set_greedy(property="phase", 
-                            plot_interpolation_matrix=True, save_fig_interpolation_matrix=True,
-                            plot_proj_vs_eim_error=True, save_fig_proj_vs_eim_error=True,
-                            plot_residuals_time=True, save_fig_residuals_time=True,
-                            plot_emp_nodes_on_basis=True, save_fig_emp_nodes_on_basis=True,
-                            plot_training_set=True, save_fig_training_set=True,
-                            plot_residuals_eccentric=True, save_fig_residuals_eccentric=True,
-                            plot_greedy_error=True, save_fig_greedy_error=True,
-                            plot_basis_indices=True, save_fig_basis_indices=True,
-                            )
+# gt.get_training_set_greedy(property="amplitude", 
+#                             plot_interpolation_matrix=True, save_fig_interpolation_matrix=True,
+#                             plot_proj_vs_eim_error=True, save_fig_proj_vs_eim_error=True,
+#                             plot_residuals_time=True, save_fig_residuals_time=True,
+#                             plot_emp_nodes_on_basis=True, save_fig_emp_nodes_on_basis=True,
+#                             plot_training_set=True, save_fig_training_set=True,
+#                             plot_residuals_eccentric=True, save_fig_residuals_eccentric=True,
+#                             plot_greedy_error=True,save_fig_greedy_error=True
+#                         )
+
+# gt.get_training_set_greedy(property="phase", 
+#                             plot_interpolation_matrix=True, save_fig_interpolation_matrix=True,
+#                             plot_proj_vs_eim_error=True, save_fig_proj_vs_eim_error=True,
+#                             plot_residuals_time=True, save_fig_residuals_time=True,
+#                             plot_emp_nodes_on_basis=True, save_fig_emp_nodes_on_basis=True,
+#                             plot_training_set=True, save_fig_training_set=True,
+#                             plot_residuals_eccentric=True, save_fig_residuals_eccentric=True,
+#                             plot_greedy_error=True, save_fig_greedy_error=True,
+#                             plot_basis_indices=True, save_fig_basis_indices=True,
+#                             )
 
 plt.show()
 plt.close("all")
